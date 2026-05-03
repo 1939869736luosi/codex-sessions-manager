@@ -1,0 +1,7 @@
+interface:
+  display_name: "Codex Sessions"
+  short_description: "管理和清理本地 Codex 会话记录"
+  default_prompt: "Use $codex-sessions-manager to inspect, export, verify, or delete local Codex sessions."
+
+policy:
+  allow_implicit_invocation: true
