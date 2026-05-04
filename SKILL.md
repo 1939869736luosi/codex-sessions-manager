@@ -2,7 +2,7 @@
 name: codex-sessions-manager
 description: Use this skill when the user wants to inspect, search, export, verify, clean up, or delete local Codex sessions stored in ~/.codex. Trigger for requests about Codex conversation history, archived sessions, session IDs, deleting chats, exporting a session, previewing deletion impact, cleaning stale indexes, or verifying whether a session still has raw files, JSONL index entries, or SQLite records.
 metadata:
-  source: local
+  source: https://github.com/1939869736luosi/codex-sessions-manager
 ---
 
 # Codex Sessions Manager
@@ -12,6 +12,18 @@ metadata:
 This skill manages local Codex sessions through the `codex-sessions` toolkit.
 
 Use it when the user wants to work with local Codex conversation history instead of the current live chat thread.
+
+## Prerequisites
+
+This skill requires the CLI to be built from this repository:
+
+```bash
+cd /path/to/codex-sessions-manager
+npm install
+npm run build
+```
+
+The built CLI is available at `dist/cli/index.js` within this directory.
 
 ## When To Use
 
@@ -48,9 +60,7 @@ If the `codex-sessions` MCP server is available in the current Codex session, us
 
 ### 2. Fall back to CLI when MCP is unavailable
 
-Run the local CLI from:
-
-`/Users/luosi/哈基米/codex-local-session-manager`
+Run the CLI from this repository:
 
 Commands:
 
