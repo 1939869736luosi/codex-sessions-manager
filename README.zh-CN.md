@@ -1,75 +1,96 @@
-# codex-sessions
+# Codex Sessions Manager
 
-[English](./README.md)
+本地 Codex 会话管理工具集，包含 CLI、MCP 服务器和 AI Agent Skill，全部集成在一个仓库中。
 
-这是一个本地 Codex 会话管理工具集，主形态为：
+## 包含内容
 
-- Node / TypeScript CLI
-- 本地 stdio MCP server
-- 一套共享核心逻辑，用来扫描、预览、导出、验证和删除会话
+| 组件 | 说明 |
+|------|------|
+| **CLI** | 列出、查看、导出、删除和验证本地 Codex 会话 |
+| **MCP 服务器** | 供 AI Agent 集成的 stdio MCP 服务器 |
+| **Skill** | 供 Codex / Claude Code 使用的自然语言会话管理 Skill |
 
-这个仓库已经不再继续发展浏览器 UI。当前主产品是 `CLI + MCP`。
-
-## 安装
+## 快速开始
 
 ```bash
+# 1. 克隆完整仓库
+git clone https://github.com/1939869736luosi/codex-sessions-manager.git
+cd codex-sessions-manager
+
+# 2. 安装依赖
 npm install
+
+# 3. 构建
 npm run build
+
+# 4. 使用 CLI
+node dist/cli/index.js list --root ~/.codex --limit 20
+node dist/cli/index.js show <session-id> --root ~/.codex
+node dist/cli/index.js export <session-id> --root ~/.codex --output ./backup.json
 ```
 
-## CLI 用法
+## 安装为 Skill
 
-通过构建产物运行：
+### 通过 skills.sh
 
 ```bash
-node dist/cli/index.js list
-node dist/cli/index.js show <session-id>
-node dist/cli/index.js export <session-id>
-node dist/cli/index.js delete <session-id...>
-node dist/cli/index.js cleanup-index <session-id...>
-node dist/cli/index.js cleanup-stale
-node dist/cli/index.js verify <session-id...>
+npx skills add 1939869736luosi/codex-sessions-manager -g
 ```
 
-默认 Codex 根目录是 `~/.codex`，可用 `--root /path/to/.codex` 覆盖。
+### 手动安装
 
-示例：
-
+**Codex:**
 ```bash
-node dist/cli/index.js list --status active --limit 20
-node dist/cli/index.js show 019d5240
-node dist/cli/index.js export 019d5240 --output ./backup.json
-node dist/cli/index.js delete 019d5240 019d3de0 --yes
-node dist/cli/index.js cleanup-stale
-node dist/cli/index.js verify 019d5240 --json
+cp -r . ~/.codex/skills/codex-sessions-manager
 ```
 
-说明：
+**Claude Code:**
+```bash
+cp -r . ~/.claude/skills/codex-sessions-manager
+```
 
-- `delete` 不带 `--yes` 时，只输出删除预览，不会执行。
-- `cleanup-index` 只会改写 `session_index.jsonl` 和 `history.jsonl`。
-- `cleanup-stale` 会移除那些正文文件和 SQLite 都不存在的失效索引。
+## 项目结构
 
-## MCP 用法
+```
+.
+├── LICENSE              # Apache-2.0
+├── README.md            # 英文说明
+├── README.zh-CN.md      # 本文档
+├── package.json         # Node 依赖
+├── tsconfig.json        # TypeScript 配置
+├── src/
+│   ├── cli/             # CLI 入口
+│   ├── core/            # 会话扫描、查询、删除、备份逻辑
+│   └── mcp/             # MCP 服务器实现
+├── tests/               # 测试套件
+├── SKILL.md             # AI Agent Skill 定义
+└── agents/
+    └── openai.yaml      # Codex Agent 接口配置
+```
 
-启动本地 stdio MCP server：
+## CLI 命令
+
+| 命令 | 说明 |
+|------|------|
+| `list` | 列出会话，支持筛选 |
+| `show` | 查看会话详情 |
+| `export` | 导出会话为 JSON |
+| `delete` | 删除会话（不加 `--yes` 只预览） |
+| `cleanup-index` | 清理失效的 JSONL 索引条目 |
+| `cleanup-stale` | 清理失效的 SQLite 记录 |
+| `verify` | 验证会话完整性 |
+
+所有命令都支持 `--root ~/.codex` 覆盖默认目录。
+
+## MCP 服务器
+
+启动 MCP 服务器：
 
 ```bash
 node dist/mcp/server.js
 ```
 
-暴露的工具包括：
-
-- `list_sessions`
-- `get_session`
-- `export_session_backup`
-- `preview_delete_sessions`
-- `delete_sessions`
-- `cleanup_session_indexes`
-- `cleanup_stale_indexes`
-- `verify_sessions`
-
-CLI 和 MCP 共用同一套 Node 核心逻辑。
+暴露的工具：`list_sessions`、`get_session`、`export_session_backup`、`preview_delete_sessions`、`delete_sessions`、`cleanup_session_indexes`、`cleanup_stale_indexes`、`verify_sessions`。
 
 ## 开发
 
@@ -79,6 +100,6 @@ npm run build
 npm test
 ```
 
-## 开源协议
+## 许可证
 
-Apache License 2.0。参见 [LICENSE](./LICENSE)。
+Apache License 2.0
