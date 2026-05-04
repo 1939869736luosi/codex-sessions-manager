@@ -15,15 +15,31 @@ Use it when the user wants to work with local Codex conversation history instead
 
 ## Prerequisites
 
-This skill requires the CLI to be built from this repository:
+This skill requires the CLI to be built from this repository.
+
+**Why:** The skill file (SKILL.md) is read by the AI agent. When the AI executes CLI commands from this file, it runs them in the **current working directory** — not the skill directory. So relative paths like `dist/cli/index.js` won't work unless the CLI is globally available.
+
+**Option 1 — Global install (recommended):**
 
 ```bash
-cd /path/to/codex-sessions-manager
+cd /path/to/where/you/cloned/codex-sessions-manager
+npm install
+npm run build
+npm install -g .       # makes `codex-sessions` available everywhere
+```
+
+Then use `codex-sessions` instead of `node dist/cli/index.js` in commands below.
+
+**Option 2 — Keep local, use full path:**
+
+```bash
+cd /path/to/where/you/cloned/codex-sessions-manager
 npm install
 npm run build
 ```
 
-The built CLI is available at `dist/cli/index.js` within this directory.
+Then replace `node dist/cli/index.js` below with the full path, e.g.:
+`node /home/you/codex-sessions-manager/dist/cli/index.js`
 
 ## When To Use
 
@@ -60,20 +76,20 @@ If the `codex-sessions` MCP server is available in the current Codex session, us
 
 ### 2. Fall back to CLI when MCP is unavailable
 
-Run the CLI from this repository:
-
-Commands:
+If you installed globally (`npm install -g .`), use `codex-sessions`:
 
 ```bash
-node dist/cli/index.js list --root ~/.codex --limit 20
-node dist/cli/index.js show <session-id> --root ~/.codex
-node dist/cli/index.js export <session-id> --root ~/.codex --output ./backup.json
-node dist/cli/index.js delete <session-id...> --root ~/.codex
-node dist/cli/index.js delete <session-id...> --root ~/.codex --yes
-node dist/cli/index.js cleanup-index <session-id...> --root ~/.codex
-node dist/cli/index.js cleanup-stale --root ~/.codex
-node dist/cli/index.js verify <session-id...> --root ~/.codex
+codex-sessions list --root ~/.codex --limit 20
+codex-sessions show <session-id> --root ~/.codex
+codex-sessions export <session-id> --root ~/.codex --output ./backup.json
+codex-sessions delete <session-id...> --root ~/.codex
+codex-sessions delete <session-id...> --root ~/.codex --yes
+codex-sessions cleanup-index <session-id...> --root ~/.codex
+codex-sessions cleanup-stale --root ~/.codex
+codex-sessions verify <session-id...> --root ~/.codex
 ```
+
+If you didn't install globally, replace `codex-sessions` with the full path to `dist/cli/index.js`.
 
 ## Safety Rules
 
