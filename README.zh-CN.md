@@ -14,7 +14,8 @@
 ## 文档
 
 - [安全说明](./docs/SAFETY.md)：执行 delete、trash、restore、purge、cleanup 前建议先读。
-- [Skill 模板](./examples/codex-sessions-manager.SKILL.md)：给 agent 工作流使用的通用模板，可按本机路径修改。
+- [Skill 入口](./SKILL.md)：这个仓库公开使用的 Skill 说明。
+- [Skill 模板](./examples/codex-sessions-manager.SKILL.md)：给自定义本机路径使用的可复制模板。
 - [更新记录](./CHANGELOG.md)：公开版本变化说明。
 
 ## 安装

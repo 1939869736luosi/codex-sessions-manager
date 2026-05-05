@@ -14,7 +14,8 @@ It does not include a UI, TUI, detail page, incremental project scanner, or auto
 ## Documentation
 
 - [Safety guide](./docs/SAFETY.md): read this before delete, trash, restore, purge, or cleanup operations.
-- [Skill template](./examples/codex-sessions-manager.SKILL.md): optional template for agent workflows that call the CLI or MCP server.
+- [Skill entrypoint](./SKILL.md): public Skill instructions for this repository.
+- [Skill template](./examples/codex-sessions-manager.SKILL.md): optional copy-and-edit template for custom local paths.
 - [Changelog](./CHANGELOG.md): public release notes.
 
 ## Install

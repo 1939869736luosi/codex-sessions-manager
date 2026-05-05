@@ -9,6 +9,8 @@
 - Added recoverable trash deletion, restore, and purge flows.
 - Added cleanup preview and explicit confirmation for JSONL index rewrites.
 - Added warnings for unknown global-state references.
+- Added public Skill packaging through `SKILL.md` and `agents/openai.yaml`.
+- Added a public Skill template under `examples/`.
 
 ### Changed
 
@@ -22,4 +24,3 @@
 - Restore performs conflict checks before writing and has no force overwrite mode.
 - Unknown global-state references are reported as warnings only.
 - The project continues to avoid UI, TUI, automatic cleanup, and automatic purge behavior.
-
