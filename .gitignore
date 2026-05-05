@@ -5,3 +5,6 @@ Thumbs.db
 node_modules/
 dist/
 coverage/
+
+# Local audit and decision notes. Do not publish by default.
+docs/local/

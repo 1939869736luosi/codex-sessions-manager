@@ -11,6 +11,12 @@ Local Codex session management toolkit with:
 This project no longer ships a browser UI. The primary product is `CLI + MCP`.
 It does not include a UI, TUI, detail page, incremental project scanner, or automatic stale cleanup.
 
+## Documentation
+
+- [Safety guide](./docs/SAFETY.md): read this before delete, trash, restore, purge, or cleanup operations.
+- [Skill template](./examples/codex-sessions-manager.SKILL.md): optional template for agent workflows that call the CLI or MCP server.
+- [Changelog](./CHANGELOG.md): public release notes.
+
 ## Install
 
 ```bash

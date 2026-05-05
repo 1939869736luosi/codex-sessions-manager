@@ -11,6 +11,12 @@
 这个仓库已经不再继续发展浏览器 UI。当前主产品是 `CLI + MCP`。
 它不包含 UI、TUI、详情页、项目增量扫描，也不做过期自动清理。
 
+## 文档
+
+- [安全说明](./docs/SAFETY.md)：执行 delete、trash、restore、purge、cleanup 前建议先读。
+- [Skill 模板](./examples/codex-sessions-manager.SKILL.md)：给 agent 工作流使用的通用模板，可按本机路径修改。
+- [更新记录](./CHANGELOG.md)：公开版本变化说明。
+
 ## 安装
 
 ```bash
