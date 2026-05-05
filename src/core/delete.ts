@@ -1,6 +1,12 @@
 import { readFile, rm, writeFile } from "node:fs/promises";
 
+import {
+  collectGlobalStateReferences,
+  collectPossibleUnknownGlobalStateReferences,
+  removeGlobalStateReferences,
+} from "./global-state.js";
 import { filterJsonLines, safeJsonParse, splitJsonLines } from "./jsonl.js";
+import { scanShellSnapshots } from "./shell-snapshots.js";
 import {
   collectSqliteDeletionCounts,
   collectSqliteDeletionTotals,
@@ -17,6 +23,7 @@ import type {
   ScanResult,
   SessionEntry,
   SessionFileTarget,
+  ShellSnapshotFile,
   SessionIndexCleanupResult,
   SessionIndexRecord,
   SqliteDeletionCounts,
@@ -80,6 +87,10 @@ export function buildDeletePreview(scan: ScanResult, sessions: SessionEntry[]): 
     title: session.title,
     archived: session.archived,
     filePaths: session.fileTargets.map((target) => target.relativePath),
+    shellSnapshotFiles: (scan.shellSnapshots.filesById.get(session.id) ?? []).map((target) => target.relativePath),
+    globalStateRefs: scan.globalState.refsById.get(session.id)?.length ?? 0,
+    possibleUnknownGlobalStateRefs: scan.globalState.possibleUnknownRefsById.get(session.id)?.length ?? 0,
+    possibleUnknownGlobalStateRefPaths: (scan.globalState.possibleUnknownRefsById.get(session.id) ?? []).map((ref) => ref.path),
     sessionIndexRows: session.sessionIndexCount,
     historyRows: session.historyCount,
     sqlite: sqliteCountsById.get(session.id) ?? emptySqliteCounts(),
@@ -89,6 +100,9 @@ export function buildDeletePreview(scan: ScanResult, sessions: SessionEntry[]): 
     items,
     totals: {
       sessionFiles: items.reduce((sum, item) => sum + item.filePaths.length, 0),
+      shellSnapshotFiles: items.reduce((sum, item) => sum + item.shellSnapshotFiles.length, 0),
+      globalStateRefs: items.reduce((sum, item) => sum + item.globalStateRefs, 0),
+      possibleUnknownGlobalStateRefs: items.reduce((sum, item) => sum + item.possibleUnknownGlobalStateRefs, 0),
       sessionIndexRows: items.reduce((sum, item) => sum + item.sessionIndexRows, 0),
       historyRows: items.reduce((sum, item) => sum + item.historyRows, 0),
       sqliteRows: sumSqliteCounts(sqliteTotals),
@@ -112,9 +126,29 @@ function countHistoryRows(text: string | null, sessionId: string): number {
   return splitJsonLines(text).filter((line) => safeJsonParse<HistoryRecord>(line)?.session_id === sessionId).length;
 }
 
+function collectGlobalStateReferencesForValidation(text: string | null): {
+  refsById: ReturnType<typeof collectGlobalStateReferences>;
+  possibleUnknownRefsById: ReturnType<typeof collectGlobalStateReferences>;
+  warning: string | null;
+} {
+  try {
+    return {
+      refsById: collectGlobalStateReferences(text),
+      possibleUnknownRefsById: collectPossibleUnknownGlobalStateReferences(text),
+      warning: null,
+    };
+  } catch (error) {
+    return {
+      refsById: new Map(),
+      possibleUnknownRefsById: new Map(),
+      warning: `global state 无法解析：${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
 async function restoreDeletedFiles(
   deletedFiles: Array<{
-    target: SessionFileTarget;
+    target: Pick<SessionFileTarget | ShellSnapshotFile, "absolutePath">;
     bytes: Uint8Array;
   }>,
 ): Promise<void> {
@@ -132,6 +166,8 @@ export async function validateDeletion(
     readOptionalText(scan.root.sessionIndexPath),
     readOptionalText(scan.root.historyPath),
   ]);
+  const globalStateRefs = collectGlobalStateReferencesForValidation(await readOptionalText(scan.root.globalStatePath));
+  const shellSnapshotFiles = await scanShellSnapshots(scan.root.shellSnapshotsDir, scan.root.rootPath);
   const sqliteCounts = validateSqliteDeletion(scan.root.sqlitePath, targetIds, scan.root.logsSqlitePath);
 
   return Promise.all(
@@ -150,11 +186,25 @@ export async function validateDeletion(
           }
         }),
       );
+      const possibleUnknownRefs = globalStateRefs.refsById.get(session.id) ?? [];
+      const possibleUnknownGlobalStateRefs = globalStateRefs.possibleUnknownRefsById.get(session.id) ?? [];
+      const warnings = [
+        ...(globalStateRefs.warning ? [globalStateRefs.warning] : []),
+        ...(possibleUnknownGlobalStateRefs.length > 0
+          ? [`global state 存在 ${possibleUnknownGlobalStateRefs.length} 个未知位置引用，工具不会自动修改。`]
+          : []),
+      ];
 
       return {
         sessionId: session.id,
         title: session.title,
         filePathsRemaining: fileChecks.filter((value): value is string => Boolean(value)),
+        shellSnapshotFilesRemaining: (shellSnapshotFiles.get(session.id) ?? []).map((target) => target.relativePath),
+        globalStateRefsRemaining: globalStateRefs.warning ? -1 : possibleUnknownRefs.length,
+        possibleUnknownGlobalStateRefsRemaining: globalStateRefs.warning ? -1 : possibleUnknownGlobalStateRefs.length,
+        possibleUnknownGlobalStateRefPaths: possibleUnknownGlobalStateRefs.map((ref) => ref.path),
+        globalStateWarning: globalStateRefs.warning,
+        warnings,
         sessionIndexRowsRemaining: countSessionIndexRows(sessionIndexText, session.id),
         historyRowsRemaining: countHistoryRows(historyText, session.id),
         sqlite: sqliteCounts.get(session.id) ?? emptySqliteCounts(),
@@ -187,8 +237,26 @@ export async function deleteSessions(
       })),
     ),
   );
+  const shellSnapshotTargets = sessions.flatMap((session) => scan.shellSnapshots.filesById.get(session.id) ?? []);
+  const shellSnapshotSnapshots = await Promise.all(
+    shellSnapshotTargets.map(async (target) => ({
+      target,
+      bytes: await (async () => {
+        try {
+          return new Uint8Array(await readFile(target.absolutePath));
+        } catch (error) {
+          if (isMissingFileError(error)) {
+            return null;
+          }
+
+          throw error;
+        }
+      })(),
+    })),
+  );
   const originalSessionIndexText = await readOptionalText(scan.root.sessionIndexPath);
   const originalHistoryText = await readOptionalText(scan.root.historyPath);
+  const originalGlobalStateText = await readOptionalText(scan.root.globalStatePath);
 
   const sessionIndexResult = filterJsonLines<SessionIndexRecord>(
     originalSessionIndexText,
@@ -201,7 +269,8 @@ export async function deleteSessions(
 
   let sessionIndexWritten = false;
   let historyWritten = false;
-  const deletedFiles: Array<{ target: SessionFileTarget; bytes: Uint8Array }> = [];
+  let globalStateWritten = false;
+  const deletedFiles: Array<{ target: Pick<SessionFileTarget | ShellSnapshotFile, "absolutePath">; bytes: Uint8Array }> = [];
 
   try {
     if (scan.root.sessionIndexPath && originalSessionIndexText !== null) {
@@ -214,7 +283,31 @@ export async function deleteSessions(
       historyWritten = true;
     }
 
+    if (scan.root.globalStatePath && originalGlobalStateText !== null) {
+      const globalStateResult = await removeGlobalStateReferences(scan.root.globalStatePath, targetIds);
+      globalStateWritten = globalStateResult.removedCount > 0;
+    }
+
     for (const fileSnapshot of fileSnapshots) {
+      try {
+        await rm(fileSnapshot.target.absolutePath, { force: true });
+
+        if (fileSnapshot.bytes) {
+          deletedFiles.push({
+            target: fileSnapshot.target,
+            bytes: fileSnapshot.bytes,
+          });
+        }
+      } catch (error) {
+        if (isMissingFileError(error)) {
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    for (const fileSnapshot of shellSnapshotSnapshots) {
       try {
         await rm(fileSnapshot.target.absolutePath, { force: true });
 
@@ -237,6 +330,10 @@ export async function deleteSessions(
       deleteSessionsFromSqlite(scan.root.sqlitePath, [...targetIds], scan.root.logsSqlitePath);
     }
   } catch (error) {
+    if (globalStateWritten && scan.root.globalStatePath && originalGlobalStateText !== null) {
+      await writeFile(scan.root.globalStatePath, originalGlobalStateText, "utf8");
+    }
+
     if (historyWritten && scan.root.historyPath && originalHistoryText !== null) {
       await writeFile(scan.root.historyPath, originalHistoryText, "utf8");
     }
@@ -258,10 +355,29 @@ export async function deleteSessions(
   };
 }
 
-export async function cleanupStaleIndexes(scan: ScanResult): Promise<CleanupResult> {
+export function previewCleanupStaleIndexes(scan: ScanResult): CleanupResult {
   const staleSessionIds = scan.sessions.filter((session) => session.kind === "stale").map((session) => session.id);
   const staleSet = new Set(staleSessionIds);
 
+  const sessionIndexResult = filterJsonLines<SessionIndexRecord>(
+    scan.sessionIndex.text,
+    (record) => !record?.id || !staleSet.has(record.id),
+  );
+  const historyResult = filterJsonLines<HistoryRecord>(
+    scan.history.text,
+    (record) => !record?.session_id || !staleSet.has(record.session_id),
+  );
+
+  return {
+    staleSessionIds,
+    removedSessionIndexRows: sessionIndexResult.removedCount,
+    removedHistoryRows: historyResult.removedCount,
+  };
+}
+
+export async function cleanupStaleIndexes(scan: ScanResult): Promise<CleanupResult> {
+  const preview = previewCleanupStaleIndexes(scan);
+  const staleSet = new Set(preview.staleSessionIds);
   const sessionIndexResult = filterJsonLines<SessionIndexRecord>(
     scan.sessionIndex.text,
     (record) => !record?.id || !staleSet.has(record.id),
@@ -279,8 +395,27 @@ export async function cleanupStaleIndexes(scan: ScanResult): Promise<CleanupResu
     await writeFile(scan.root.historyPath, historyResult.text, "utf8");
   }
 
+  return preview;
+}
+
+export function previewCleanupSessionIndexes(
+  scan: ScanResult,
+  sessions: SessionEntry[],
+): SessionIndexCleanupResult {
+  const targetIds = sessions.map((session) => session.id);
+  const targetSet = new Set(targetIds);
+
+  const sessionIndexResult = filterJsonLines<SessionIndexRecord>(
+    scan.sessionIndex.text,
+    (record) => !record?.id || !targetSet.has(record.id),
+  );
+  const historyResult = filterJsonLines<HistoryRecord>(
+    scan.history.text,
+    (record) => !record?.session_id || !targetSet.has(record.session_id),
+  );
+
   return {
-    staleSessionIds,
+    sessionIds: targetIds,
     removedSessionIndexRows: sessionIndexResult.removedCount,
     removedHistoryRows: historyResult.removedCount,
   };
@@ -290,9 +425,8 @@ export async function cleanupSessionIndexes(
   scan: ScanResult,
   sessions: SessionEntry[],
 ): Promise<SessionIndexCleanupResult> {
-  const targetIds = sessions.map((session) => session.id);
-  const targetSet = new Set(targetIds);
-
+  const preview = previewCleanupSessionIndexes(scan, sessions);
+  const targetSet = new Set(preview.sessionIds);
   const sessionIndexResult = filterJsonLines<SessionIndexRecord>(
     scan.sessionIndex.text,
     (record) => !record?.id || !targetSet.has(record.id),
@@ -310,9 +444,5 @@ export async function cleanupSessionIndexes(
     await writeFile(scan.root.historyPath, historyResult.text, "utf8");
   }
 
-  return {
-    sessionIds: targetIds,
-    removedSessionIndexRows: sessionIndexResult.removedCount,
-    removedHistoryRows: historyResult.removedCount,
-  };
+  return preview;
 }

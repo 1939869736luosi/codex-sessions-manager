@@ -2,9 +2,21 @@ import path from "node:path";
 import { readFile, readdir, stat } from "node:fs/promises";
 
 import { safeJsonParse, splitJsonLines } from "./jsonl.js";
+import { collectGlobalStateReferences, collectPossibleUnknownGlobalStateReferences } from "./global-state.js";
+import { deriveProjectIdentity } from "./project.js";
 import { resolveCodexRoot } from "./root.js";
+import { scanShellSnapshots } from "./shell-snapshots.js";
 import { scanThreads } from "./sqlite.js";
-import type { HistoryData, HistoryRecord, ScanResult, SessionEntry, SessionFileTarget, SessionIndexData, SessionIndexRecord } from "./types.js";
+import type {
+  GlobalStateReference,
+  HistoryData,
+  HistoryRecord,
+  ScanResult,
+  SessionEntry,
+  SessionFileTarget,
+  SessionIndexData,
+  SessionIndexRecord,
+} from "./types.js";
 
 async function readOptionalText(filePath: string | null): Promise<string | null> {
   if (!filePath) {
@@ -204,12 +216,20 @@ function buildSession(
   const hasThread = Boolean(thread);
   const kind = chooseSessionKind(hasFile, archived, hasThread);
   const previewSummary = buildPreviewSummary(historyPreview, thread?.firstUserMessage ?? "", fileTargets);
+  const project = deriveProjectIdentity({
+    cwd: thread?.cwd ?? null,
+    rolloutPath: thread?.rolloutPath ?? null,
+    fileTargets,
+  });
 
   return {
     id,
     title,
     kind,
     archived,
+    projectPath: project.projectPath,
+    projectName: project.projectName,
+    projectKey: project.projectKey,
     createdAt,
     updatedAt,
     model: thread?.model ?? null,
@@ -232,15 +252,29 @@ export async function scanCodexRoot(rootArg?: string): Promise<ScanResult> {
   const root = await resolveCodexRoot(rootArg);
   const warnings: string[] = [];
 
-  const [activeFiles, archivedFiles, sessionIndexText, historyText] = await Promise.all([
+  const [activeFiles, archivedFiles, sessionIndexText, historyText, shellSnapshotFiles, globalStateText] = await Promise.all([
     scanSessionDirectory(root.sessionsDir, "sessions", root.rootPath),
     scanSessionDirectory(root.archivedDir, "archived_sessions", root.rootPath),
     readOptionalText(root.sessionIndexPath),
     readOptionalText(root.historyPath),
+    scanShellSnapshots(root.shellSnapshotsDir, root.rootPath),
+    readOptionalText(root.globalStatePath),
   ]);
 
   const sessionIndex = parseSessionIndex(sessionIndexText);
   const history = parseHistory(historyText);
+  let globalStateWarning: string | null = null;
+  let globalStateRefsById = new Map<string, GlobalStateReference[]>();
+  let possibleUnknownGlobalStateRefsById = new Map<string, GlobalStateReference[]>();
+
+  try {
+    globalStateRefsById = collectGlobalStateReferences(globalStateText);
+    possibleUnknownGlobalStateRefsById = collectPossibleUnknownGlobalStateReferences(globalStateText);
+  } catch (error) {
+    const globalStateName = root.globalStatePath ? path.basename(root.globalStatePath) : ".codex-global-state.json";
+    globalStateWarning = `读取 ${globalStateName} 失败：${error instanceof Error ? error.message : String(error)}`;
+    warnings.push(globalStateWarning);
+  }
 
   let sqliteWarning: string | null = null;
   let threadsById = new Map<string, ScanResult["sqlite"]["threadsById"] extends Map<string, infer T> ? T : never>();
@@ -280,6 +314,17 @@ export async function scanCodexRoot(rootArg?: string): Promise<ScanResult> {
       sqlitePath: root.sqlitePath,
       threadsById: threadsById as ScanResult["sqlite"]["threadsById"],
       warning: sqliteWarning,
+    },
+    globalState: {
+      path: root.globalStatePath,
+      text: globalStateText,
+      refsById: globalStateRefsById,
+      possibleUnknownRefsById: possibleUnknownGlobalStateRefsById,
+      warning: globalStateWarning,
+    },
+    shellSnapshots: {
+      dir: root.shellSnapshotsDir,
+      filesById: shellSnapshotFiles,
     },
     warnings,
   };

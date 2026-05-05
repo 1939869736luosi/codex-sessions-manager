@@ -1,19 +1,137 @@
 import type { ScanResult, SessionEntry, SessionKind } from "./types.js";
+import { matchesProject } from "./project.js";
 
 export interface ListSessionsOptions {
   query?: string;
+  project?: string;
   status?: SessionKind | "all";
   limit?: number;
+  updatedAfter?: string;
+  updatedBefore?: string;
+  createdAfter?: string;
+  createdBefore?: string;
+}
+
+function getDatePrefix(value: string): string | null {
+  return value.match(/^(\d{4}-\d{2}-\d{2})(?:$|[T\s])/)?.[1] ?? null;
+}
+
+function isDateOnly(value: string): boolean {
+  return getDatePrefix(value) === value;
+}
+
+function hasExplicitTimezone(value: string): boolean {
+  return /(?:Z|[+-]\d{2}:\d{2})$/i.test(value.trim());
+}
+
+function assertValidDatePrefix(value: string, optionName: string): void {
+  const prefix = getDatePrefix(value);
+  const match = prefix?.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    return;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    throw new Error(`${optionName} 不是有效日期：${value}`);
+  }
+}
+
+function parseDateBoundary(value: string | undefined, optionName: string, boundary: "start" | "end"): number | null {
+  if (!value?.trim()) {
+    return null;
+  }
+
+  assertValidDatePrefix(value, optionName);
+  if (!isDateOnly(value) && getDatePrefix(value) && !hasExplicitTimezone(value)) {
+    throw new Error(`${optionName} 必须带明确时区：${value}`);
+  }
+
+  if (isDateOnly(value)) {
+    const [year, month, day] = value.split("-").map(Number);
+    const date = new Date(
+      year,
+      month - 1,
+      day,
+      boundary === "start" ? 0 : 23,
+      boundary === "start" ? 0 : 59,
+      boundary === "start" ? 0 : 59,
+      boundary === "start" ? 0 : 999,
+    );
+    return date.getTime();
+  }
+
+  const time = new Date(value).getTime();
+
+  if (Number.isNaN(time)) {
+    throw new Error(`${optionName} 不是有效日期：${value}`);
+  }
+
+  return time;
+}
+
+function matchesDateRange(
+  value: string | null,
+  after: number | null,
+  before: number | null,
+): boolean {
+  if (after === null && before === null) {
+    return true;
+  }
+
+  if (!value) {
+    return false;
+  }
+
+  const time = new Date(value).getTime();
+  if (Number.isNaN(time)) {
+    return false;
+  }
+
+  if (after !== null && time < after) {
+    return false;
+  }
+
+  if (before !== null && time > before) {
+    return false;
+  }
+
+  return true;
 }
 
 export function filterSessions(scan: ScanResult, options: ListSessionsOptions = {}): SessionEntry[] {
   const query = options.query?.trim().toLowerCase() ?? "";
+  const project = options.project?.trim() ?? "";
   const status = options.status ?? "all";
   const limit = options.limit ?? Infinity;
+  const updatedAfter = parseDateBoundary(options.updatedAfter, "updatedAfter", "start");
+  const updatedBefore = parseDateBoundary(options.updatedBefore, "updatedBefore", "end");
+  const createdAfter = parseDateBoundary(options.createdAfter, "createdAfter", "start");
+  const createdBefore = parseDateBoundary(options.createdBefore, "createdBefore", "end");
 
   return scan.sessions
     .filter((session) => {
       if (status !== "all" && session.kind !== status) {
+        return false;
+      }
+
+      if (project && !matchesProject(session, project)) {
+        return false;
+      }
+
+      if (!matchesDateRange(session.updatedAt, updatedAfter, updatedBefore)) {
+        return false;
+      }
+
+      if (!matchesDateRange(session.createdAt, createdAfter, createdBefore)) {
         return false;
       }
 
@@ -52,6 +170,46 @@ export function resolveSessions(scan: ScanResult, sessionIds: string[]): Session
     }
 
     if (prefixed.length > 1) {
+      throw new Error(`会话 ID 前缀不唯一：${sessionId}`);
+    }
+
+    const residualIds = new Set([
+      ...scan.shellSnapshots.filesById.keys(),
+      ...scan.globalState.refsById.keys(),
+      ...scan.globalState.possibleUnknownRefsById.keys(),
+    ]);
+    const residualExact = residualIds.has(sessionId) ? sessionId : null;
+    const residualPrefixed = [...residualIds].filter((id) => id.startsWith(sessionId));
+
+    if (residualExact || residualPrefixed.length === 1) {
+      const id = residualExact ?? residualPrefixed[0];
+      return {
+        id,
+        title: id,
+        kind: "stale",
+        archived: false,
+        projectPath: null,
+        projectName: "unknown",
+        projectKey: "unknown",
+        createdAt: null,
+        updatedAt: null,
+        model: null,
+        cwd: null,
+        rolloutPath: null,
+        previewSummary: "仅有本地残留",
+        historyPreview: [],
+        totalFileSize: 0,
+        fileTargets: [],
+        hasThread: false,
+        hasSessionIndex: false,
+        hasHistory: false,
+        sessionIndexCount: 0,
+        historyCount: 0,
+        thread: null,
+      } satisfies SessionEntry;
+    }
+
+    if (residualPrefixed.length > 1) {
       throw new Error(`会话 ID 前缀不唯一：${sessionId}`);
     }
 

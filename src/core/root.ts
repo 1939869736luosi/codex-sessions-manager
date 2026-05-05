@@ -63,5 +63,7 @@ export async function resolveCodexRoot(rootArg?: string): Promise<CodexRootPaths
     historyPath: await getOptionalPath(path.join(rootPath, "history.jsonl")),
     sqlitePath: await getLatestVersionedSqlitePath(rootPath, "state"),
     logsSqlitePath: await getLatestVersionedSqlitePath(rootPath, "logs"),
+    globalStatePath: await getOptionalPath(path.join(rootPath, ".codex-global-state.json")),
+    shellSnapshotsDir: await getOptionalPath(path.join(rootPath, "shell_snapshots")),
   };
 }

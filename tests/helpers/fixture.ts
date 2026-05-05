@@ -7,6 +7,9 @@ import Database from "better-sqlite3";
 const ACTIVE_ID = "019d1111-2222-7333-8444-aaaaaaaaaaaa";
 const ARCHIVED_ID = "019d2222-3333-7444-8555-bbbbbbbbbbbb";
 const STALE_ID = "019d3333-4444-7555-8666-cccccccccccc";
+const UNRELATED_ID = "019d4444-5555-7666-8777-dddddddddddd";
+const ACTIVE_CWD = "/workspace/demo";
+const ARCHIVED_CWD = "/workspace/archive-demo";
 
 export interface Fixture {
   rootDir: string;
@@ -20,6 +23,11 @@ export interface Fixture {
     history: string;
     sqlite: string;
     logsSqlite: string | null;
+    globalState: string;
+    globalStateBak: string;
+    activeShellSnapshot: string;
+    archivedShellSnapshot: string;
+    unrelatedShellSnapshot: string;
   };
 }
 
@@ -99,8 +107,10 @@ export async function createFixture(options: FixtureOptions = {}): Promise<Fixtu
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "codex-sessions-"));
   const sessionsDir = path.join(rootDir, "sessions", "2026", "04", "03");
   const archivedDir = path.join(rootDir, "archived_sessions");
+  const shellSnapshotsDir = path.join(rootDir, "shell_snapshots");
   await mkdir(sessionsDir, { recursive: true });
   await mkdir(archivedDir, { recursive: true });
+  await mkdir(shellSnapshotsDir, { recursive: true });
 
   const activeSessionFile = path.join(
     sessionsDir,
@@ -114,6 +124,11 @@ export async function createFixture(options: FixtureOptions = {}): Promise<Fixtu
   const history = path.join(rootDir, "history.jsonl");
   const sqlite = path.join(rootDir, "state_5.sqlite");
   const logsSqlite = logsDatabase ? path.join(rootDir, "logs_2.sqlite") : null;
+  const globalState = path.join(rootDir, ".codex-global-state.json");
+  const globalStateBak = path.join(rootDir, ".codex-global-state.json.bak");
+  const activeShellSnapshot = path.join(shellSnapshotsDir, `${ACTIVE_ID}.1777716371736843000.sh`);
+  const archivedShellSnapshot = path.join(shellSnapshotsDir, `${ARCHIVED_ID}.1777716371736843001.sh`);
+  const unrelatedShellSnapshot = path.join(shellSnapshotsDir, `${UNRELATED_ID}.1777716371736843002.sh`);
 
   await writeJsonl(activeSessionFile, [
     {
@@ -158,6 +173,32 @@ export async function createFixture(options: FixtureOptions = {}): Promise<Fixtu
     { session_id: ARCHIVED_ID, ts: 2, text: "archived prompt" },
     { session_id: STALE_ID, ts: 3, text: "stale prompt" },
   ]);
+
+  await writeFile(activeShellSnapshot, `echo active ${ACTIVE_ID}\n`, "utf8");
+  await writeFile(archivedShellSnapshot, `echo archived ${ARCHIVED_ID}\n`, "utf8");
+  await writeFile(unrelatedShellSnapshot, `echo unrelated ${UNRELATED_ID}\n`, "utf8");
+  await writeFile(
+    globalState,
+    `${JSON.stringify(
+      {
+        "pinned-thread-ids": [ACTIVE_ID, ARCHIVED_ID, UNRELATED_ID],
+        "queued-follow-ups": {
+          [ACTIVE_ID]: [],
+          [UNRELATED_ID]: [],
+        },
+        diffViewThreadSettings: {
+          [ACTIVE_ID]: { mode: "split" },
+          [UNRELATED_ID]: { mode: "unified" },
+        },
+        "some-user-setting": ACTIVE_ID,
+        "prompt-history": [`this prompt mentions ${ACTIVE_ID} but is not a structured reference`],
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  await writeFile(globalStateBak, "backup must not change\n", "utf8");
 
   const db = new Database(sqlite);
   db.pragma("foreign_keys = ON");
@@ -228,14 +269,14 @@ export async function createFixture(options: FixtureOptions = {}): Promise<Fixtu
     `);
   }
 
-  for (const [id, rolloutPath, archived, firstUserMessage] of [
-    [ACTIVE_ID, activeSessionFile, 0, "active input"],
-    [ARCHIVED_ID, archivedSessionFile, 1, "archived input"],
+  for (const [id, rolloutPath, archived, firstUserMessage, createdAt, updatedAt, cwd] of [
+    [ACTIVE_ID, activeSessionFile, 0, "active input", 1775198400, 1775198460, ACTIVE_CWD],
+    [ARCHIVED_ID, archivedSessionFile, 1, "archived input", 1775118000, 1775118060, ARCHIVED_CWD],
   ] as const) {
     db.prepare(
       `insert into threads (id, title, first_user_message, created_at, updated_at, archived, rollout_path, model, cwd)
        values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(id, `Title ${id}`, firstUserMessage, 1, 2, archived, rolloutPath, "gpt-5.4", "/workspace/demo");
+    ).run(id, `Title ${id}`, firstUserMessage, createdAt, updatedAt, archived, rolloutPath, "gpt-5.4", cwd);
     if (stateLogsTable) {
       db.prepare("insert into logs (thread_id) values (?)").run(id);
     }
@@ -276,6 +317,11 @@ export async function createFixture(options: FixtureOptions = {}): Promise<Fixtu
       history,
       sqlite,
       logsSqlite,
+      globalState,
+      globalStateBak,
+      activeShellSnapshot,
+      archivedShellSnapshot,
+      unrelatedShellSnapshot,
     },
   };
 }
@@ -284,4 +330,7 @@ export const FIXTURE_IDS = {
   ACTIVE_ID,
   ARCHIVED_ID,
   STALE_ID,
+  UNRELATED_ID,
+  ACTIVE_CWD,
+  ARCHIVED_CWD,
 };

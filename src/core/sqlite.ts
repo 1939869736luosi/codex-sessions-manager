@@ -1,8 +1,38 @@
 import Database from "better-sqlite3";
 
-import type { SqliteDeletionCounts, ThreadRow } from "./types.js";
+import type { SqliteDeletionCounts, SqliteTableInspection, ThreadRow } from "./types.js";
 
-type SqliteRecordBundle = {
+export const SQLITE_KEY_TABLES = [
+  "threads",
+  "logs",
+  "thread_spawn_edges",
+  "agent_job_items",
+  "thread_dynamic_tools",
+  "stage1_outputs",
+  "thread_goals",
+] as const;
+
+const ASSOCIATION_COLUMNS_BY_TABLE: Record<(typeof SQLITE_KEY_TABLES)[number], string[]> = {
+  threads: ["id"],
+  logs: ["thread_id", "id"],
+  thread_spawn_edges: ["parent_thread_id", "child_thread_id"],
+  agent_job_items: ["assigned_thread_id", "job_id", "item_id"],
+  thread_dynamic_tools: ["thread_id"],
+  stage1_outputs: ["thread_id"],
+  thread_goals: ["thread_id"],
+};
+
+const REQUIRED_RESTORE_COLUMNS_BY_TABLE: Record<string, string[]> = {
+  threads: ["id"],
+  logs: ["thread_id"],
+  thread_spawn_edges: ["parent_thread_id", "child_thread_id"],
+  agent_job_items: ["assigned_thread_id"],
+  thread_dynamic_tools: ["thread_id"],
+  stage1_outputs: ["thread_id"],
+  thread_goals: ["thread_id"],
+};
+
+export type SqliteRecordBundle = {
   threads: Record<string, unknown>[];
   logs: Record<string, unknown>[];
   threadSpawnEdges: Record<string, unknown>[];
@@ -74,6 +104,38 @@ function columnExists(db: Database.Database, tableName: string, columnName: stri
 
   const rows = db.prepare(`pragma table_info(${quoteIdentifier(tableName)})`).all() as Array<{ name?: string }>;
   return rows.some((row) => row.name === columnName);
+}
+
+function getTableColumns(db: Database.Database, tableName: string): string[] {
+  if (!tableExists(db, tableName)) {
+    return [];
+  }
+
+  const rows = db.prepare(`pragma table_info(${quoteIdentifier(tableName)})`).all() as Array<{ name?: string }>;
+  return rows.map((row) => row.name).filter((name): name is string => Boolean(name));
+}
+
+export function inspectSqliteTables(sqlitePath: string | null): SqliteTableInspection[] {
+  if (!sqlitePath) {
+    return SQLITE_KEY_TABLES.map((table) => ({
+      table,
+      exists: false,
+      columns: [],
+      associationColumns: [],
+    }));
+  }
+
+  return withDatabase(sqlitePath, true, (db) =>
+    SQLITE_KEY_TABLES.map((table) => {
+      const columns = getTableColumns(db, table);
+      return {
+        table,
+        exists: columns.length > 0 || tableExists(db, table),
+        columns,
+        associationColumns: columns.filter((column) => ASSOCIATION_COLUMNS_BY_TABLE[table].includes(column)),
+      };
+    }),
+  );
 }
 
 function countRows(db: Database.Database, sql: string, params: unknown[] = []): number {
@@ -309,6 +371,18 @@ export function collectSqliteDeletionTotals(
   return totals;
 }
 
+export function sumSqliteDeletionCounts(counts: SqliteDeletionCounts): number {
+  return (
+    counts.threadRows +
+    counts.logRows +
+    counts.spawnEdgeRows +
+    counts.assignedAgentJobs +
+    counts.dynamicToolRows +
+    counts.stage1Rows +
+    counts.threadGoalRows
+  );
+}
+
 function deleteStateRows(sqlitePath: string | null, sessionIds: string[]): void {
   if (!sqlitePath || sessionIds.length === 0) {
     return;
@@ -317,6 +391,12 @@ function deleteStateRows(sqlitePath: string | null, sessionIds: string[]): void 
   withDatabase(sqlitePath, false, (db) => {
     const deleteLogs = hasSessionLogsTable(db) ? db.prepare("delete from logs where thread_id = ?") : null;
     const deleteGoals = tableExists(db, "thread_goals") ? db.prepare("delete from thread_goals where thread_id = ?") : null;
+    const deleteDynamicTools = tableExists(db, "thread_dynamic_tools")
+      ? db.prepare("delete from thread_dynamic_tools where thread_id = ?")
+      : null;
+    const deleteStage1Outputs = tableExists(db, "stage1_outputs")
+      ? db.prepare("delete from stage1_outputs where thread_id = ?")
+      : null;
     const deleteEdges = tableExists(db, "thread_spawn_edges")
       ? db.prepare("delete from thread_spawn_edges where parent_thread_id = ? or child_thread_id = ?")
       : null;
@@ -329,6 +409,8 @@ function deleteStateRows(sqlitePath: string | null, sessionIds: string[]): void 
       for (const sessionId of ids) {
         deleteLogs?.run(sessionId);
         deleteGoals?.run(sessionId);
+        deleteDynamicTools?.run(sessionId);
+        deleteStage1Outputs?.run(sessionId);
         deleteEdges?.run(sessionId, sessionId);
         nullAgentJobItems?.run(sessionId);
         deleteThread?.run(sessionId);
@@ -422,31 +504,208 @@ function selectRowsIfTableExists(
   return selectRows(db, sql, params);
 }
 
-function restoreRows(sqlitePath: string | null, tableName: string, rows: Record<string, unknown>[]): void {
-  if (!sqlitePath || rows.length === 0) {
+function getRestoreKey(
+  tableName: string,
+  row: Record<string, unknown>,
+): {
+  columns: string[];
+  values: unknown[];
+  label: string;
+} | null {
+  if (tableName === "threads" && row.id !== undefined) {
+    return { columns: ["id"], values: [row.id], label: `id=${String(row.id)}` };
+  }
+
+  if (tableName === "logs" && row.id !== undefined) {
+    return { columns: ["id"], values: [row.id], label: `id=${String(row.id)}` };
+  }
+
+  if (tableName === "thread_spawn_edges" && row.child_thread_id !== undefined) {
+    return {
+      columns: ["child_thread_id"],
+      values: [row.child_thread_id],
+      label: `child_thread_id=${String(row.child_thread_id)}`,
+    };
+  }
+
+  if (tableName === "agent_job_items" && row.job_id !== undefined && row.item_id !== undefined) {
+    return {
+      columns: ["job_id", "item_id"],
+      values: [row.job_id, row.item_id],
+      label: `job_id=${String(row.job_id)}, item_id=${String(row.item_id)}`,
+    };
+  }
+
+  if (tableName === "thread_dynamic_tools" && row.thread_id !== undefined && row.position !== undefined) {
+    return {
+      columns: ["thread_id", "position"],
+      values: [row.thread_id, row.position],
+      label: `thread_id=${String(row.thread_id)}, position=${String(row.position)}`,
+    };
+  }
+
+  if ((tableName === "stage1_outputs" || tableName === "thread_goals") && row.thread_id !== undefined) {
+    return { columns: ["thread_id"], values: [row.thread_id], label: `thread_id=${String(row.thread_id)}` };
+  }
+
+  return null;
+}
+
+function assertNoRestoreKeyConflictsInDatabase(
+  sqlitePath: string | null,
+  tableRows: Array<{ tableName: string; rows: Record<string, unknown>[] }>,
+): void {
+  if (!sqlitePath) {
     return;
   }
 
-  withDatabase(sqlitePath, false, (db) => {
-    if (!tableExists(db, tableName)) {
-      return;
-    }
-
-    const columns = Object.keys(rows[0]);
-    if (columns.length === 0) {
-      return;
-    }
-
-    const columnSql = columns.map(quoteIdentifier).join(", ");
-    const valueSql = columns.map(() => "?").join(", ");
-    const insert = db.prepare(`insert or replace into ${quoteIdentifier(tableName)} (${columnSql}) values (${valueSql})`);
-    const transaction = db.transaction((records: Record<string, unknown>[]) => {
-      for (const record of records) {
-        insert.run(...columns.map((column) => record[column] ?? null));
+  withDatabase(sqlitePath, true, (db) => {
+    for (const { tableName, rows } of tableRows) {
+      if (!tableExists(db, tableName)) {
+        continue;
       }
-    });
 
-    transaction(rows);
+      const tableColumns = new Set(getTableColumns(db, tableName));
+      for (const row of rows) {
+        const key = getRestoreKey(tableName, row);
+        if (!key || key.columns.some((column) => !tableColumns.has(column))) {
+          continue;
+        }
+
+        const whereSql = key.columns.map((column) => `${quoteIdentifier(column)} = ?`).join(" and ");
+        const conflictSql =
+          tableName === "agent_job_items" && tableColumns.has("assigned_thread_id")
+            ? `select count(*) as count from ${quoteIdentifier(tableName)} where ${whereSql} and assigned_thread_id is not null`
+            : `select count(*) as count from ${quoteIdentifier(tableName)} where ${whereSql}`;
+        if (countRows(db, conflictSql, key.values) > 0) {
+          throw new Error(`恢复冲突：SQLite key conflict ${tableName}(${key.label})`);
+        }
+      }
+    }
+  });
+}
+
+type RestoreRowsResult = {
+  restored: number;
+  skipped: number;
+  skippedTable: string | null;
+};
+
+function restoreRowsInDatabase(
+  db: Database.Database,
+  tableName: string,
+  rows: Record<string, unknown>[],
+): RestoreRowsResult {
+  if (rows.length === 0) {
+    return { restored: 0, skipped: 0, skippedTable: null };
+  }
+
+  if (!tableExists(db, tableName)) {
+    return { restored: 0, skipped: rows.length, skippedTable: tableName };
+  }
+
+  const tableColumns = new Set(getTableColumns(db, tableName));
+  const missingRequiredColumns = (REQUIRED_RESTORE_COLUMNS_BY_TABLE[tableName] ?? []).filter(
+    (column) => !tableColumns.has(column),
+  );
+  if (missingRequiredColumns.length > 0) {
+    return { restored: 0, skipped: rows.length, skippedTable: tableName };
+  }
+
+  const columns = Object.keys(rows[0]).filter((column) => tableColumns.has(column));
+  if (columns.length === 0) {
+    return { restored: 0, skipped: rows.length, skippedTable: tableName };
+  }
+
+  const columnSql = columns.map(quoteIdentifier).join(", ");
+  const valueSql = columns.map(() => "?").join(", ");
+  const insert = db.prepare(`insert into ${quoteIdentifier(tableName)} (${columnSql}) values (${valueSql})`);
+  let restored = 0;
+
+  for (const record of rows) {
+    restored += insert.run(...columns.map((column) => record[column] ?? null)).changes;
+  }
+
+  return { restored, skipped: 0, skippedTable: null };
+}
+
+function restoreRows(sqlitePath: string | null, tableName: string, rows: Record<string, unknown>[]): RestoreRowsResult {
+  if (rows.length === 0) {
+    return { restored: 0, skipped: 0, skippedTable: null };
+  }
+
+  if (!sqlitePath) {
+    return { restored: 0, skipped: rows.length, skippedTable: tableName };
+  }
+
+  return withDatabase(sqlitePath, false, (db) => {
+    const transaction = db.transaction(() => restoreRowsInDatabase(db, tableName, rows));
+    return transaction();
+  });
+}
+
+function restoreAgentJobItemsInDatabase(db: Database.Database, rows: Record<string, unknown>[]): RestoreRowsResult {
+  if (rows.length === 0) {
+    return { restored: 0, skipped: 0, skippedTable: null };
+  }
+
+  const tableName = "agent_job_items";
+  if (!tableExists(db, tableName)) {
+    return { restored: 0, skipped: rows.length, skippedTable: tableName };
+  }
+
+  const tableColumns = new Set(getTableColumns(db, tableName));
+  const missingRequiredColumns = REQUIRED_RESTORE_COLUMNS_BY_TABLE[tableName].filter(
+    (column) => !tableColumns.has(column),
+  );
+  if (
+    missingRequiredColumns.length > 0 ||
+    !tableColumns.has("job_id") ||
+    !tableColumns.has("item_id") ||
+    !tableColumns.has("assigned_thread_id")
+  ) {
+    return { restored: 0, skipped: rows.length, skippedTable: tableName };
+  }
+
+  const columns = Object.keys(rows[0]).filter((column) => tableColumns.has(column));
+  if (columns.length === 0) {
+    return { restored: 0, skipped: rows.length, skippedTable: tableName };
+  }
+
+  const columnSql = columns.map(quoteIdentifier).join(", ");
+  const valueSql = columns.map(() => "?").join(", ");
+  const insert = db.prepare(`insert into ${quoteIdentifier(tableName)} (${columnSql}) values (${valueSql})`);
+  const restoreAssignment = db.prepare(
+    `update ${quoteIdentifier(tableName)}
+     set assigned_thread_id = ?
+     where job_id = ? and item_id = ? and assigned_thread_id is null`,
+  );
+  let restored = 0;
+
+  for (const record of rows) {
+    const hasKey = record.job_id !== undefined && record.item_id !== undefined;
+    const restoredExisting = hasKey
+      ? restoreAssignment.run(record.assigned_thread_id ?? null, record.job_id, record.item_id).changes
+      : 0;
+
+    restored += restoredExisting || insert.run(...columns.map((column) => record[column] ?? null)).changes;
+  }
+
+  return { restored, skipped: 0, skippedTable: null };
+}
+
+function restoreAgentJobItems(sqlitePath: string | null, rows: Record<string, unknown>[]): RestoreRowsResult {
+  if (rows.length === 0) {
+    return { restored: 0, skipped: 0, skippedTable: null };
+  }
+
+  if (!sqlitePath) {
+    return { restored: 0, skipped: rows.length, skippedTable: "agent_job_items" };
+  }
+
+  return withDatabase(sqlitePath, false, (db) => {
+    const transaction = db.transaction(() => restoreAgentJobItemsInDatabase(db, rows));
+    return transaction();
   });
 }
 
@@ -504,4 +763,140 @@ export function exportSqliteRecords(
   }
 
   return bundle;
+}
+
+export function exportSqliteRecordsForRestore(
+  sqlitePath: string | null,
+  sessionId: string,
+  logsSqlitePath: string | null = null,
+): {
+  state: SqliteRecordBundle;
+  dedicatedLogs: Record<string, unknown>[];
+} {
+  return {
+    state: collectStateRecords(sqlitePath, sessionId),
+    dedicatedLogs: logsSqlitePath && logsSqlitePath !== sqlitePath ? collectLogRecords(logsSqlitePath, sessionId) : [],
+  };
+}
+
+export function assertNoSqliteRestoreKeyConflicts(
+  sqlitePath: string | null,
+  logsSqlitePath: string | null,
+  bundle: {
+    state: SqliteRecordBundle;
+    dedicatedLogs: Record<string, unknown>[];
+  },
+): void {
+  assertNoRestoreKeyConflictsInDatabase(sqlitePath, [
+    { tableName: "threads", rows: bundle.state.threads },
+    { tableName: "logs", rows: bundle.state.logs },
+    { tableName: "thread_dynamic_tools", rows: bundle.state.threadDynamicTools },
+    { tableName: "stage1_outputs", rows: bundle.state.stage1Outputs },
+    { tableName: "agent_job_items", rows: bundle.state.agentJobItems },
+    { tableName: "thread_spawn_edges", rows: bundle.state.threadSpawnEdges },
+    { tableName: "thread_goals", rows: bundle.state.threadGoals },
+  ]);
+
+  if (logsSqlitePath && logsSqlitePath !== sqlitePath) {
+    assertNoRestoreKeyConflictsInDatabase(logsSqlitePath, [{ tableName: "logs", rows: bundle.dedicatedLogs }]);
+  }
+}
+
+export function restoreSqliteRecords(
+  sqlitePath: string | null,
+  logsSqlitePath: string | null,
+  bundle: {
+    state: SqliteRecordBundle;
+    dedicatedLogs: Record<string, unknown>[];
+  },
+): {
+  restored: {
+    total: number;
+    threads: number;
+    logs: number;
+    threadSpawnEdges: number;
+    agentJobItems: number;
+    threadDynamicTools: number;
+    stage1Outputs: number;
+    threadGoals: number;
+    dedicatedLogs: number;
+  };
+  skipped: {
+    total: number;
+    threads: number;
+    logs: number;
+    threadSpawnEdges: number;
+    agentJobItems: number;
+    threadDynamicTools: number;
+    stage1Outputs: number;
+    threadGoals: number;
+    dedicatedLogs: number;
+  };
+  skippedTables: string[];
+} {
+  const skippedTables = new Set<string>();
+  const restored = {
+    total: 0,
+    threads: 0,
+    logs: 0,
+    threadSpawnEdges: 0,
+    agentJobItems: 0,
+    threadDynamicTools: 0,
+    stage1Outputs: 0,
+    threadGoals: 0,
+    dedicatedLogs: 0,
+  };
+  const skipped = { ...restored };
+
+  function apply(
+    key: keyof typeof restored,
+    tableName: string,
+    result: RestoreRowsResult,
+  ): void {
+    restored[key] = result.restored;
+    skipped[key] = result.skipped;
+    restored.total += result.restored;
+    skipped.total += result.skipped;
+    if (result.skippedTable) {
+      skippedTables.add(tableName);
+    }
+  }
+
+  if (sqlitePath) {
+    withDatabase(sqlitePath, false, (db) => {
+      const transaction = db.transaction(() => {
+        apply("threads", "threads", restoreRowsInDatabase(db, "threads", bundle.state.threads));
+        apply("logs", "logs", restoreRowsInDatabase(db, "logs", bundle.state.logs));
+        apply("threadDynamicTools", "thread_dynamic_tools", restoreRowsInDatabase(db, "thread_dynamic_tools", bundle.state.threadDynamicTools));
+        apply("stage1Outputs", "stage1_outputs", restoreRowsInDatabase(db, "stage1_outputs", bundle.state.stage1Outputs));
+        apply("agentJobItems", "agent_job_items", restoreAgentJobItemsInDatabase(db, bundle.state.agentJobItems));
+        apply("threadSpawnEdges", "thread_spawn_edges", restoreRowsInDatabase(db, "thread_spawn_edges", bundle.state.threadSpawnEdges));
+        apply("threadGoals", "thread_goals", restoreRowsInDatabase(db, "thread_goals", bundle.state.threadGoals));
+      });
+      transaction();
+    });
+  } else {
+    apply("threads", "threads", restoreRows(null, "threads", bundle.state.threads));
+    apply("logs", "logs", restoreRows(null, "logs", bundle.state.logs));
+    apply("threadDynamicTools", "thread_dynamic_tools", restoreRows(null, "thread_dynamic_tools", bundle.state.threadDynamicTools));
+    apply("stage1Outputs", "stage1_outputs", restoreRows(null, "stage1_outputs", bundle.state.stage1Outputs));
+    apply("agentJobItems", "agent_job_items", restoreAgentJobItems(null, bundle.state.agentJobItems));
+    apply("threadSpawnEdges", "thread_spawn_edges", restoreRows(null, "thread_spawn_edges", bundle.state.threadSpawnEdges));
+    apply("threadGoals", "thread_goals", restoreRows(null, "thread_goals", bundle.state.threadGoals));
+  }
+
+  if (logsSqlitePath && logsSqlitePath !== sqlitePath) {
+    withDatabase(logsSqlitePath, false, (db) => {
+      const transaction = db.transaction(() => {
+        apply("dedicatedLogs", "logs", restoreRowsInDatabase(db, "logs", bundle.dedicatedLogs));
+      });
+      transaction();
+    });
+  }
+
+  return {
+    restored,
+    skipped,
+    skippedTables: [...skippedTables].sort(),
+  };
 }

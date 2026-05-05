@@ -33,9 +33,13 @@ describe("sqlite core", () => {
     const validation = validateSqliteDeletion(fixture.paths.sqlite, [FIXTURE_IDS.ACTIVE_ID, FIXTURE_IDS.ARCHIVED_ID], fixture.paths.logsSqlite);
     expect(validation.get(FIXTURE_IDS.ACTIVE_ID)?.threadRows).toBe(0);
     expect(validation.get(FIXTURE_IDS.ACTIVE_ID)?.logRows).toBe(0);
+    expect(validation.get(FIXTURE_IDS.ACTIVE_ID)?.stage1Rows).toBe(0);
+    expect(validation.get(FIXTURE_IDS.ACTIVE_ID)?.dynamicToolRows).toBe(0);
     expect(validation.get(FIXTURE_IDS.ACTIVE_ID)?.threadGoalRows).toBe(0);
     expect(validation.get(FIXTURE_IDS.ARCHIVED_ID)?.threadRows).toBe(1);
     expect(validation.get(FIXTURE_IDS.ARCHIVED_ID)?.logRows).toBe(1);
+    expect(validation.get(FIXTURE_IDS.ARCHIVED_ID)?.stage1Rows).toBe(1);
+    expect(validation.get(FIXTURE_IDS.ARCHIVED_ID)?.dynamicToolRows).toBe(1);
     expect(validation.get(FIXTURE_IDS.ARCHIVED_ID)?.threadGoalRows).toBe(1);
   });
 
