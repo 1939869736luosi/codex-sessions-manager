@@ -68,6 +68,24 @@ node dist/cli/index.js delete <session-id> --trash --yes
 
 `purge --yes` removes only the trash entry. It does not touch live sessions.
 
+## Side Conversations
+
+Codex `/side` conversations are separate transcripts. They may appear in local storage as child threads linked to a parent thread.
+
+This matters for safety:
+
+- A parent thread and a side child thread have separate session IDs.
+- Showing or exporting a parent thread does not guarantee that side child transcript content is included.
+- Deleting a parent thread does not mean the child thread's full transcript is also deleted.
+- If you want to handle both, preview both session IDs together before running any confirmed write operation.
+- The current CLI/MCP tools do not automatically recurse from a parent thread to its side child threads.
+
+Recommended workflow:
+
+1. Identify the parent thread ID and any side child thread IDs.
+2. Preview delete, trash, export, or verify with all IDs that should be covered.
+3. Confirm only after the preview matches the intended scope.
+
 ## Cleanup Commands
 
 `cleanup-index` and `cleanup-stale` do not delete raw session files or SQLite rows. They rewrite `session_index.jsonl` and `history.jsonl`, so they still require explicit confirmation.
@@ -116,4 +134,3 @@ This project does not provide:
 - automatic trash purge
 - force overwrite restore
 - automatic editing of unknown global-state keys
-

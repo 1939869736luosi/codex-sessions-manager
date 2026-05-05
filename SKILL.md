@@ -46,6 +46,7 @@ Use this skill for requests like:
 - "List my recent Codex sessions"
 - "Find sessions for this project"
 - "Show this session"
+- "Find side conversations for this session"
 - "Export this session"
 - "Preview deleting these sessions"
 - "Move these sessions to trash"
@@ -153,11 +154,24 @@ node dist/cli/index.js verify <session-id...> --root <path-to-codex-root>
 - If `verify`, `doctor`, or `inspect_root` reports warnings, tell the user. Do not claim the root is fully clean.
 - Do not output chat content when reporting doctor, verify, or global-state warnings.
 
+## Side Conversations
+
+Codex `/side` creates an ephemeral side conversation with a separate transcript. In local storage, it can appear as a separate child thread linked to a parent thread.
+
+When a user asks about side conversations:
+
+- Treat the parent thread and side child thread as separate sessions with separate transcripts.
+- Search, show, export, delete, trash, restore, or verify the child thread by its own session ID.
+- Do not assume deleting, exporting, or summarizing a parent thread also handles its side child threads.
+- If the user wants a parent thread and its side conversations handled together, identify the child thread IDs first, preview all selected IDs together, and only then run any confirmed write operation.
+- Current CLI/MCP behavior does not automatically recurse from parent to side child threads.
+
 ## Response Style
 
 - For list requests: show session ID, updated time, size, project, status, and readable title.
 - For project requests: show project name/path, session count, status counts, latest updated time, and total size.
 - For show requests: summarize the session and include key metadata.
+- For side-conversation requests: distinguish parent thread ID and child thread ID, and say whether the requested action covers one or both.
 - For delete requests: explain whether this is preview-only, permanent delete, or recoverable trash delete.
 - For trash requests: distinguish moved to trash, restored, and purged.
 - For restore conflicts: explain that the live session already exists and identify conflicting surfaces when available.
@@ -178,4 +192,3 @@ Do not build or imply support for:
 - force overwrite restore
 - automatic editing of unknown global-state keys
 - non-Codex chat cleanup
-

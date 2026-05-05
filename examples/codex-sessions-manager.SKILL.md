@@ -43,6 +43,8 @@ Prefer MCP tools when the `codex-sessions` MCP server is available:
 
 Use CLI only when MCP is unavailable or blocked.
 
+For Codex `/side` conversations, treat the parent thread and side child thread as separate sessions. Do not assume parent operations include side child transcripts. If the user wants both handled, identify the child session IDs first and include them in the preview or confirmed operation.
+
 ## CLI Fallback
 
 Run commands from:
@@ -86,6 +88,7 @@ node dist/cli/index.js verify <session-id> --root <path-to-codex-root>
 - MCP `cleanup_session_indexes` and `cleanup_stale_indexes` require `confirm=true` to rewrite indexes.
 - Unknown global-state references are warnings only. Do not edit unknown global-state keys automatically.
 - If `verify`, `doctor`, or `inspect_root` reports warnings, tell the user. Do not claim the root is fully clean.
+- `/side` conversations may be stored as separate child threads. Current CLI/MCP behavior does not automatically recurse from parent to side child threads.
 
 ## Non-Goals
 
@@ -98,4 +101,3 @@ Do not build or imply support for:
 - automatic stale cleanup
 - automatic trash purge
 - force overwrite restore
-
