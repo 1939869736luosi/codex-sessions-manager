@@ -1,16 +1,26 @@
 # codex-sessions-manager
 
+[![npm](https://img.shields.io/npm/v/codex-sessions-manager)](https://www.npmjs.com/package/codex-sessions-manager)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
 [简体中文](./README.zh-CN.md)
 
 > Codex has no built-in way to delete sessions. Archive ≠ delete. Your `~/.codex` grows forever.
 
-**codex-sessions-manager** gives you full lifecycle control over local Codex sessions — list, filter, export, delete, trash, restore, verify, and cleanup — via CLI or MCP server.
+**codex-sessions-manager** is the most thorough local Codex session cleanup tool available. It doesn't just delete files — it cleans all four storage layers, rolls back on failure, and lets AI agents manage sessions directly.
 
-## Why this exists
+## Why this one?
 
-- Codex only offers "archive", not delete ([openai/codex#8784](https://github.com/openai/codex/issues/8784))
-- Manually deleting files leaves orphaned JSONL index entries, SQLite rows, and global state references
-- This tool handles **all four storage layers** properly: raw files, JSONL indexes, SQLite records, and global state
+Other tools delete a SQLite row or remove some files and call it done. This tool does more:
+
+| | codex-sessions-manager | Others |
+|--|:---:|:---:|
+| Cleans all 4 layers (files + JSONL + SQLite + global state) | ✅ | ❌ partial |
+| Automatic rollback if anything fails mid-delete | ✅ | ❌ |
+| Recoverable trash with conflict-safe restore | ✅ | ❌ or basic backup |
+| Post-delete verification (checks for orphans) | ✅ | ❌ |
+| AI agents can call it (MCP server) | ✅ | ❌ |
+| Handles `/side` and `/fork` child threads | ✅ | ❌ |
 
 ## Quick Start
 
@@ -24,25 +34,48 @@ codex-sessions list --limit 10
 # Preview what deletion would do (safe, no changes)
 codex-sessions delete <session-id>
 
-# Actually delete (with recoverable trash)
+# Delete with recoverable trash (recommended)
 codex-sessions delete <session-id> --trash --yes
 
-# Restore from trash if you change your mind
+# Changed your mind? Restore it
 codex-sessions restore <session-id> --yes
+
+# Verify nothing is left behind
+codex-sessions verify <session-id>
 ```
+
+## How deletion actually works
+
+Most tools: delete one file or one DB row → done → orphans everywhere.
+
+This tool:
+
+```
+1. Snapshot all files (in case we need to roll back)
+2. Rewrite session_index.jsonl (remove matching rows)
+3. Rewrite history.jsonl (remove matching rows)
+4. Clean global_state.json references
+5. Delete raw session files
+6. Delete shell snapshot files
+7. Delete SQLite rows (7 tables: threads, logs, spawn_edges, agent_jobs, dynamic_tools, stage1, thread_goals)
+
+If ANY step fails → everything rolls back to the original state.
+```
+
+After deletion, run `verify` to confirm zero orphans remain.
 
 ## Features
 
-| Feature | Description |
+| Feature | What it does |
 |---------|-------------|
 | **List & filter** | By project, status, time range; group by project |
-| **Export** | Backup any session to JSON |
+| **Export** | Backup any session to JSON before you touch it |
 | **Delete** | Permanent or recoverable trash — your choice |
-| **Restore** | Undo trash deletion with conflict detection |
-| **Verify** | Check if a session has orphaned files/indexes/DB rows |
+| **Trash & Restore** | Full snapshot saved; restore checks for SQLite key conflicts before writing |
+| **Verify** | Reports any remaining files, index rows, or DB records |
 | **Cleanup** | Remove stale index entries without touching raw data |
-| **Health check** | `doctor` command for full diagnostics |
-| **MCP server** | AI agents (Claude Code, Codex, Kiro) can manage sessions directly |
+| **Health check** | `doctor` command for full root diagnostics |
+| **MCP server** | AI agents (Claude Code, Codex, Kiro) manage sessions directly |
 | **Side conversations** | Properly handles `/fork` and `/side` child threads |
 
 ## Use with AI Agents (MCP)
@@ -60,7 +93,9 @@ Add to your MCP config:
 }
 ```
 
-Your AI agent gets 13 tools: `inspect_root`, `list_sessions`, `list_projects`, `get_session`, `export_session_backup`, `preview_delete_sessions`, `delete_sessions`, `list_trash`, `restore_sessions`, `purge_trash`, `cleanup_session_indexes`, `cleanup_stale_indexes`, `verify_sessions`.
+13 tools exposed: `inspect_root`, `list_sessions`, `list_projects`, `get_session`, `export_session_backup`, `preview_delete_sessions`, `delete_sessions`, `list_trash`, `restore_sessions`, `purge_trash`, `cleanup_session_indexes`, `cleanup_stale_indexes`, `verify_sessions`.
+
+All destructive tools require `confirm: true`. Without it, you get a preview only.
 
 ## CLI Reference
 
@@ -81,28 +116,26 @@ codex-sessions cleanup-index <session-id...> [--yes]
 codex-sessions verify <session-id...> [--json]
 ```
 
-**Safety**: All destructive commands require `--yes` to execute. Without it, you get a preview only.
+**Safety first**: All destructive commands require `--yes`. Without it, you only get a preview.
 
-## How it works
-
-Codex stores sessions across multiple layers:
+## What Codex stores (and what we clean)
 
 ```
 ~/.codex/
-├── sessions/          ← raw rollout JSONL files
-├── session_index.jsonl ← session metadata index
-├── history.jsonl      ← conversation history index
-├── state_5.sqlite     ← threads, messages, todos, env vars
-└── global_state.json  ← references to active sessions
+├── sessions/            ← raw rollout JSONL files        ✅ cleaned
+├── shell_snapshots/     ← shell snapshot scripts         ✅ cleaned
+├── session_index.jsonl  ← session metadata index         ✅ cleaned
+├── history.jsonl        ← conversation history index     ✅ cleaned
+├── state_5.sqlite       ← threads, messages, todos...    ✅ cleaned (7 tables)
+├── logs.sqlite          ← execution logs                 ✅ cleaned
+└── global_state.json    ← references to active sessions  ✅ cleaned
 ```
-
-Most tools only delete the SQLite row. This tool cleans **all layers** and verifies nothing is left behind.
 
 ## Documentation
 
 - [Safety guide](./docs/SAFETY.md) — read before delete/trash/restore/purge
 - [Changelog](./CHANGELOG.md) — release notes
-- [SKILL.md](./SKILL.md) — AI skill instructions
+- [SKILL.md](./SKILL.md) — AI skill instructions for Claude Code / Codex
 
 ## Development
 

@@ -1,131 +1,152 @@
-# codex-sessions
+# codex-sessions-manager
+
+[![npm](https://img.shields.io/npm/v/codex-sessions-manager)](https://www.npmjs.com/package/codex-sessions-manager)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 [English](./README.md)
 
-这是一个本地 Codex 会话管理工具集，主形态为：
+> Codex 没有删除会话的功能。归档 ≠ 删除。你的 `~/.codex` 只会越来越大。
 
-- Node / TypeScript CLI
-- 本地 stdio MCP server
-- 一套共享核心逻辑，用来扫描、项目分组、时间筛选、回收站、恢复、永久清除、验证和删除会话
+**codex-sessions-manager** 是目前最彻底的本地 Codex 会话清理工具。不只是删文件——四层存储全清、失败自动回滚、AI Agent 可直接调用。
 
-这个仓库已经不再继续发展浏览器 UI。当前主产品是 `CLI + MCP`。
-它不包含 UI、TUI、详情页、项目增量扫描，也不做过期自动清理。
+## 为什么选这个？
+
+其他工具删个 SQLite 行或者删几个文件就完事了。这个工具不一样：
+
+| | codex-sessions-manager | 其他工具 |
+|--|:---:|:---:|
+| 清理全部 4 层（文件 + JSONL + SQLite + 全局状态） | ✅ | ❌ 只清部分 |
+| 删除中途出错自动回滚 | ✅ | ❌ |
+| 可恢复的回收站 + 冲突检测 | ✅ | ❌ 或简单备份 |
+| 删完验证有没有残留 | ✅ | ❌ |
+| AI Agent 可直接调用（MCP） | ✅ | ❌ |
+| 处理 `/side` 和 `/fork` 子对话 | ✅ | ❌ |
+
+## 快速开始
+
+```bash
+# 全局安装
+npm install -g codex-sessions-manager
+
+# 列出最近的会话
+codex-sessions list --limit 10
+
+# 预览删除（安全，不做任何修改）
+codex-sessions delete <session-id>
+
+# 删除到回收站（推荐）
+codex-sessions delete <session-id> --trash --yes
+
+# 后悔了？恢复
+codex-sessions restore <session-id> --yes
+
+# 验证是否清理干净
+codex-sessions verify <session-id>
+```
+
+## 删除到底做了什么
+
+其他工具：删一个文件或一行数据库记录 → 完事 → 到处是孤儿文件。
+
+这个工具：
+
+```
+1. 快照所有文件（万一要回滚）
+2. 改写 session_index.jsonl（移除匹配行）
+3. 改写 history.jsonl（移除匹配行）
+4. 清理 global_state.json 引用
+5. 删除原始 session 文件
+6. 删除 shell snapshot 文件
+7. 删除 SQLite 记录（7 张表：threads, logs, spawn_edges, agent_jobs, dynamic_tools, stage1, thread_goals）
+
+如果任何一步失败 → 全部回滚到原始状态。
+```
+
+删完之后跑 `verify`，确认零残留。
+
+## 功能一览
+
+| 功能 | 说明 |
+|------|------|
+| **列出 & 筛选** | 按项目、状态、时间范围筛选；按项目分组 |
+| **导出** | 删之前先备份为 JSON |
+| **删除** | 永久删除或放入回收站，你选 |
+| **回收站 & 恢复** | 完整快照保存；恢复时检查 SQLite 主键冲突 |
+| **验证** | 报告是否还有残留文件、索引行、数据库记录 |
+| **清理索引** | 移除失效索引条目，不动原始数据 |
+| **健康检查** | `doctor` 命令做完整诊断 |
+| **MCP 服务** | AI Agent（Claude Code、Codex、Kiro）直接管理会话 |
+| **子对话感知** | 正确处理 `/fork` 和 `/side` 的父子关系 |
+
+## 给 AI Agent 用（MCP）
+
+加到你的 MCP 配置：
+
+```json
+{
+  "mcpServers": {
+    "codex-sessions": {
+      "command": "codex-sessions-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+暴露 13 个工具：`inspect_root`、`list_sessions`、`list_projects`、`get_session`、`export_session_backup`、`preview_delete_sessions`、`delete_sessions`、`list_trash`、`restore_sessions`、`purge_trash`、`cleanup_session_indexes`、`cleanup_stale_indexes`、`verify_sessions`。
+
+所有破坏性操作需要 `confirm: true`，否则只返回预览。
+
+## CLI 命令
+
+```bash
+codex-sessions list [--status active|archived] [--limit N] [--project TEXT]
+codex-sessions list --updated-after 2026-04-01 --updated-before 2026-04-30
+codex-sessions list --group-by project
+codex-sessions projects
+codex-sessions doctor [--json]
+codex-sessions show <session-id>
+codex-sessions export <session-id> [--output ./backup.json]
+codex-sessions delete <session-id...> [--trash] [--yes]
+codex-sessions trash-list
+codex-sessions restore <session-id> --yes
+codex-sessions purge <session-id> --yes
+codex-sessions cleanup-stale [--yes]
+codex-sessions cleanup-index <session-id...> [--yes]
+codex-sessions verify <session-id...> [--json]
+```
+
+**安全第一**：所有破坏性命令需要 `--yes` 才执行，不加只看预览。
+
+## Codex 存了什么（我们清理什么）
+
+```
+~/.codex/
+├── sessions/            ← 原始 rollout JSONL 文件       ✅ 清理
+├── shell_snapshots/     ← shell 快照脚本                ✅ 清理
+├── session_index.jsonl  ← 会话元数据索引                ✅ 清理
+├── history.jsonl        ← 对话历史索引                  ✅ 清理
+├── state_5.sqlite       ← 线程、消息、待办等            ✅ 清理（7 张表）
+├── logs.sqlite          ← 执行日志                      ✅ 清理
+└── global_state.json    ← 活跃会话引用                  ✅ 清理
+```
 
 ## 文档
 
-- [安全说明](./docs/SAFETY.md)：执行 delete、trash、restore、purge、cleanup 前建议先读。
-- [Skill 入口](./SKILL.md)：这个仓库公开使用的 Skill 说明。
-- [Skill 模板](./examples/codex-sessions-manager.SKILL.md)：给自定义本机路径使用的可复制模板。
-- [更新记录](./CHANGELOG.md)：公开版本变化说明。
-
-## 安装
-
-```bash
-npm install
-npm run build
-```
-
-## CLI 用法
-
-通过构建产物运行：
-
-```bash
-node dist/cli/index.js list
-node dist/cli/index.js projects
-node dist/cli/index.js doctor
-node dist/cli/index.js show <session-id>
-node dist/cli/index.js export <session-id>
-node dist/cli/index.js delete <session-id...>
-node dist/cli/index.js trash-list
-node dist/cli/index.js restore <trash-id-or-session-id>
-node dist/cli/index.js purge <trash-id-or-session-id>
-node dist/cli/index.js cleanup-index <session-id...>
-node dist/cli/index.js cleanup-index <session-id...> --yes
-node dist/cli/index.js cleanup-stale
-node dist/cli/index.js cleanup-stale --yes
-node dist/cli/index.js verify <session-id...>
-```
-
-默认 Codex 根目录是 `~/.codex`，可用 `--root /path/to/.codex` 覆盖。
-
-示例：
-
-```bash
-node dist/cli/index.js list --status active --limit 20
-node dist/cli/index.js list --project /path/or/name --group-by project
-node dist/cli/index.js list --updated-after 2026-04-03 --updated-before 2026-04-03
-node dist/cli/index.js projects
-node dist/cli/index.js doctor --root ~/.codex --json
-node dist/cli/index.js show 019d5240
-node dist/cli/index.js export 019d5240 --output ./backup.json
-node dist/cli/index.js delete 019d5240 --trash
-node dist/cli/index.js delete 019d5240 --trash --yes
-node dist/cli/index.js trash-list
-node dist/cli/index.js restore 019d5240 --yes
-node dist/cli/index.js purge 019d5240 --yes
-node dist/cli/index.js delete 019d5240 019d3de0 --yes
-node dist/cli/index.js cleanup-stale
-node dist/cli/index.js cleanup-stale --yes
-node dist/cli/index.js verify 019d5240 --json
-```
-
-说明：
-
-- `delete` 不带 `--yes` 时，只输出删除预览，不会执行。
-- 永久删除仍是默认行为，用来保持兼容。
-- `delete --trash` 不带 `--yes` 时，只预览移入回收站；`delete --trash --yes` 会先写可恢复回收站包，再清理 live session。
-- `restore` 和 `purge` 都需要 `--yes`。
-- `restore` 遇到同 session live surface 或 SQLite 主键冲突时会拒绝恢复，不会静默覆盖。当前没有 force 覆盖模式。
-- `purge` 只删除回收站记录，不会碰 live session。
-- `doctor` 是只读诊断，只报告结构和风险，不删除、不恢复、不永久清除，也不写入文件。
-- `cleanup-index` 和 `cleanup-stale` 会改写 `session_index.jsonl` 和 `history.jsonl`；不带 `--yes` 时只输出预览。
-- `cleanup-index --yes` 只移除所选 session 的 JSONL 痕迹，不删除正文文件或 SQLite rows。
-- `cleanup-stale --yes` 会移除那些正文文件和 SQLite 都不存在的失效索引。
-- `YYYY-MM-DD` 这种 date-only 筛选按本地日历整天解释，和 CLI 显示一致。ISO datetime 必须带明确时区，例如 `Z` 或 `+08:00`；不带时区的 datetime 会被拒绝。
-
-## MCP 用法
-
-启动本地 stdio MCP server：
-
-```bash
-node dist/mcp/server.js
-```
-
-暴露的工具包括：
-
-- `inspect_root`
-- `list_sessions`
-- `list_projects`
-- `get_session`
-- `export_session_backup`
-- `preview_delete_sessions`
-- `delete_sessions`
-- `list_trash`
-- `restore_sessions`
-- `purge_trash`
-- `cleanup_session_indexes`
-- `cleanup_stale_indexes`
-- `verify_sessions`
-
-CLI 和 MCP 共用同一套 Node 核心逻辑。
-
-`inspect_root` 是只读诊断工具，用来查看 root 结构、SQLite 表、回收站记录和 global state 警告；它不删除、不恢复、不永久清除，也不写入文件。
-
-会修改数据的 MCP 工具都需要显式确认：
-
-- `delete_sessions` 不带 `confirm=true` 不执行。
-- `delete_sessions` 支持 `trash=true`；但不带 `confirm=true` 时仍然只预览。
-- `restore_sessions` 和 `purge_trash` 不带 `confirm=true` 不执行。
-- `cleanup_session_indexes` 和 `cleanup_stale_indexes` 会改写 JSONL 索引，不带 `confirm=true` 不执行。
+- [安全指南](./docs/SAFETY.md) — 删除/回收站/恢复/清除前必读
+- [更新日志](./CHANGELOG.md) — 版本记录
+- [SKILL.md](./SKILL.md) — Claude Code / Codex 的 AI 技能说明
 
 ## 开发
 
 ```bash
+git clone https://github.com/1939869736luosi/codex-sessions-manager.git
+cd codex-sessions-manager
 npm install
 npm run build
 npm test
 ```
 
-## 开源协议
+## 许可证
 
-Apache License 2.0。参见 [LICENSE](./LICENSE)。
+Apache-2.0
