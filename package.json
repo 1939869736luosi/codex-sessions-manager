@@ -4,8 +4,8 @@
   "description": "Complete local Codex session management: list, filter, export, delete, trash, restore, verify, and cleanup — via CLI or MCP server.",
   "type": "module",
   "bin": {
-    "codex-sessions": "./dist/cli/index.js",
-    "codex-sessions-mcp": "./dist/mcp/server.js"
+    "codex-sessions": "dist/cli/index.js",
+    "codex-sessions-mcp": "dist/mcp/server.js"
   },
   "files": [
     "dist",
@@ -30,7 +30,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/1939869736luosi/codex-sessions-manager"
+    "url": "git+https://github.com/1939869736luosi/codex-sessions-manager.git"
   },
   "license": "Apache-2.0",
   "scripts": {
