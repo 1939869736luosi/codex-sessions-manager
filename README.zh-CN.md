@@ -7,7 +7,7 @@
 
 > Codex 没有删除会话的功能。归档 ≠ 删除。你的 `~/.codex` 只会越来越大。
 
-**codex-sessions-manager** 是目前最彻底的本地 Codex 会话清理工具。不只是删文件——四层存储全清、失败自动回滚、AI Agent 可直接调用。
+**codex-sessions-manager** 是目前最彻底的本地 Codex 会话清理工具。它同时是 **Skill**（Claude Code / Codex 可直接调用）、**CLI** 和 **MCP Server**——三种形态共享同一套核心逻辑。不只是删文件——四层存储全清、失败自动回滚、AI Agent 可直接调用。
 
 ## 为什么选这个？
 

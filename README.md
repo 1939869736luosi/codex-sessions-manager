@@ -7,7 +7,7 @@
 
 > Codex has no built-in way to delete sessions. Archive ≠ delete. Your `~/.codex` grows forever.
 
-**codex-sessions-manager** is the most thorough local Codex session cleanup tool available. It doesn't just delete files — it cleans all four storage layers, rolls back on failure, and lets AI agents manage sessions directly.
+**codex-sessions-manager** is the most thorough local Codex session cleanup tool available. It works as a **Skill** (Claude Code / Codex), a **CLI**, and an **MCP server** — all sharing the same core. It doesn't just delete files — it cleans all four storage layers, rolls back on failure, and lets AI agents manage sessions directly.
 
 ## Why this one?
 
