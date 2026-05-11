@@ -1,12 +1,32 @@
 {
-  "name": "codex-sessions",
+  "name": "codex-sessions-manager",
   "version": "0.3.1",
-  "private": true,
+  "description": "Complete local Codex session management: list, filter, export, delete, trash, restore, verify, and cleanup — via CLI or MCP server.",
   "type": "module",
   "bin": {
     "codex-sessions": "./dist/cli/index.js",
     "codex-sessions-mcp": "./dist/mcp/server.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "codex",
+    "openai",
+    "session",
+    "cli",
+    "mcp",
+    "cleanup",
+    "delete",
+    "management"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/1939869736luosi/codex-sessions-manager"
+  },
+  "license": "Apache-2.0",
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.json",
     "cli": "node dist/cli/index.js",

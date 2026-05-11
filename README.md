@@ -1,126 +1,114 @@
-# codex-sessions
+# codex-sessions-manager
 
 [简体中文](./README.zh-CN.md)
 
-Local Codex session management toolkit with:
+> Codex has no built-in way to delete sessions. Archive ≠ delete. Your `~/.codex` grows forever.
 
-- a Node/TypeScript CLI
-- a local stdio MCP server
-- shared core logic for scanning, project grouping, time filtering, trash, restore, purge, verifying, and deleting sessions
+**codex-sessions-manager** gives you full lifecycle control over local Codex sessions — list, filter, export, delete, trash, restore, verify, and cleanup — via CLI or MCP server.
 
-This project no longer ships a browser UI. The primary product is `CLI + MCP`.
-It does not include a UI, TUI, detail page, incremental project scanner, or automatic stale cleanup.
+## Why this exists
+
+- Codex only offers "archive", not delete ([openai/codex#8784](https://github.com/openai/codex/issues/8784))
+- Manually deleting files leaves orphaned JSONL index entries, SQLite rows, and global state references
+- This tool handles **all four storage layers** properly: raw files, JSONL indexes, SQLite records, and global state
+
+## Quick Start
+
+```bash
+# Install globally
+npm install -g codex-sessions-manager
+
+# List recent sessions
+codex-sessions list --limit 10
+
+# Preview what deletion would do (safe, no changes)
+codex-sessions delete <session-id>
+
+# Actually delete (with recoverable trash)
+codex-sessions delete <session-id> --trash --yes
+
+# Restore from trash if you change your mind
+codex-sessions restore <session-id> --yes
+```
+
+## Features
+
+| Feature | Description |
+|---------|-------------|
+| **List & filter** | By project, status, time range; group by project |
+| **Export** | Backup any session to JSON |
+| **Delete** | Permanent or recoverable trash — your choice |
+| **Restore** | Undo trash deletion with conflict detection |
+| **Verify** | Check if a session has orphaned files/indexes/DB rows |
+| **Cleanup** | Remove stale index entries without touching raw data |
+| **Health check** | `doctor` command for full diagnostics |
+| **MCP server** | AI agents (Claude Code, Codex, Kiro) can manage sessions directly |
+| **Side conversations** | Properly handles `/fork` and `/side` child threads |
+
+## Use with AI Agents (MCP)
+
+Add to your MCP config:
+
+```json
+{
+  "mcpServers": {
+    "codex-sessions": {
+      "command": "codex-sessions-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+Your AI agent gets 13 tools: `inspect_root`, `list_sessions`, `list_projects`, `get_session`, `export_session_backup`, `preview_delete_sessions`, `delete_sessions`, `list_trash`, `restore_sessions`, `purge_trash`, `cleanup_session_indexes`, `cleanup_stale_indexes`, `verify_sessions`.
+
+## CLI Reference
+
+```bash
+codex-sessions list [--status active|archived] [--limit N] [--project TEXT]
+codex-sessions list --updated-after 2026-04-01 --updated-before 2026-04-30
+codex-sessions list --group-by project
+codex-sessions projects
+codex-sessions doctor [--json]
+codex-sessions show <session-id>
+codex-sessions export <session-id> [--output ./backup.json]
+codex-sessions delete <session-id...> [--trash] [--yes]
+codex-sessions trash-list
+codex-sessions restore <session-id> --yes
+codex-sessions purge <session-id> --yes
+codex-sessions cleanup-stale [--yes]
+codex-sessions cleanup-index <session-id...> [--yes]
+codex-sessions verify <session-id...> [--json]
+```
+
+**Safety**: All destructive commands require `--yes` to execute. Without it, you get a preview only.
+
+## How it works
+
+Codex stores sessions across multiple layers:
+
+```
+~/.codex/
+├── sessions/          ← raw rollout JSONL files
+├── session_index.jsonl ← session metadata index
+├── history.jsonl      ← conversation history index
+├── state_5.sqlite     ← threads, messages, todos, env vars
+└── global_state.json  ← references to active sessions
+```
+
+Most tools only delete the SQLite row. This tool cleans **all layers** and verifies nothing is left behind.
 
 ## Documentation
 
-- [Safety guide](./docs/SAFETY.md): read this before delete, trash, restore, purge, or cleanup operations.
-- [Skill entrypoint](./SKILL.md): public Skill instructions for this repository.
-- [Skill template](./examples/codex-sessions-manager.SKILL.md): optional copy-and-edit template for custom local paths.
-- [Changelog](./CHANGELOG.md): public release notes.
-
-## Install
-
-```bash
-npm install
-npm run build
-```
-
-## CLI
-
-Run via the built output:
-
-```bash
-node dist/cli/index.js list
-node dist/cli/index.js projects
-node dist/cli/index.js doctor
-node dist/cli/index.js show <session-id>
-node dist/cli/index.js export <session-id>
-node dist/cli/index.js delete <session-id...>
-node dist/cli/index.js trash-list
-node dist/cli/index.js restore <trash-id-or-session-id>
-node dist/cli/index.js purge <trash-id-or-session-id>
-node dist/cli/index.js cleanup-index <session-id...>
-node dist/cli/index.js cleanup-index <session-id...> --yes
-node dist/cli/index.js cleanup-stale
-node dist/cli/index.js cleanup-stale --yes
-node dist/cli/index.js verify <session-id...>
-```
-
-The default Codex root is `~/.codex`. Override with `--root /path/to/.codex`.
-
-Examples:
-
-```bash
-node dist/cli/index.js list --status active --limit 20
-node dist/cli/index.js list --project /path/or/name --group-by project
-node dist/cli/index.js list --updated-after 2026-04-03 --updated-before 2026-04-03
-node dist/cli/index.js projects
-node dist/cli/index.js doctor --root ~/.codex --json
-node dist/cli/index.js show 019d5240
-node dist/cli/index.js export 019d5240 --output ./backup.json
-node dist/cli/index.js delete 019d5240 --trash
-node dist/cli/index.js delete 019d5240 --trash --yes
-node dist/cli/index.js trash-list
-node dist/cli/index.js restore 019d5240 --yes
-node dist/cli/index.js purge 019d5240 --yes
-node dist/cli/index.js delete 019d5240 019d3de0 --yes
-node dist/cli/index.js cleanup-stale
-node dist/cli/index.js cleanup-stale --yes
-node dist/cli/index.js verify 019d5240 --json
-```
-
-Notes:
-
-- `delete` without `--yes` only prints a preview.
-- Permanent delete remains the default for compatibility.
-- `delete --trash` without `--yes` only previews moving sessions to trash; `delete --trash --yes` writes a recoverable trash bundle before deleting live session surfaces.
-- `restore` and `purge` require `--yes`.
-- `restore` refuses to run when any live session surface already contains the same session id or a conflicting SQLite key. There is no force overwrite mode.
-- `purge` only removes the trash entry; it does not touch live sessions.
-- `doctor` is read-only diagnostics. It does not delete, restore, purge, or write any files.
-- `cleanup-index` and `cleanup-stale` rewrite `session_index.jsonl` and `history.jsonl`; without `--yes`, they only print a preview.
-- `cleanup-index --yes` removes JSONL traces for the selected sessions without deleting raw files or SQLite rows.
-- `cleanup-stale --yes` removes index rows for sessions that no longer exist in files or SQLite.
-- Date-only filters such as `2026-04-03` use the local calendar day, matching CLI display. ISO datetime filters must include an explicit timezone, such as `Z` or `+08:00`; timezone-less datetime strings are rejected.
-
-## MCP
-
-Start the local stdio MCP server:
-
-```bash
-node dist/mcp/server.js
-```
-
-Exposed tools:
-
-- `inspect_root`
-- `list_sessions`
-- `list_projects`
-- `get_session`
-- `export_session_backup`
-- `preview_delete_sessions`
-- `delete_sessions`
-- `list_trash`
-- `restore_sessions`
-- `purge_trash`
-- `cleanup_session_indexes`
-- `cleanup_stale_indexes`
-- `verify_sessions`
-
-All MCP tools use the same Node core as the CLI.
-
-`inspect_root` is read-only diagnostics. It reports root structure, SQLite table availability, trash entries, and global-state warnings without deleting, restoring, purging, or writing anything.
-
-Destructive MCP tools require explicit confirmation:
-
-- `delete_sessions` does nothing unless `confirm=true`.
-- `delete_sessions` supports `trash=true`; without `confirm=true`, this is still preview-only.
-- `restore_sessions` and `purge_trash` do nothing unless `confirm=true`.
-- `cleanup_session_indexes` and `cleanup_stale_indexes` rewrite JSONL indexes and do nothing unless `confirm=true`.
+- [Safety guide](./docs/SAFETY.md) — read before delete/trash/restore/purge
+- [Changelog](./CHANGELOG.md) — release notes
+- [SKILL.md](./SKILL.md) — AI skill instructions
 
 ## Development
 
 ```bash
+git clone https://github.com/1939869736luosi/codex-sessions-manager.git
+cd codex-sessions-manager
 npm install
 npm run build
 npm test
@@ -128,4 +116,4 @@ npm test
 
 ## License
 
-Apache License 2.0. See [LICENSE](./LICENSE).
+Apache-2.0
