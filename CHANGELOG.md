@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.2
+
+### Fixed
+
+- Corrected README wording for `/side` and `/fork`: the tool detects child relationships and can operate on explicit session IDs, but it does not recursively delete child threads automatically.
+- Corrected storage names in README from `logs.sqlite` and `global_state.json` to `logs_N.sqlite` and `.codex-global-state.json`.
+- Updated npm package contents so linked public docs, Skill entrypoint, and Skill template are included in package builds.
+- Synchronized `package-lock.json` with the published package name.
+- Updated public Skill instructions to prefer the installed `codex-sessions` CLI, with repository commands kept as the development path.
+- Removed stale ClawHub package contents from the clean Skill publish surface.
+
+### Notes
+
+- This version is a post-release cleanup for the npm, GitHub, and ClawHub publish surfaces.
+- Memory-related cleanup remains intentionally unchanged.
+
 ## 0.3.1
 
 ### Added

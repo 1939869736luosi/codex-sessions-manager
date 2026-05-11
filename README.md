@@ -20,7 +20,7 @@ Other tools delete a SQLite row or remove some files and call it done. This tool
 | Recoverable trash with conflict-safe restore | ✅ | ❌ or basic backup |
 | Post-delete verification (checks for orphans) | ✅ | ❌ |
 | AI agents can call it (MCP server) | ✅ | ❌ |
-| Handles `/side` and `/fork` child threads | ✅ | ❌ |
+| Detects `/side` and `/fork` child relationships | ✅ | ❌ |
 
 ## Quick Start
 
@@ -54,10 +54,10 @@ This tool:
 1. Snapshot all files (in case we need to roll back)
 2. Rewrite session_index.jsonl (remove matching rows)
 3. Rewrite history.jsonl (remove matching rows)
-4. Clean global_state.json references
+4. Clean `.codex-global-state.json` references
 5. Delete raw session files
 6. Delete shell snapshot files
-7. Delete SQLite rows (7 tables: threads, logs, spawn_edges, agent_jobs, dynamic_tools, stage1, thread_goals)
+7. Delete SQLite rows (threads, logs, spawn_edges, agent jobs, dynamic tools, stage1, thread goals)
 
 If ANY step fails → everything rolls back to the original state.
 ```
@@ -76,7 +76,7 @@ After deletion, run `verify` to confirm zero orphans remain.
 | **Cleanup** | Remove stale index entries without touching raw data |
 | **Health check** | `doctor` command for full root diagnostics |
 | **MCP server** | AI agents (Claude Code, Codex, Kiro) manage sessions directly |
-| **Side conversations** | Properly handles `/fork` and `/side` child threads |
+| **Side conversations** | Detects `/fork` and `/side` relationships; it does not recursively delete child threads automatically |
 
 ## Use with AI Agents (MCP)
 
@@ -126,9 +126,9 @@ codex-sessions verify <session-id...> [--json]
 ├── shell_snapshots/     ← shell snapshot scripts         ✅ cleaned
 ├── session_index.jsonl  ← session metadata index         ✅ cleaned
 ├── history.jsonl        ← conversation history index     ✅ cleaned
-├── state_5.sqlite       ← threads, messages, todos...    ✅ cleaned (7 tables)
-├── logs.sqlite          ← execution logs                 ✅ cleaned
-└── global_state.json    ← references to active sessions  ✅ cleaned
+├── state_N.sqlite       ← threads and related records     ✅ cleaned
+├── logs_N.sqlite        ← execution logs                 ✅ cleaned
+└── .codex-global-state.json ← known active-session refs   ✅ cleaned
 ```
 
 ## Documentation

@@ -1,6 +1,6 @@
 {
   "name": "codex-sessions-manager",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Complete local Codex session management: list, filter, export, delete, trash, restore, verify, and cleanup — via CLI or MCP server.",
   "type": "module",
   "bin": {
@@ -10,6 +10,12 @@
   "files": [
     "dist",
     "README.md",
+    "README.zh-CN.md",
+    "CHANGELOG.md",
+    "docs/SAFETY.md",
+    "SKILL.md",
+    "agents/openai.yaml",
+    "examples/codex-sessions-manager.SKILL.md",
     "LICENSE"
   ],
   "keywords": [

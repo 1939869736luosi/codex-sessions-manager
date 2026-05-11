@@ -20,7 +20,7 @@
 | 可恢复的回收站 + 冲突检测 | ✅ | ❌ 或简单备份 |
 | 删完验证有没有残留 | ✅ | ❌ |
 | AI Agent 可直接调用（MCP） | ✅ | ❌ |
-| 处理 `/side` 和 `/fork` 子对话 | ✅ | ❌ |
+| 识别 `/side` 和 `/fork` 父子关系 | ✅ | ❌ |
 
 ## 快速开始
 
@@ -54,10 +54,10 @@ codex-sessions verify <session-id>
 1. 快照所有文件（万一要回滚）
 2. 改写 session_index.jsonl（移除匹配行）
 3. 改写 history.jsonl（移除匹配行）
-4. 清理 global_state.json 引用
+4. 清理 `.codex-global-state.json` 引用
 5. 删除原始 session 文件
 6. 删除 shell snapshot 文件
-7. 删除 SQLite 记录（7 张表：threads, logs, spawn_edges, agent_jobs, dynamic_tools, stage1, thread_goals）
+7. 删除 SQLite 记录（threads、logs、spawn edges、agent jobs、dynamic tools、stage1、thread goals）
 
 如果任何一步失败 → 全部回滚到原始状态。
 ```
@@ -76,7 +76,7 @@ codex-sessions verify <session-id>
 | **清理索引** | 移除失效索引条目，不动原始数据 |
 | **健康检查** | `doctor` 命令做完整诊断 |
 | **MCP 服务** | AI Agent（Claude Code、Codex、Kiro）直接管理会话 |
-| **子对话感知** | 正确处理 `/fork` 和 `/side` 的父子关系 |
+| **子对话感知** | 识别 `/fork` 和 `/side` 的父子关系；不会自动递归删除子对话 |
 
 ## 给 AI Agent 用（MCP）
 
@@ -126,9 +126,9 @@ codex-sessions verify <session-id...> [--json]
 ├── shell_snapshots/     ← shell 快照脚本                ✅ 清理
 ├── session_index.jsonl  ← 会话元数据索引                ✅ 清理
 ├── history.jsonl        ← 对话历史索引                  ✅ 清理
-├── state_5.sqlite       ← 线程、消息、待办等            ✅ 清理（7 张表）
-├── logs.sqlite          ← 执行日志                      ✅ 清理
-└── global_state.json    ← 活跃会话引用                  ✅ 清理
+├── state_N.sqlite       ← threads 和相关记录            ✅ 清理
+├── logs_N.sqlite        ← 执行日志                      ✅ 清理
+└── .codex-global-state.json ← 已知活跃会话引用          ✅ 清理
 ```
 
 ## 文档

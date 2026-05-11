@@ -23,7 +23,20 @@ The project is not a UI product, TUI, detail page, incremental scanner, or autom
 
 ## Setup
 
-Build the CLI before using the fallback commands:
+Install the CLI before using fallback commands:
+
+```bash
+npm install -g codex-sessions-manager
+```
+
+This provides:
+
+```text
+codex-sessions
+codex-sessions-mcp
+```
+
+For local development, build the repository first:
 
 ```bash
 cd <path-to-codex-sessions-repo>
@@ -99,7 +112,35 @@ For time filters, pass `updatedAfter`, `updatedBefore`, `createdAfter`, or `crea
 
 ### 2. Fall back to CLI
 
-Run CLI commands from the built repository:
+Prefer the installed CLI:
+
+```bash
+codex-sessions doctor --root <path-to-codex-root>
+codex-sessions doctor --root <path-to-codex-root> --json
+codex-sessions list --root <path-to-codex-root> --limit 20
+codex-sessions list --root <path-to-codex-root> --project TEXT
+codex-sessions list --root <path-to-codex-root> --group-by project
+codex-sessions list --root <path-to-codex-root> --updated-after 2026-04-01 --updated-before 2026-04-30
+codex-sessions projects --root <path-to-codex-root>
+codex-sessions show <session-id> --root <path-to-codex-root>
+codex-sessions export <session-id> --root <path-to-codex-root> --output ./backup.json
+codex-sessions delete <session-id...> --root <path-to-codex-root>
+codex-sessions delete <session-id...> --root <path-to-codex-root> --yes
+codex-sessions delete <session-id...> --root <path-to-codex-root> --trash
+codex-sessions delete <session-id...> --root <path-to-codex-root> --trash --yes
+codex-sessions trash-list --root <path-to-codex-root>
+codex-sessions restore <trash-id-or-session-id> --root <path-to-codex-root>
+codex-sessions restore <trash-id-or-session-id> --root <path-to-codex-root> --yes
+codex-sessions purge <trash-id-or-session-id> --root <path-to-codex-root>
+codex-sessions purge <trash-id-or-session-id> --root <path-to-codex-root> --yes
+codex-sessions cleanup-index <session-id...> --root <path-to-codex-root>
+codex-sessions cleanup-index <session-id...> --root <path-to-codex-root> --yes
+codex-sessions cleanup-stale --root <path-to-codex-root>
+codex-sessions cleanup-stale --root <path-to-codex-root> --yes
+codex-sessions verify <session-id...> --root <path-to-codex-root>
+```
+
+When working from a cloned repository instead, run commands from the built repository:
 
 ```bash
 cd <path-to-codex-sessions-repo>

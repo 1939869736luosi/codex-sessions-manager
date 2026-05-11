@@ -15,7 +15,20 @@ Use this Skill for local Codex session history stored under a Codex root such as
 <path-to-codex-root>
 ```
 
-Use the CLI from:
+Use the installed CLI:
+
+```bash
+npm install -g codex-sessions-manager
+```
+
+This provides:
+
+```text
+codex-sessions
+codex-sessions-mcp
+```
+
+For local development, use the repository from:
 
 ```text
 <path-to-codex-sessions-repo>
@@ -47,7 +60,28 @@ For Codex `/side` conversations, treat the parent thread and side child thread a
 
 ## CLI Fallback
 
-Run commands from:
+Prefer the installed CLI:
+
+```bash
+codex-sessions doctor --root <path-to-codex-root>
+codex-sessions list --root <path-to-codex-root> --limit 20
+codex-sessions projects --root <path-to-codex-root>
+codex-sessions show <session-id> --root <path-to-codex-root>
+codex-sessions export <session-id> --root <path-to-codex-root> --output ./backup.json
+codex-sessions delete <session-id> --root <path-to-codex-root>
+codex-sessions delete <session-id> --root <path-to-codex-root> --trash
+codex-sessions delete <session-id> --root <path-to-codex-root> --trash --yes
+codex-sessions trash-list --root <path-to-codex-root>
+codex-sessions restore <trash-id-or-session-id> --root <path-to-codex-root> --yes
+codex-sessions purge <trash-id-or-session-id> --root <path-to-codex-root> --yes
+codex-sessions cleanup-index <session-id> --root <path-to-codex-root>
+codex-sessions cleanup-index <session-id> --root <path-to-codex-root> --yes
+codex-sessions cleanup-stale --root <path-to-codex-root>
+codex-sessions cleanup-stale --root <path-to-codex-root> --yes
+codex-sessions verify <session-id> --root <path-to-codex-root>
+```
+
+When working from a cloned repository instead, run commands from:
 
 ```bash
 cd <path-to-codex-sessions-repo>
