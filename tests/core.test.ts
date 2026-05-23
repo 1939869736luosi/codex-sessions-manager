@@ -167,6 +167,7 @@ describe("core integration", () => {
       archived: true,
       fileExists: true,
       source: "side",
+      sourceLabel: "subagent",
       threadSource: "side",
       agentRole: "subagent",
       agentNickname: "helper",
@@ -214,6 +215,7 @@ describe("core integration", () => {
       kind: "db-only",
       fileExists: false,
       source: "fork",
+      sourceLabel: "side-thread",
       threadSource: "fork",
     });
     expect(family.familyMembers.map((node) => node.sessionId).sort()).toEqual(
@@ -242,24 +244,78 @@ describe("core integration", () => {
     const combinedPreview = buildDeletePreview(scan, [active, archived]);
 
     expect(parentPreview.familyWarnings).toEqual([
-      {
+      expect.objectContaining({
         sessionId: FIXTURE_IDS.ACTIVE_ID,
         unselectedParentIds: [],
         unselectedChildIds: [FIXTURE_IDS.ARCHIVED_ID],
-        unselectedFamilyMemberIds: [FIXTURE_IDS.ARCHIVED_ID],
+        unselectedFamilyMemberIds: [],
         unselectedRelatedSessionIds: [FIXTURE_IDS.ARCHIVED_ID],
-      },
+        missingParentIds: [],
+        missingChildIds: [],
+        warnings: [],
+      }),
     ]);
     expect(childPreview.familyWarnings).toEqual([
-      {
+      expect.objectContaining({
         sessionId: FIXTURE_IDS.ARCHIVED_ID,
         unselectedParentIds: [FIXTURE_IDS.ACTIVE_ID],
         unselectedChildIds: [],
-        unselectedFamilyMemberIds: [FIXTURE_IDS.ACTIVE_ID],
+        unselectedFamilyMemberIds: [],
         unselectedRelatedSessionIds: [FIXTURE_IDS.ACTIVE_ID],
-      },
+        missingParentIds: [],
+        missingChildIds: [],
+        warnings: [],
+      }),
     ]);
     expect(combinedPreview.familyWarnings).toEqual([]);
+  });
+
+  it("reports broken family edges when parent or child sessions are missing", async () => {
+    const missingParentId = "019d6666-7777-7888-8999-ffffffffffff";
+    const missingChildId = "019d7777-8888-7999-8aaa-111111111111";
+    const db = new Database(fixture.paths.sqlite);
+    db.prepare(
+      "insert into thread_spawn_edges (parent_thread_id, child_thread_id, status) values (?, ?, 'missing-parent')",
+    ).run(missingParentId, FIXTURE_IDS.ACTIVE_ID);
+    db.prepare(
+      "insert into thread_spawn_edges (parent_thread_id, child_thread_id, status) values (?, ?, 'missing-child')",
+    ).run(FIXTURE_IDS.ACTIVE_ID, missingChildId);
+    db.close();
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const active = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID])[0];
+    const family = buildSessionFamily(scan, active);
+    const preview = buildDeletePreview(scan, [active]);
+
+    expect(family.warnings).toContain(`missing parent session: ${missingParentId}`);
+    expect(family.warnings).toContain(`missing child session: ${missingChildId}`);
+    expect(family.brokenRelations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          parentThreadId: missingParentId,
+          childThreadId: FIXTURE_IDS.ACTIVE_ID,
+          missingParentSession: true,
+          parentMissingSurfaces: ["session"],
+        }),
+        expect.objectContaining({
+          parentThreadId: FIXTURE_IDS.ACTIVE_ID,
+          childThreadId: missingChildId,
+          missingChildSession: true,
+          childMissingSurfaces: ["session"],
+        }),
+      ]),
+    );
+    expect(preview.familyWarnings[0]).toMatchObject({
+      sessionId: FIXTURE_IDS.ACTIVE_ID,
+      missingParentIds: [missingParentId],
+      missingChildIds: [missingChildId],
+    });
+    expect(preview.familyWarnings[0].warnings).toEqual(
+      expect.arrayContaining([
+        `missing parent session: ${missingParentId}`,
+        `missing child session: ${missingChildId}`,
+      ]),
+    );
   });
 
   it("deletes an active session and validates all cleanup surfaces", async () => {

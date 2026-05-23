@@ -55,6 +55,25 @@ describe("cli", () => {
   });
 
   it("shows session family relationships in human-readable mode", async () => {
+    const db = new Database(fixture.paths.sqlite);
+    db.prepare("update threads set source = ?, thread_source = ?, agent_role = ?, agent_nickname = ? where id = ?").run(
+      JSON.stringify({
+        subagent: {
+          thread_spawn: {
+            parent_thread_id: FIXTURE_IDS.ACTIVE_ID,
+            depth: 1,
+            agent_nickname: "helper",
+            agent_role: "explorer",
+          },
+        },
+      }),
+      "subagent",
+      "explorer",
+      "helper",
+      FIXTURE_IDS.ARCHIVED_ID,
+    );
+    db.close();
+
     const capture = createIo();
     const exitCode = await runCli(["family", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir], capture.io);
     const output = capture.stdout.join("\n");
@@ -66,6 +85,8 @@ describe("cli", () => {
     expect(output).toContain("thread_source");
     expect(output).toContain("subagent");
     expect(output).toContain("helper");
+    expect(output).not.toContain("thread_spawn");
+    expect(output).not.toContain("parent_thread_id");
   });
 
   it("shows an unrelated session family normally", async () => {
@@ -81,12 +102,31 @@ describe("cli", () => {
     expect(output).toContain("family members: 1");
   });
 
+  it("shows broken family edge warnings in family and delete preview output", async () => {
+    const missingChildId = "019d7777-8888-7999-8aaa-111111111111";
+    const db = new Database(fixture.paths.sqlite);
+    db.prepare(
+      "insert into thread_spawn_edges (parent_thread_id, child_thread_id, status) values (?, ?, 'missing-child')",
+    ).run(FIXTURE_IDS.ACTIVE_ID, missingChildId);
+    db.close();
+
+    const family = createIo();
+    const familyExitCode = await runCli(["family", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir], family.io);
+    const preview = createIo();
+    const previewExitCode = await runCli(["delete", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir], preview.io);
+
+    expect(familyExitCode).toBe(0);
+    expect(family.stdout.join("\n")).toContain(`missing child session: ${missingChildId}`);
+    expect(previewExitCode).toBe(0);
+    expect(preview.stdout.join("\n")).toContain(`missing child session: ${missingChildId}`);
+  });
+
   it("returns session family as json", async () => {
     const capture = createIo();
     const exitCode = await runCli(["family", FIXTURE_IDS.ARCHIVED_ID, "--root", fixture.rootDir, "--json"], capture.io);
     const result = JSON.parse(capture.stdout.join("\n")) as {
       family: {
-        current: { sessionId: string; parentIds: string[]; source: string; threadSource: string };
+        current: { sessionId: string; parentIds: string[]; source: string; sourceLabel: string; threadSource: string };
         root: { sessionId: string };
         parents: Array<{ sessionId: string }>;
         directChildren: Array<{ sessionId: string }>;
@@ -97,6 +137,7 @@ describe("cli", () => {
     expect(result.family.current.sessionId).toBe(FIXTURE_IDS.ARCHIVED_ID);
     expect(result.family.current.parentIds).toEqual([FIXTURE_IDS.ACTIVE_ID]);
     expect(result.family.current.source).toBe("side");
+    expect(result.family.current.sourceLabel).toBe("subagent");
     expect(result.family.current.threadSource).toBe("side");
     expect(result.family.root.sessionId).toBe(FIXTURE_IDS.ACTIVE_ID);
     expect(result.family.parents.map((node) => node.sessionId)).toEqual([FIXTURE_IDS.ACTIVE_ID]);

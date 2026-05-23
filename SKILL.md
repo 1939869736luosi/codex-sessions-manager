@@ -191,7 +191,7 @@ node dist/cli/index.js verify <session-id...> --root <path-to-codex-root>
 - Treat delete, restore, purge, and cleanup as dangerous write paths.
 - Always preview before destructive actions unless the user has already clearly confirmed execution.
 - `get_session_family` and CLI `family` are read-only. They do not delete, export, restore, or select related sessions automatically.
-- Delete previews warn when selected sessions have unselected parent, child, or family sessions.
+- Delete previews warn when selected sessions have unselected parent, child, or family sessions, and when relationship edges point at missing sessions or missing file/index surfaces.
 - CLI `delete` without `--yes` is preview-only.
 - MCP `delete_sessions` without `confirm=true` is preview-only.
 - Permanent delete remains available for compatibility.
@@ -216,6 +216,7 @@ When a user asks about side conversations:
 
 - Treat the parent thread and side child thread as separate sessions with separate transcripts.
 - Use `get_session_family` or CLI `family` first to identify parent, child, `/side`, and `/fork` relationships.
+- If family output reports broken relationship warnings, tell the user the relationship record exists but the related session may be missing files, index rows, or full session records.
 - Search, show, export, delete, trash, restore, or verify the child thread by its own session ID.
 - Do not assume deleting, exporting, or summarizing a parent thread also handles its side child threads.
 - If the user wants a parent thread and its side conversations handled together, identify the child thread IDs first, preview all selected IDs together, and only then run any confirmed write operation.
@@ -227,7 +228,7 @@ When a user asks about side conversations:
 - For project requests: show project name/path, session count, status counts, latest updated time, and total size.
 - For show requests: summarize the session and include key metadata. Include `displayTitle`, `indexTitle`, `sqliteTitle`, `firstUserMessage`, `titleSource`, `titleMismatch`, and `titleCandidates` when available. Human-readable CLI output may shorten long title fields and timeline previews; use JSON/MCP output for full values.
 - Treat `displayTitle` as the default user-facing title. It prefers `session_index.jsonl.thread_name`, which is usually the title searchable in Codex UI. Do not present `sqliteTitle` as the only title when sources disagree.
-- For family requests: distinguish current session, root, parent IDs, child IDs, relationship status, archived state, file existence, and source metadata. Say clearly that the action covers only explicitly selected session IDs.
+- For family requests: distinguish current session, root, parent IDs, child IDs, relationship status, archived state, file existence, short `source` label, and source metadata. Human CLI output shows compact `source` labels; JSON/MCP output keeps the full raw `source` field. Report broken relationship warnings clearly. Say clearly that the action covers only explicitly selected session IDs.
 - For side-conversation requests: distinguish parent thread ID and child thread ID, and say whether the requested action covers one or both.
 - For delete requests: explain whether this is preview-only, permanent delete, or recoverable trash delete.
 - For trash requests: distinguish moved to trash, restored, and purged.

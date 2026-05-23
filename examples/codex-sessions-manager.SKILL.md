@@ -57,9 +57,9 @@ Prefer MCP tools when the `codex-sessions` MCP server is available:
 
 Use CLI only when MCP is unavailable or blocked.
 
-For Codex `/side` conversations, treat the parent thread and side child thread as separate sessions. Do not assume parent operations include side child transcripts. If the user wants both handled, identify the child session IDs first and include them in the preview or confirmed operation.
+For Codex `/side` conversations, treat the parent thread and side child thread as separate sessions. Do not assume parent operations include side child transcripts. If the user wants both handled, identify the child session IDs first and include them in the preview or confirmed operation. If family output reports a broken relationship warning, tell the user the relationship record exists but the related session may be missing files, index rows, or full session records.
 
-Use `get_session_family` first when the request mentions parent, child, `/side`, or `/fork` relationships. It is read-only and does not select related sessions for write operations.
+Use `get_session_family` first when the request mentions parent, child, `/side`, or `/fork` relationships. It is read-only and does not select related sessions for write operations. Human CLI output uses short `source` labels; use JSON/MCP output when the full raw `source` field is needed.
 
 For session titles, treat `displayTitle` as the default user-facing title. It prefers `session_index.jsonl.thread_name`, which is usually closest to Codex UI search. When showing one session in detail, include `indexTitle`, `sqliteTitle`, `firstUserMessage`, `titleSource`, `titleMismatch`, and `titleCandidates` if the tool returns them. Human-readable CLI output may shorten long title fields and timeline previews; use JSON/MCP output for full values.
 
@@ -121,7 +121,7 @@ node dist/cli/index.js verify <session-id> --root <path-to-codex-root>
 
 - Run `inspect_root` or CLI `doctor` before delete, restore, purge, or cleanup when Codex storage may have changed.
 - `get_session_family` and CLI `family` are read-only. They do not delete, export, restore, or select related sessions automatically.
-- Delete previews warn when selected sessions have unselected parent, child, or family sessions.
+- Delete previews warn when selected sessions have unselected parent, child, or family sessions, and when relationship edges point at missing sessions or missing file/index surfaces.
 - `delete` without `--yes` is preview-only.
 - Permanent delete remains available, but prefer recoverable deletion with `--trash --yes`.
 - MCP `delete_sessions` requires `confirm=true` to execute. Use `trash=true` for recoverable deletion.

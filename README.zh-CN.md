@@ -81,7 +81,7 @@ codex-sessions verify <session-id>
 | **清理索引** | 移除失效索引条目，不动原始数据 |
 | **健康检查** | `doctor` 命令做完整诊断 |
 | **MCP 服务** | AI Agent（Claude Code、Codex、Kiro）直接管理会话 |
-| **会话家族** | 只读查看 parent、child、`/fork`、`/side` 关系 |
+| **会话家族** | 只读查看 parent、child、`/fork`、`/side` 关系；人类输出使用短 `source` 标签 |
 | **子对话感知** | 父会话和子会话仍是独立 session；删除、导出、验证都不会自动递归 |
 
 ## 给 AI Agent 用（MCP）
@@ -125,7 +125,9 @@ codex-sessions verify <session-id...> [--json]
 
 **安全第一**：所有破坏性命令需要 `--yes` 才执行，不加只看预览。
 
-删除 parent 或 child 前先看 `family`。parent 和 child 是不同 session，各自有自己的 ID。删除 parent 不等于删除 child，删除 child 也不等于删除 parent。删除预览会提示尚未选中的 parent、child 或 family 相关 session。要一起处理多个相关 session，需要把每个 session ID 明确放进预览或删除命令。
+删除 parent 或 child 前先看 `family`。parent 和 child 是不同 session，各自有自己的 ID。删除 parent 不等于删除 child，删除 child 也不等于删除 parent。删除预览会提示尚未选中的 parent、child 或 family 相关 session；如果关系记录指向缺失 session，或相关 session 缺文件/索引，也会显示 warning。要一起处理多个相关 session，需要把每个 session ID 明确放进预览或删除命令。
+
+人类可读的 `family` 输出会用短 `source` 标签保持表格清楚，例如 `subagent`、`mcp`、`exec`、`side-thread`、`unknown`。需要完整原始 `source` 字段时，用 `family --json` 或 MCP `get_session_family`。
 
 ## 标题怎么看
 

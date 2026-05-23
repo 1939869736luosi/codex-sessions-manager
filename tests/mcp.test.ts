@@ -116,6 +116,7 @@ describe("mcp server", () => {
           relationship: string;
           relationshipStatus: string;
           source: string;
+          sourceLabel: string;
           threadSource: string;
           agentRole: string;
           agentNickname: string;
@@ -134,6 +135,7 @@ describe("mcp server", () => {
         relationship: "child",
         relationshipStatus: "running",
         source: "side",
+        sourceLabel: "subagent",
         threadSource: "side",
         agentRole: "subagent",
         agentNickname: "helper",

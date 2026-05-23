@@ -273,7 +273,7 @@ function formatFamilyNodes(nodes: SessionFamilyNode[]): string {
       node.archived ? "yes" : "no",
       formatDate(node.updatedAt),
       node.fileExists ? `yes(${node.fileCount})` : "no",
-      trimDetailText(node.source),
+      node.sourceLabel,
       trimDetailText(node.threadSource),
       trimDetailText(node.agentRole),
       trimDetailText(node.agentNickname),
@@ -316,16 +316,31 @@ function formatFamilyWarnings(warnings: DeletePreview["familyWarnings"]): string
     return [];
   }
 
+  const printedWarnings = new Set<string>();
+
   return [
     "",
     "关系提醒:",
-    ...warnings.map((warning) => {
+    ...warnings.flatMap((warning) => {
       const parts = [
         warning.unselectedParentIds.length ? `parent=${warning.unselectedParentIds.join(", ")}` : null,
         warning.unselectedChildIds.length ? `children=${warning.unselectedChildIds.join(", ")}` : null,
         warning.unselectedFamilyMemberIds.length ? `family=${warning.unselectedFamilyMemberIds.join(", ")}` : null,
       ].filter((part): part is string => Boolean(part));
-      return `- ${warning.sessionId}: 还有未选中的相关会话 (${parts.join("; ")})。工具不会自动递归处理这些会话。`;
+      const lines = parts.length > 0
+        ? [`- ${warning.sessionId}: 还有未选中的相关会话 (${parts.join("; ")})。工具不会自动递归处理这些会话。`]
+        : [`- ${warning.sessionId}: 关系数据存在异常。工具不会自动递归处理这些会话。`];
+
+      return [
+        ...lines,
+        ...warning.warnings.flatMap((message) => {
+          if (printedWarnings.has(message)) {
+            return [];
+          }
+          printedWarnings.add(message);
+          return [`  warning: ${message}`];
+        }),
+      ];
     }),
   ];
 }

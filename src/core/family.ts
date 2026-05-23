@@ -4,6 +4,7 @@ import type {
   ScanResult,
   SessionEntry,
   SessionFamily,
+  SessionFamilyBrokenRelation,
   SessionFamilyNode,
   SessionFamilyRelationship,
   ThreadSpawnEdgeRow,
@@ -21,6 +22,10 @@ function sortByUpdatedAtThenId(left: SessionEntry, right: SessionEntry): number 
 }
 
 function uniqueSortedIds(values: Iterable<string>): string[] {
+  return [...new Set(values)].sort();
+}
+
+function uniqueSortedMessages(values: Iterable<string>): string[] {
   return [...new Set(values)].sort();
 }
 
@@ -150,6 +155,69 @@ function inferRelationship(
   return "related";
 }
 
+function compactText(value: string): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > 32 ? `${normalized.slice(0, 29)}...` : normalized;
+}
+
+function parseJsonObject(value: string | null): Record<string, unknown> | null {
+  if (!value?.trim()) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+function inferSourceLabel(session: SessionEntry): string {
+  const rawSource = session.source?.trim() ?? "";
+  const rawThreadSource = session.threadSource?.trim() ?? "";
+  const sourceObject = parseJsonObject(rawSource);
+  const sourceKeys = sourceObject ? Object.keys(sourceObject).join(" ") : "";
+  const haystack = [
+    rawSource,
+    rawThreadSource,
+    sourceKeys,
+    session.agentRole ?? "",
+    session.agentNickname ?? "",
+    session.agentPath ?? "",
+  ].join(" ").toLowerCase();
+
+  if (haystack.includes("subagent") || Boolean(session.agentRole || session.agentNickname || session.agentPath)) {
+    return "subagent";
+  }
+
+  if (haystack.includes("side") || haystack.includes("fork")) {
+    return "side-thread";
+  }
+
+  if (haystack.includes("mcp")) {
+    return "mcp";
+  }
+
+  if (haystack.includes("exec")) {
+    return "exec";
+  }
+
+  if (rawThreadSource) {
+    return compactText(rawThreadSource);
+  }
+
+  if (sourceObject) {
+    return "json";
+  }
+
+  if (rawSource) {
+    return compactText(rawSource);
+  }
+
+  return "unknown";
+}
+
 function findRelationshipEdge(
   sessionId: string,
   targetId: string,
@@ -187,6 +255,7 @@ function createNode(
     fileExists: session.fileTargets.length > 0,
     fileCount: session.fileTargets.length,
     source: session.source,
+    sourceLabel: inferSourceLabel(session),
     threadSource: session.threadSource,
     agentRole: session.agentRole,
     agentNickname: session.agentNickname,
@@ -194,6 +263,66 @@ function createNode(
     parentIds: uniqueSortedIds((parentEdgesByChild.get(session.id) ?? []).map((item) => item.parentThreadId)),
     childIds: uniqueSortedIds((childEdgesByParent.get(session.id) ?? []).map((item) => item.childThreadId)),
     edge,
+  };
+}
+
+function hasKnownSessionSurface(session: SessionEntry | undefined): boolean {
+  if (!session) {
+    return false;
+  }
+
+  return session.fileTargets.length > 0 || session.hasSessionIndex || session.hasHistory || session.hasThread;
+}
+
+function missingSurfaces(session: SessionEntry | undefined): string[] {
+  if (!session || !hasKnownSessionSurface(session)) {
+    return ["session"];
+  }
+
+  const missing: string[] = [];
+  if (session.fileTargets.length === 0) {
+    missing.push("file");
+  }
+  if (!session.hasSessionIndex) {
+    missing.push("session_index");
+  }
+  return missing;
+}
+
+function buildBrokenRelation(
+  edge: ThreadSpawnEdgeRow,
+  sessionById: Map<string, SessionEntry>,
+): SessionFamilyBrokenRelation | null {
+  const parent = sessionById.get(edge.parentThreadId);
+  const child = sessionById.get(edge.childThreadId);
+  const missingParentSession = !hasKnownSessionSurface(parent);
+  const missingChildSession = !hasKnownSessionSurface(child);
+  const parentMissingSurfaces = missingSurfaces(parent);
+  const childMissingSurfaces = missingSurfaces(child);
+  const warnings = [
+    missingParentSession ? `missing parent session: ${edge.parentThreadId}` : null,
+    missingChildSession ? `missing child session: ${edge.childThreadId}` : null,
+    !missingParentSession && parentMissingSurfaces.length > 0
+      ? `edge exists but parent session file/index row is missing: ${edge.parentThreadId} (${parentMissingSurfaces.join(", ")})`
+      : null,
+    !missingChildSession && childMissingSurfaces.length > 0
+      ? `edge exists but child session file/index row is missing: ${edge.childThreadId} (${childMissingSurfaces.join(", ")})`
+      : null,
+  ].filter((warning): warning is string => Boolean(warning));
+
+  if (warnings.length === 0) {
+    return null;
+  }
+
+  return {
+    parentThreadId: edge.parentThreadId,
+    childThreadId: edge.childThreadId,
+    status: edge.status,
+    missingParentSession,
+    missingChildSession,
+    parentMissingSurfaces,
+    childMissingSurfaces,
+    warnings,
   };
 }
 
@@ -259,6 +388,9 @@ export function buildSessionFamily(scan: ScanResult, session: SessionEntry): Ses
   const familyEdges = scan.sqlite.threadSpawnEdges.filter(
     (edge) => familyIds.has(edge.parentThreadId) && familyIds.has(edge.childThreadId),
   );
+  const brokenRelations = familyEdges
+    .map((edge) => buildBrokenRelation(edge, sessionById))
+    .filter((relation): relation is SessionFamilyBrokenRelation => Boolean(relation));
 
   return {
     current,
@@ -268,7 +400,11 @@ export function buildSessionFamily(scan: ScanResult, session: SessionEntry): Ses
     directChildren,
     familyMembers: nodes,
     edges: familyEdges,
-    warnings: scan.warnings,
+    brokenRelations,
+    warnings: uniqueSortedMessages([
+      ...scan.warnings,
+      ...brokenRelations.flatMap((relation) => relation.warnings),
+    ]),
   };
 }
 
@@ -290,14 +426,26 @@ export function buildDeleteFamilyWarnings(scan: ScanResult, sessions: SessionEnt
       .filter((id) => !selectedIds.has(id));
     const unselectedFamilyMemberIds = family.familyMembers
       .map((node) => node.sessionId)
-      .filter((id) => id !== session.id && !selectedIds.has(id));
+      .filter((id) =>
+        id !== session.id &&
+        !selectedIds.has(id) &&
+        !unselectedParentIds.includes(id) &&
+        !unselectedChildIds.includes(id),
+      );
     const unselectedRelatedSessionIds = uniqueSortedIds([
       ...unselectedParentIds,
       ...unselectedChildIds,
       ...unselectedFamilyMemberIds,
     ]);
+    const missingParentIds = uniqueSortedIds(family.brokenRelations
+      .filter((relation) => relation.missingParentSession)
+      .map((relation) => relation.parentThreadId));
+    const missingChildIds = uniqueSortedIds(family.brokenRelations
+      .filter((relation) => relation.missingChildSession)
+      .map((relation) => relation.childThreadId));
+    const warnings = uniqueSortedMessages(family.brokenRelations.flatMap((relation) => relation.warnings));
 
-    if (unselectedRelatedSessionIds.length === 0) {
+    if (unselectedRelatedSessionIds.length === 0 && warnings.length === 0) {
       return [];
     }
 
@@ -308,6 +456,10 @@ export function buildDeleteFamilyWarnings(scan: ScanResult, sessions: SessionEnt
         unselectedChildIds: uniqueSortedIds(unselectedChildIds),
         unselectedFamilyMemberIds: uniqueSortedIds(unselectedFamilyMemberIds),
         unselectedRelatedSessionIds,
+        missingParentIds,
+        missingChildIds,
+        brokenRelations: family.brokenRelations,
+        warnings,
       },
     ];
   });

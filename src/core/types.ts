@@ -215,6 +215,7 @@ export interface SessionFamilyNode {
   fileExists: boolean;
   fileCount: number;
   source: string | null;
+  sourceLabel: string;
   threadSource: string | null;
   agentRole: string | null;
   agentNickname: string | null;
@@ -222,6 +223,17 @@ export interface SessionFamilyNode {
   parentIds: string[];
   childIds: string[];
   edge: ThreadSpawnEdgeRow | null;
+}
+
+export interface SessionFamilyBrokenRelation {
+  parentThreadId: string;
+  childThreadId: string;
+  status: string | null;
+  missingParentSession: boolean;
+  missingChildSession: boolean;
+  parentMissingSurfaces: string[];
+  childMissingSurfaces: string[];
+  warnings: string[];
 }
 
 export interface SessionFamily {
@@ -232,6 +244,7 @@ export interface SessionFamily {
   directChildren: SessionFamilyNode[];
   familyMembers: SessionFamilyNode[];
   edges: ThreadSpawnEdgeRow[];
+  brokenRelations: SessionFamilyBrokenRelation[];
   warnings: string[];
 }
 
@@ -241,6 +254,10 @@ export interface DeleteFamilyWarning {
   unselectedChildIds: string[];
   unselectedFamilyMemberIds: string[];
   unselectedRelatedSessionIds: string[];
+  missingParentIds: string[];
+  missingChildIds: string[];
+  brokenRelations: SessionFamilyBrokenRelation[];
+  warnings: string[];
 }
 
 export interface DeletePreviewItem {

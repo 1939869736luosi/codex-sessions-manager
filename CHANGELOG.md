@@ -9,6 +9,7 @@
 - Shortened long title metadata and timeline previews in human-readable `show` output; use `show --json` for full values.
 - Added read-only session family inspection through CLI `family` and MCP `get_session_family`, including parent, child, `/side`, `/fork`, archive, file, status, and source metadata.
 - Added delete preview family warnings when selected sessions have unselected parent, child, or related family sessions.
+- Refined family output with compact `source` labels and broken relationship warnings for missing sessions or missing file/index surfaces.
 
 ### Changed
 

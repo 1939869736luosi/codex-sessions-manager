@@ -81,7 +81,7 @@ After deletion, run `verify` to confirm zero orphans remain.
 | **Cleanup** | Remove stale index entries without touching raw data |
 | **Health check** | `doctor` command for full root diagnostics |
 | **MCP server** | AI agents (Claude Code, Codex, Kiro) manage sessions directly |
-| **Session family** | Read-only parent, child, `/fork`, and `/side` relationship view |
+| **Session family** | Read-only parent, child, `/fork`, and `/side` relationship view; human output uses short `source` labels |
 | **Side conversations** | Parent and child sessions stay separate; delete/export/verify never recurses automatically |
 
 ## Use with AI Agents (MCP)
@@ -125,7 +125,9 @@ codex-sessions verify <session-id...> [--json]
 
 **Safety first**: All destructive commands require `--yes`. Without it, you only get a preview.
 
-Use `family` before deleting a parent or child session. Parent and child sessions are independent sessions with their own IDs. Deleting a parent does not delete children, and deleting a child does not delete its parent. Delete previews warn when related parent, child, or family sessions are not selected. To process multiple related sessions, put every intended session ID into the preview/delete command explicitly.
+Use `family` before deleting a parent or child session. Parent and child sessions are independent sessions with their own IDs. Deleting a parent does not delete children, and deleting a child does not delete its parent. Delete previews warn when related parent, child, or family sessions are not selected, and also report broken relationship records that point at missing sessions or missing file/index surfaces. To process multiple related sessions, put every intended session ID into the preview/delete command explicitly.
+
+Human-readable `family` output keeps the table narrow by showing compact `source` labels such as `subagent`, `mcp`, `exec`, `side-thread`, or `unknown`. Use `family --json` or MCP `get_session_family` when you need the full raw `source` field.
 
 ## Session Titles
 
