@@ -4,6 +4,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import Database from "better-sqlite3";
 
+import { buildSessionResidueAudit } from "../src/core/audit.js";
 import { exportSessionBackup } from "../src/core/backup.js";
 import {
   buildDeletePreview,
@@ -316,6 +317,109 @@ describe("core integration", () => {
         `missing child session: ${missingChildId}`,
       ]),
     );
+  });
+
+  it("audits a complete live session without modifying anything", async () => {
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const audit = buildSessionResidueAudit(scan, FIXTURE_IDS.ACTIVE_ID);
+
+    expect(audit.sessionId).toBe(FIXTURE_IDS.ACTIVE_ID);
+    expect(audit.overallStatus).toEqual(["present", "risky-global-state"]);
+    expect(audit.currentState.hasOriginalRollout).toBe(true);
+    expect(audit.surfaces.rolloutFiles.count).toBe(1);
+    expect(audit.surfaces.shellSnapshots.count).toBe(1);
+    expect(audit.surfaces.sessionIndex.count).toBe(1);
+    expect(audit.surfaces.history.count).toBe(1);
+    expect(audit.surfaces.sqlite.rows).toBe(7);
+    expect(audit.surfaces.globalStateKnown.count).toBe(3);
+    expect(audit.surfaces.globalStateUnknown.count).toBe(1);
+    expect(audit.surfaces.globalStateUnknown.paths).toEqual(["$.some-user-setting"]);
+    expect(audit.familySummary.isFamilyMember).toBe(true);
+    expect(audit.familySummary.childIds).toEqual([FIXTURE_IDS.ARCHIVED_ID]);
+    expect(audit.recommendedNextCommand).toBe(`codex-sessions delete ${FIXTURE_IDS.ACTIVE_ID} --root ${fixture.rootDir}`);
+    expect(audit.recommendedNextCommand).not.toContain("--yes");
+    await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
+  });
+
+  it("audits a db-only session when only SQLite remains", async () => {
+    const db = new Database(fixture.paths.sqlite);
+    db.prepare(
+      `insert into threads (
+         id, title, first_user_message, created_at, updated_at, archived, rollout_path, model, cwd
+       )
+       values (?, 'DB only thread', 'db only input', 1775119000, 1775119060, 0, null, 'gpt-5.4', '/workspace/db-only')`,
+    ).run(FIXTURE_IDS.CHILD_ID);
+    db.close();
+
+    const audit = buildSessionResidueAudit(await scanCodexRoot(fixture.rootDir), FIXTURE_IDS.CHILD_ID);
+
+    expect(audit.overallStatus).toEqual(["partial", "db-only"]);
+    expect(audit.surfaces.rolloutFiles.present).toBe(false);
+    expect(audit.surfaces.sqlite.counts.threadRows).toBe(1);
+    expect(audit.surfaces.sessionIndex.count).toBe(0);
+    expect(audit.surfaces.history.count).toBe(0);
+  });
+
+  it("audits session_index and history residue without files or SQLite", async () => {
+    const audit = buildSessionResidueAudit(await scanCodexRoot(fixture.rootDir), FIXTURE_IDS.STALE_ID);
+
+    expect(audit.overallStatus).toEqual(["partial", "index-only"]);
+    expect(audit.surfaces.rolloutFiles.present).toBe(false);
+    expect(audit.surfaces.sessionIndex.count).toBe(1);
+    expect(audit.surfaces.history.count).toBe(1);
+    expect(audit.surfaces.sqlite.rows).toBe(0);
+  });
+
+  it("audits known and unknown global-state-only residue", async () => {
+    const audit = buildSessionResidueAudit(await scanCodexRoot(fixture.rootDir), FIXTURE_IDS.UNRELATED_ID);
+
+    expect(audit.overallStatus).toEqual(["partial"]);
+    expect(audit.surfaces.rolloutFiles.count).toBe(0);
+    expect(audit.surfaces.shellSnapshots.count).toBe(1);
+    expect(audit.surfaces.globalStateKnown.count).toBe(3);
+    expect(audit.surfaces.globalStateUnknown.count).toBe(0);
+  });
+
+  it("audits broken family relations for missing parent and child sessions", async () => {
+    const missingParentId = "019d6666-7777-7888-8999-ffffffffffff";
+    const missingChildId = "019d7777-8888-7999-8aaa-111111111111";
+    const db = new Database(fixture.paths.sqlite);
+    db.prepare(
+      "insert into thread_spawn_edges (parent_thread_id, child_thread_id, status) values (?, ?, 'missing-parent')",
+    ).run(missingParentId, FIXTURE_IDS.ACTIVE_ID);
+    db.prepare(
+      "insert into thread_spawn_edges (parent_thread_id, child_thread_id, status) values (?, ?, 'missing-child')",
+    ).run(FIXTURE_IDS.ACTIVE_ID, missingChildId);
+    db.close();
+
+    const audit = buildSessionResidueAudit(await scanCodexRoot(fixture.rootDir), FIXTURE_IDS.ACTIVE_ID);
+
+    expect(audit.overallStatus).toEqual(["present", "risky-global-state", "broken-family"]);
+    expect(audit.familySummary.parentIds).toContain(missingParentId);
+    expect(audit.familySummary.childIds).toContain(missingChildId);
+    expect(audit.brokenRelations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ parentThreadId: missingParentId, missingParentSession: true }),
+        expect.objectContaining({ childThreadId: missingChildId, missingChildSession: true }),
+      ]),
+    );
+  });
+
+  it("reports clean for a full session id with no local residue", async () => {
+    const cleanId = "019d8888-9999-7aaa-8bbb-222222222222";
+    const audit = buildSessionResidueAudit(await scanCodexRoot(fixture.rootDir), cleanId);
+
+    expect(audit.sessionId).toBe(cleanId);
+    expect(audit.overallStatus).toEqual(["clean"]);
+    expect(audit.counts.rawSessionFiles).toBe(0);
+    expect(audit.counts.sqliteRows).toBe(0);
+    expect(audit.recommendedNextCommand).toBeNull();
+    expect(audit.currentState.message).toContain("未发现");
+  });
+
+  it("reports a clear error for invalid unknown session input", async () => {
+    const scan = await scanCodexRoot(fixture.rootDir);
+    expect(() => buildSessionResidueAudit(scan, "not-a-session")).toThrow("找不到会话或本地残留：not-a-session");
   });
 
   it("deletes an active session and validates all cleanup surfaces", async () => {

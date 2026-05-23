@@ -256,6 +256,49 @@ describe("mcp server", () => {
     }
   });
 
+  it("returns structured residue audit through MCP without changing files", async () => {
+    const { client, server } = await createConnectedClient();
+
+    try {
+      const beforeSessionIndex = await readFile(fixture.paths.sessionIndex, "utf8");
+      const beforeGlobalState = await readFile(fixture.paths.globalState, "utf8");
+      const result = await client.callTool({
+        name: "audit_session",
+        arguments: {
+          root: fixture.rootDir,
+          sessionId: FIXTURE_IDS.ACTIVE_ID,
+        },
+      });
+
+      const audit = result.structuredContent?.audit as {
+        sessionId: string;
+        overallStatus: string[];
+        surfaces: {
+          globalStateKnown: { count: number };
+          globalStateUnknown: { count: number; paths: string[] };
+          threadSpawnEdges: { count: number };
+        };
+        familySummary: { childIds: string[] };
+        recommendedNextCommand: string;
+      };
+
+      expect(audit.sessionId).toBe(FIXTURE_IDS.ACTIVE_ID);
+      expect(audit.overallStatus).toEqual(["present", "risky-global-state"]);
+      expect(audit.surfaces.globalStateKnown.count).toBe(3);
+      expect(audit.surfaces.globalStateUnknown.count).toBe(1);
+      expect(audit.surfaces.globalStateUnknown.paths).toEqual(["$.some-user-setting"]);
+      expect(audit.surfaces.threadSpawnEdges.count).toBe(1);
+      expect(audit.familySummary.childIds).toEqual([FIXTURE_IDS.ARCHIVED_ID]);
+      expect(audit.recommendedNextCommand).not.toContain("--yes");
+      await expect(readFile(fixture.paths.activeShellSnapshot, "utf8")).resolves.toContain(FIXTURE_IDS.ACTIVE_ID);
+      await expect(readFile(fixture.paths.sessionIndex, "utf8")).resolves.toBe(beforeSessionIndex);
+      await expect(readFile(fixture.paths.globalState, "utf8")).resolves.toBe(beforeGlobalState);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("deletes sessions when confirmation is explicit", async () => {
     const { client, server } = await createConnectedClient();
 

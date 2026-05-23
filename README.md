@@ -7,7 +7,7 @@
 
 > Codex Desktop now includes a delete action for archived chats. Local testing shows that it removes the main session file and some thread rows, but may still leave session index rows, execution logs, and desktop state references behind.
 
-**codex-sessions-manager** is a local Codex session audit and cleanup tool. It works as a **Skill** (Claude Code / Codex), a **CLI**, and an **MCP server** — all sharing the same core. Use it to inspect what remains under `~/.codex`, clean hidden local residues, batch-delete by session ID, and verify that deletion actually left no local orphans.
+**codex-sessions-manager** is a local Codex session audit and cleanup tool. It works as a **Skill** (Claude Code / Codex), a **CLI**, and an **MCP server** — all sharing the same core. Use it to inspect what remains under `~/.codex`, audit leftovers after the official UI delete/archive flow, clean hidden local residues by exact session ID, and verify that deletion actually left no local orphans.
 
 ## Why this one?
 
@@ -33,6 +33,9 @@ codex-sessions list --limit 10
 
 # Inspect parent and child sessions (safe, no changes)
 codex-sessions family <session-id>
+
+# Audit what still exists locally after official UI archive/delete (safe, no changes)
+codex-sessions audit <session-id>
 
 # Preview what deletion would do (safe, no changes)
 codex-sessions delete <session-id>
@@ -75,7 +78,7 @@ After deletion, run `verify` to confirm zero orphans remain.
 | **Split title sources** | Lists show the Codex UI-searchable title by default; detail output shows `session_index`, SQLite, and first-message title differences |
 | **Export** | Backup any session to JSON before you touch it |
 | **Delete** | Permanent or recoverable trash — your choice |
-| **Post-delete audit** | Check what Codex Desktop's built-in delete left behind |
+| **Residue audit** | Read-only report for raw rollout files, shell snapshots, session indexes, history, SQLite rows, global-state refs, thread edges, family status, and broken parent/child links |
 | **Trash & Restore** | Full snapshot saved; restore checks for SQLite key conflicts before writing |
 | **Verify** | Reports any remaining files, index rows, or DB records |
 | **Cleanup** | Remove stale index entries without touching raw data |
@@ -99,9 +102,9 @@ Add to your MCP config:
 }
 ```
 
-14 tools exposed: `inspect_root`, `list_sessions`, `list_projects`, `get_session`, `get_session_family`, `export_session_backup`, `preview_delete_sessions`, `delete_sessions`, `list_trash`, `restore_sessions`, `purge_trash`, `cleanup_session_indexes`, `cleanup_stale_indexes`, `verify_sessions`.
+15 tools exposed: `inspect_root`, `list_sessions`, `list_projects`, `get_session`, `get_session_family`, `audit_session`, `export_session_backup`, `preview_delete_sessions`, `delete_sessions`, `list_trash`, `restore_sessions`, `purge_trash`, `cleanup_session_indexes`, `cleanup_stale_indexes`, `verify_sessions`.
 
-`get_session_family` is read-only and does not need confirmation. All destructive tools require `confirm: true`. Without it, you get a preview only.
+`get_session_family` and `audit_session` are read-only and do not need confirmation. All destructive tools require `confirm: true`. Without it, you get a preview only.
 
 ## CLI Reference
 
@@ -113,6 +116,7 @@ codex-sessions projects
 codex-sessions doctor [--json]
 codex-sessions show <session-id>
 codex-sessions family <session-id> [--json]
+codex-sessions audit <session-id> [--json]
 codex-sessions export <session-id> [--output ./backup.json]
 codex-sessions delete <session-id...> [--trash] [--yes]
 codex-sessions trash-list
@@ -125,7 +129,9 @@ codex-sessions verify <session-id...> [--json]
 
 **Safety first**: All destructive commands require `--yes`. Without it, you only get a preview.
 
-Use `family` before deleting a parent or child session. Parent and child sessions are independent sessions with their own IDs. Deleting a parent does not delete children, and deleting a child does not delete its parent. Delete previews warn when related parent, child, or family sessions are not selected, and also report broken relationship records that point at missing sessions or missing file/index surfaces. To process multiple related sessions, put every intended session ID into the preview/delete command explicitly.
+Use `audit` after the official Codex UI delete/archive flow when you need a clear local residue report. It is read-only. It reports whether the raw rollout file, shell snapshot, `session_index`, `history`, SQLite records, known global-state refs, unknown global-state refs, and `thread_spawn_edges` are still present. It also reports family membership and broken parent/child links. If anything remains, the suggested next command is a preview-only `delete` command; nothing is deleted unless you add `--yes`.
+
+Use `family` before deleting a parent or child session. Parent and child sessions are independent sessions with their own IDs. Deleting a parent does not delete children, and deleting a child does not delete its parent. Delete previews and audits warn when relationship records point at missing sessions or missing file/index surfaces. To process multiple related sessions, put every intended session ID into the preview/delete command explicitly. The tool never recurses into parent or child sessions automatically.
 
 Human-readable `family` output keeps the table narrow by showing compact `source` labels such as `subagent`, `mcp`, `exec`, `side-thread`, or `unknown`. Use `family --json` or MCP `get_session_family` when you need the full raw `source` field.
 
@@ -145,11 +151,12 @@ A local Codex session can have multiple title sources:
 
 ## What Codex stores (and what we clean)
 
-When Codex Desktop deletes an archived chat, it may already remove some of these surfaces. `verify` reports what is still present; `delete --yes` or `cleanup-index --yes` can remove the remaining local records when you intentionally choose to do so.
+When Codex Desktop deletes an archived chat, it may already remove some of these surfaces. `audit` gives a read-only residue report first. `verify` remains useful after a cleanup action. `delete --yes` or `cleanup-index --yes` can remove remaining local records only when you intentionally choose to do so.
 
 ```
 ~/.codex/
 ├── sessions/            ← raw rollout JSONL files        ✅ cleaned
+├── archived_sessions/   ← archived rollout JSONL files   ✅ cleaned
 ├── shell_snapshots/     ← shell snapshot scripts         ✅ cleaned
 ├── session_index.jsonl  ← session metadata index         ✅ cleaned
 ├── history.jsonl        ← conversation history index     ✅ cleaned

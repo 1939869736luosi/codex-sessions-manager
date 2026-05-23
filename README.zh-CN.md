@@ -7,7 +7,7 @@
 
 > Codex Desktop 现在已经有归档聊天删除入口。实测中，它会删除主会话文件和部分 thread 记录，但仍可能留下索引、执行日志和桌面状态引用。
 
-**codex-sessions-manager** 是本地 Codex 会话审计和清理工具。它同时是 **Skill**（Claude Code / Codex 可直接调用）、**CLI** 和 **MCP Server**——三种形态共享同一套核心逻辑。它用来检查 `~/.codex` 里还剩什么、清理隐藏残留、按 session ID 批量处理，并验证删除后是否真的没有本机孤儿记录。
+**codex-sessions-manager** 是本地 Codex 会话审计和清理工具。它同时是 **Skill**（Claude Code / Codex 可直接调用）、**CLI** 和 **MCP Server**——三种形态共享同一套核心逻辑。它用来检查 `~/.codex` 里还剩什么、审计官方 UI 删除/归档后留下的本地残留、按精确 session ID 处理隐藏记录，并验证删除后是否真的没有本机孤儿记录。
 
 ## 为什么选这个？
 
@@ -33,6 +33,9 @@ codex-sessions list --limit 10
 
 # 查看父子关系（安全，不做任何修改）
 codex-sessions family <session-id>
+
+# 审计官方 UI 删除/归档后本机还剩什么（安全，不做任何修改）
+codex-sessions audit <session-id>
 
 # 预览删除（安全，不做任何修改）
 codex-sessions delete <session-id>
@@ -75,7 +78,7 @@ codex-sessions verify <session-id>
 | **标题来源拆分** | 列表默认显示 Codex UI 可搜标题；详情显示 `session_index`、SQLite 和首条请求的标题差异 |
 | **导出** | 删之前先备份为 JSON |
 | **删除** | 永久删除或放入回收站，你选 |
-| **删除后审计** | 检查 Codex Desktop 官方删除后还留下什么 |
+| **残留审计** | 只读报告原始 rollout 文件、shell snapshot、session_index、history、SQLite、global-state、thread edges、family 状态和断裂 parent/child 关系 |
 | **回收站 & 恢复** | 完整快照保存；恢复时检查 SQLite 主键冲突 |
 | **验证** | 报告是否还有残留文件、索引行、数据库记录 |
 | **清理索引** | 移除失效索引条目，不动原始数据 |
@@ -99,9 +102,9 @@ codex-sessions verify <session-id>
 }
 ```
 
-暴露 14 个工具：`inspect_root`、`list_sessions`、`list_projects`、`get_session`、`get_session_family`、`export_session_backup`、`preview_delete_sessions`、`delete_sessions`、`list_trash`、`restore_sessions`、`purge_trash`、`cleanup_session_indexes`、`cleanup_stale_indexes`、`verify_sessions`。
+暴露 15 个工具：`inspect_root`、`list_sessions`、`list_projects`、`get_session`、`get_session_family`、`audit_session`、`export_session_backup`、`preview_delete_sessions`、`delete_sessions`、`list_trash`、`restore_sessions`、`purge_trash`、`cleanup_session_indexes`、`cleanup_stale_indexes`、`verify_sessions`。
 
-`get_session_family` 是只读工具，不需要确认。所有破坏性操作需要 `confirm: true`，否则只返回预览。
+`get_session_family` 和 `audit_session` 是只读工具，不需要确认。所有破坏性操作需要 `confirm: true`，否则只返回预览。
 
 ## CLI 命令
 
@@ -113,6 +116,7 @@ codex-sessions projects
 codex-sessions doctor [--json]
 codex-sessions show <session-id>
 codex-sessions family <session-id> [--json]
+codex-sessions audit <session-id> [--json]
 codex-sessions export <session-id> [--output ./backup.json]
 codex-sessions delete <session-id...> [--trash] [--yes]
 codex-sessions trash-list
@@ -125,7 +129,9 @@ codex-sessions verify <session-id...> [--json]
 
 **安全第一**：所有破坏性命令需要 `--yes` 才执行，不加只看预览。
 
-删除 parent 或 child 前先看 `family`。parent 和 child 是不同 session，各自有自己的 ID。删除 parent 不等于删除 child，删除 child 也不等于删除 parent。删除预览会提示尚未选中的 parent、child 或 family 相关 session；如果关系记录指向缺失 session，或相关 session 缺文件/索引，也会显示 warning。要一起处理多个相关 session，需要把每个 session ID 明确放进预览或删除命令。
+官方 Codex UI 删除或归档后，如果想知道本机还剩什么，先用 `audit`。它只读，不会改文件。它会报告原始 rollout 文件、shell snapshot、`session_index`、`history`、SQLite 记录、已知 global-state 引用、未知 global-state 引用、`thread_spawn_edges` 是否还在，也会报告 family 归属和断裂 parent/child 关系。如果仍有残留，建议命令只会给不带 `--yes` 的删除预览；只有你自己加 `--yes` 才会真的删除。
+
+删除 parent 或 child 前先看 `family`。parent 和 child 是不同 session，各自有自己的 ID。删除 parent 不等于删除 child，删除 child 也不等于删除 parent。删除预览和 audit 会提示关系记录指向缺失 session，或相关 session 缺文件/索引。要一起处理多个相关 session，需要把每个 session ID 明确放进预览或删除命令。工具不会自动递归处理 parent 或 child。
 
 人类可读的 `family` 输出会用短 `source` 标签保持表格清楚，例如 `subagent`、`mcp`、`exec`、`side-thread`、`unknown`。需要完整原始 `source` 字段时，用 `family --json` 或 MCP `get_session_family`。
 
@@ -145,11 +151,12 @@ Codex 本地会话可能同时有多个标题：
 
 ## Codex 存了什么（我们清理什么）
 
-Codex Desktop 删除归档聊天时，可能已经清掉其中一部分。`verify` 会告诉你还剩什么；确认要清理时，再用 `delete --yes` 或 `cleanup-index --yes` 处理残留。
+Codex Desktop 删除归档聊天时，可能已经清掉其中一部分。`audit` 先给只读残留报告。真正清理之后，再用 `verify` 复查。确认要清理时，才用 `delete --yes` 或 `cleanup-index --yes` 处理残留。
 
 ```
 ~/.codex/
 ├── sessions/            ← 原始 rollout JSONL 文件       ✅ 清理
+├── archived_sessions/   ← 归档 rollout JSONL 文件       ✅ 清理
 ├── shell_snapshots/     ← shell 快照脚本                ✅ 清理
 ├── session_index.jsonl  ← 会话元数据索引                ✅ 清理
 ├── history.jsonl        ← 对话历史索引                  ✅ 清理

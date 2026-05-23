@@ -301,6 +301,56 @@ describe("cli", () => {
     expect(result[0].possibleUnknownGlobalStateRefPaths).toEqual(["$.some-user-setting"]);
   });
 
+  it("audits local residue from the cli without changing files", async () => {
+    const beforeSessionIndex = await readFile(fixture.paths.sessionIndex, "utf8");
+    const beforeHistory = await readFile(fixture.paths.history, "utf8");
+    const beforeGlobalState = await readFile(fixture.paths.globalState, "utf8");
+    const capture = createIo();
+    const exitCode = await runCli(["audit", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir], capture.io);
+    const output = capture.stdout.join("\n");
+
+    expect(exitCode).toBe(0);
+    expect(output).toContain("审计结论");
+    expect(output).toContain("本地残留面");
+    expect(output).toContain("家族关系");
+    expect(output).toContain("建议下一步");
+    expect(output).toContain("预览命令");
+    expect(output).toContain("只有用户加 --yes 才会真的删除");
+    expect(output).toContain("global-state 未知位置引用");
+    expect(output).not.toContain("active user input");
+    await expect(readFile(fixture.paths.activeShellSnapshot, "utf8")).resolves.toContain(FIXTURE_IDS.ACTIVE_ID);
+    await expect(readFile(fixture.paths.sessionIndex, "utf8")).resolves.toBe(beforeSessionIndex);
+    await expect(readFile(fixture.paths.history, "utf8")).resolves.toBe(beforeHistory);
+    await expect(readFile(fixture.paths.globalState, "utf8")).resolves.toBe(beforeGlobalState);
+  });
+
+  it("returns structured audit json from the cli", async () => {
+    const capture = createIo();
+    const exitCode = await runCli(["audit", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--json"], capture.io);
+    const audit = JSON.parse(capture.stdout.join("\n")) as {
+      sessionId: string;
+      overallStatus: string[];
+      surfaces: {
+        globalStateUnknown: { count: number; paths: string[] };
+        sqlite: { rows: number };
+      };
+      familySummary: { childIds: string[] };
+      recommendedNextCommand: string;
+      recommendedNextCommandNote: string;
+    };
+
+    expect(exitCode).toBe(0);
+    expect(audit.sessionId).toBe(FIXTURE_IDS.ACTIVE_ID);
+    expect(audit.overallStatus).toEqual(["present", "risky-global-state"]);
+    expect(audit.surfaces.globalStateUnknown.count).toBe(1);
+    expect(audit.surfaces.globalStateUnknown.paths).toEqual(["$.some-user-setting"]);
+    expect(audit.surfaces.sqlite.rows).toBe(7);
+    expect(audit.familySummary.childIds).toEqual([FIXTURE_IDS.ARCHIVED_ID]);
+    expect(audit.recommendedNextCommand).toBe(`codex-sessions delete ${FIXTURE_IDS.ACTIVE_ID} --root ${fixture.rootDir}`);
+    expect(audit.recommendedNextCommand).not.toContain("--yes");
+    expect(audit.recommendedNextCommandNote).toContain("--yes");
+  });
+
   it("previews trash delete without --yes", async () => {
     const capture = createIo();
     const exitCode = await runCli(["delete", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--trash"], capture.io);

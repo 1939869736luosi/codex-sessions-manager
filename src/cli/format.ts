@@ -10,6 +10,7 @@ import type {
   SessionEntry,
   SessionFamily,
   SessionFamilyNode,
+  SessionResidueAudit,
   SessionIndexCleanupResult,
   TimelineItem,
   TrashDeleteResult,
@@ -413,6 +414,113 @@ export function formatVerifyResult(items: DeleteValidationItem[]): string {
       const warnings = item.warnings.length ? `, warnings=${item.warnings.join(" | ")}` : "";
       return `- ${item.title}: ${allClean ? "无残留" : "仍有残留"} (files=${item.filePathsRemaining.length}, shell_snapshots=${item.shellSnapshotFilesRemaining.length}, global_state_refs=${formatGlobalStateRemaining(item)}, possible_unknown_global_state_refs=${item.possibleUnknownGlobalStateRefsRemaining}, session_index=${item.sessionIndexRowsRemaining}, history=${item.historyRowsRemaining}, sqlite=${sqliteRemaining}${warnings})`;
     }),
+  ].join("\n");
+}
+
+function yesNo(value: boolean): string {
+  return value ? "是" : "否";
+}
+
+function formatSurfaceRows(audit: SessionResidueAudit): string {
+  return printTable([
+    ["位置", "是否存在", "数量", "说明"],
+    [
+      "原始 rollout 文件",
+      yesNo(audit.surfaces.rolloutFiles.present),
+      String(audit.surfaces.rolloutFiles.count),
+      audit.surfaces.rolloutFiles.paths.join(", ") || "-",
+    ],
+    [
+      "shell snapshot",
+      yesNo(audit.surfaces.shellSnapshots.present),
+      String(audit.surfaces.shellSnapshots.count),
+      audit.surfaces.shellSnapshots.paths.join(", ") || "-",
+    ],
+    ["session_index", yesNo(audit.surfaces.sessionIndex.present), String(audit.surfaces.sessionIndex.count), "-"],
+    ["history", yesNo(audit.surfaces.history.present), String(audit.surfaces.history.count), "-"],
+    [
+      "SQLite",
+      yesNo(audit.surfaces.sqlite.present),
+      String(audit.surfaces.sqlite.rows),
+      [
+        `threads=${audit.surfaces.sqlite.counts.threadRows}`,
+        `logs=${audit.surfaces.sqlite.counts.logRows}`,
+        `edges=${audit.surfaces.sqlite.counts.spawnEdgeRows}`,
+        `jobs=${audit.surfaces.sqlite.counts.assignedAgentJobs}`,
+        `tools=${audit.surfaces.sqlite.counts.dynamicToolRows}`,
+        `stage1=${audit.surfaces.sqlite.counts.stage1Rows}`,
+        `goals=${audit.surfaces.sqlite.counts.threadGoalRows}`,
+      ].join(", "),
+    ],
+    [
+      "global-state 已知引用",
+      yesNo(audit.surfaces.globalStateKnown.present),
+      String(audit.surfaces.globalStateKnown.count),
+      audit.surfaces.globalStateKnown.paths.join(", ") || "-",
+    ],
+    [
+      "global-state 未知位置引用",
+      yesNo(audit.surfaces.globalStateUnknown.present),
+      String(audit.surfaces.globalStateUnknown.count),
+      audit.surfaces.globalStateUnknown.paths.join(", ") || "-",
+    ],
+    [
+      "thread_spawn_edges",
+      yesNo(audit.surfaces.threadSpawnEdges.present),
+      String(audit.surfaces.threadSpawnEdges.count),
+      `作为 parent=${audit.surfaces.threadSpawnEdges.asParent}, 作为 child=${audit.surfaces.threadSpawnEdges.asChild}`,
+    ],
+  ]);
+}
+
+function formatAuditStatus(statuses: SessionResidueAudit["overallStatus"]): string {
+  return statuses.join(", ");
+}
+
+export function formatAudit(audit: SessionResidueAudit): string {
+  const warningLines = audit.warnings.length ? ["风险提醒", ...audit.warnings.map((warning) => `- ${warning}`)] : ["风险提醒", "- 无"];
+  const familyLines = [
+    "家族关系",
+    `- 属于 family: ${yesNo(audit.familySummary.isFamilyMember)}`,
+    `- root: ${audit.familySummary.rootId}`,
+    `- parent: ${audit.familySummary.parentIds.join(", ") || "-"}`,
+    `- children: ${audit.familySummary.childIds.join(", ") || "-"}`,
+    `- family members: ${audit.familySummary.familyMemberIds.length} 个`,
+    `- 断裂关系: ${audit.familySummary.brokenRelationCount} 个`,
+  ];
+  const brokenRelationLines = audit.brokenRelations.length
+    ? [
+        "断裂详情",
+        ...audit.brokenRelations.map(
+          (relation) =>
+            `- parent=${relation.parentThreadId}, child=${relation.childThreadId}, status=${relation.status ?? "-"}, missingParent=${yesNo(relation.missingParentSession)}, missingChild=${yesNo(relation.missingChildSession)}`,
+        ),
+      ]
+    : [];
+  const nextStepLines = [
+    "建议下一步",
+    audit.recommendedNextCommand
+      ? `- 预览命令: ${audit.recommendedNextCommand}`
+      : "- 不需要处理，当前没有发现本地残留。",
+    ...(audit.recommendedNextCommandNote ? [`- ${audit.recommendedNextCommandNote}`] : []),
+  ];
+
+  return [
+    "审计结论",
+    `- session: ${audit.sessionId}`,
+    `- 标题: ${trimDetailText(audit.displayTitle)}`,
+    `- 状态: ${formatAuditStatus(audit.overallStatus)}`,
+    `- 当前判断: ${audit.currentState.message}`,
+    "",
+    "本地残留面",
+    formatSurfaceRows(audit),
+    "",
+    ...familyLines,
+    ...(brokenRelationLines.length ? ["", ...brokenRelationLines] : []),
+    "",
+    ...warningLines,
+    "",
+    ...nextStepLines,
   ].join("\n");
 }
 

@@ -7,6 +7,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
+import { buildSessionResidueAudit } from "../core/audit.js";
 import { exportSessionBackup } from "../core/backup.js";
 import { inspectCodexRoot } from "../core/doctor.js";
 import {
@@ -175,6 +176,30 @@ export function createServer(): McpServer {
         root: scan.root,
         warnings: scan.warnings,
         family,
+      });
+    },
+  );
+
+  server.registerTool(
+    "audit_session",
+    {
+      description:
+        "Audit local Codex residue for one session after official UI archive/delete actions, without modifying anything.",
+      outputSchema: TOOL_OUTPUT_SCHEMA,
+      inputSchema: z.object({
+        sessionId: z.string().describe("Exact session id or unique prefix."),
+        root: z.string().optional(),
+      }),
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({ sessionId, root }) => {
+      const scan = await scanCodexRoot(root);
+      const audit = buildSessionResidueAudit(scan, sessionId);
+      return textResult(`Audited session ${audit.sessionId}. Status: ${audit.overallStatus.join(", ")}.`, {
+        audit,
       });
     },
   );

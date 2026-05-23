@@ -64,6 +64,7 @@ Use this skill for requests like:
 - "Find the session family for this session"
 - "Show parent and side/fork child sessions"
 - "Find side conversations for this session"
+- "Audit what remains locally after the official Codex UI delete/archive action"
 - "Export this session"
 - "Preview deleting these sessions"
 - "Check what Codex Desktop left behind after deleting a chat"
@@ -94,6 +95,7 @@ If the `codex-sessions` MCP server is available in the current agent session, us
 - `list_projects`
 - `get_session`
 - `get_session_family` (read-only session family inspection)
+- `audit_session` (read-only residue audit)
 - `export_session_backup`
 - `preview_delete_sessions`
 - `delete_sessions` (requires `confirm=true` to execute; pass `trash=true` for recoverable deletion)
@@ -132,6 +134,8 @@ codex-sessions projects --root <path-to-codex-root>
 codex-sessions show <session-id> --root <path-to-codex-root>
 codex-sessions family <session-id> --root <path-to-codex-root>
 codex-sessions family <session-id> --root <path-to-codex-root> --json
+codex-sessions audit <session-id> --root <path-to-codex-root>
+codex-sessions audit <session-id> --root <path-to-codex-root> --json
 codex-sessions export <session-id> --root <path-to-codex-root> --output ./backup.json
 codex-sessions delete <session-id...> --root <path-to-codex-root>
 codex-sessions delete <session-id...> --root <path-to-codex-root> --yes
@@ -168,6 +172,8 @@ node dist/cli/index.js projects --root <path-to-codex-root>
 node dist/cli/index.js show <session-id> --root <path-to-codex-root>
 node dist/cli/index.js family <session-id> --root <path-to-codex-root>
 node dist/cli/index.js family <session-id> --root <path-to-codex-root> --json
+node dist/cli/index.js audit <session-id> --root <path-to-codex-root>
+node dist/cli/index.js audit <session-id> --root <path-to-codex-root> --json
 node dist/cli/index.js export <session-id> --root <path-to-codex-root> --output ./backup.json
 node dist/cli/index.js delete <session-id...> --root <path-to-codex-root>
 node dist/cli/index.js delete <session-id...> --root <path-to-codex-root> --yes
@@ -191,6 +197,7 @@ node dist/cli/index.js verify <session-id...> --root <path-to-codex-root>
 - Treat delete, restore, purge, and cleanup as dangerous write paths.
 - Always preview before destructive actions unless the user has already clearly confirmed execution.
 - `get_session_family` and CLI `family` are read-only. They do not delete, export, restore, or select related sessions automatically.
+- `audit_session` and CLI `audit` are read-only. They report local residue after official UI delete/archive actions and must not rewrite files, SQLite, shell snapshots, or global state.
 - Delete previews warn when selected sessions have unselected parent, child, or family sessions, and when relationship edges point at missing sessions or missing file/index surfaces.
 - CLI `delete` without `--yes` is preview-only.
 - MCP `delete_sessions` without `confirm=true` is preview-only.
@@ -205,8 +212,8 @@ node dist/cli/index.js verify <session-id...> --root <path-to-codex-root>
 - MCP `cleanup_session_indexes` and `cleanup_stale_indexes` require `confirm=true` to rewrite JSONL indexes.
 - Global-state cleanup is limited to known structured keys.
 - Unknown global-state references are warnings only. Do not edit or delete unknown keys automatically.
-- If `verify`, `doctor`, or `inspect_root` reports warnings, tell the user. Do not claim the root is fully clean.
-- Do not output chat content when reporting doctor, verify, or global-state warnings.
+- If `audit`, `verify`, `doctor`, or `inspect_root` reports warnings, tell the user. Do not claim the root is fully clean.
+- Do not output chat content when reporting audit, doctor, verify, or global-state warnings.
 
 ## Side Conversations
 
@@ -230,6 +237,7 @@ When a user asks about side conversations:
 - Treat `displayTitle` as the default user-facing title. It prefers `session_index.jsonl.thread_name`, which is usually the title searchable in Codex UI. Do not present `sqliteTitle` as the only title when sources disagree.
 - For family requests: distinguish current session, root, parent IDs, child IDs, relationship status, archived state, file existence, short `source` label, and source metadata. Human CLI output shows compact `source` labels; JSON/MCP output keeps the full raw `source` field. Report broken relationship warnings clearly. Say clearly that the action covers only explicitly selected session IDs.
 - For side-conversation requests: distinguish parent thread ID and child thread ID, and say whether the requested action covers one or both.
+- For audit requests: report the overall status, each residue surface count, family summary, warnings, and the preview-only next command. Say clearly that audit does not delete anything and that parent/child sessions are not handled recursively.
 - For delete requests: explain whether this is preview-only, permanent delete, or recoverable trash delete.
 - For trash requests: distinguish moved to trash, restored, and purged.
 - For restore conflicts: explain that the live session already exists and identify conflicting surfaces when available.

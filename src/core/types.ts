@@ -260,6 +260,90 @@ export interface DeleteFamilyWarning {
   warnings: string[];
 }
 
+export type SessionResidueAuditStatus =
+  | "clean"
+  | "present"
+  | "partial"
+  | "broken-family"
+  | "risky-global-state"
+  | "db-only"
+  | "index-only";
+
+export interface SessionResidueSurface {
+  present: boolean;
+  count: number;
+}
+
+export interface SessionResiduePathSurface extends SessionResidueSurface {
+  paths: string[];
+}
+
+export interface SessionResidueSqliteSurface extends SessionResidueSurface {
+  rows: number;
+  counts: SqliteDeletionCounts;
+  hasThread: boolean;
+  archived: boolean;
+}
+
+export interface SessionResidueThreadSpawnSurface extends SessionResidueSurface {
+  asParent: number;
+  asChild: number;
+  edges: Array<{
+    parentThreadId: string;
+    childThreadId: string;
+    status: string | null;
+  }>;
+}
+
+export interface SessionResidueAudit {
+  sessionId: string;
+  title: string;
+  displayTitle: string;
+  rootPath: string;
+  overallStatus: SessionResidueAuditStatus[];
+  currentState: {
+    kind: SessionKind | "clean";
+    archived: boolean;
+    hasOriginalRollout: boolean;
+    message: string;
+  };
+  surfaces: {
+    rolloutFiles: SessionResiduePathSurface & { buckets: SessionFileTarget["bucket"][] };
+    shellSnapshots: SessionResiduePathSurface;
+    sessionIndex: SessionResidueSurface;
+    history: SessionResidueSurface;
+    sqlite: SessionResidueSqliteSurface;
+    globalStateKnown: SessionResiduePathSurface;
+    globalStateUnknown: SessionResiduePathSurface;
+    threadSpawnEdges: SessionResidueThreadSpawnSurface;
+  };
+  counts: {
+    rawSessionFiles: number;
+    shellSnapshotFiles: number;
+    sessionIndexRows: number;
+    historyRows: number;
+    sqliteRows: number;
+    knownGlobalStateRefs: number;
+    possibleUnknownGlobalStateRefs: number;
+    threadSpawnEdges: number;
+    familyMembers: number;
+    brokenRelations: number;
+  };
+  familySummary: {
+    isFamilyMember: boolean;
+    rootId: string;
+    parentIds: string[];
+    childIds: string[];
+    familyMemberIds: string[];
+    edgeCount: number;
+    brokenRelationCount: number;
+  };
+  brokenRelations: SessionFamilyBrokenRelation[];
+  warnings: string[];
+  recommendedNextCommand: string | null;
+  recommendedNextCommandNote: string | null;
+}
+
 export interface DeletePreviewItem {
   sessionId: string;
   title: string;
