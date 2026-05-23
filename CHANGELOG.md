@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added separate title metadata fields: `displayTitle`, `indexTitle`, `sqliteTitle`, `firstUserMessage`, `titleSource`, `titleMismatch`, and `titleCandidates`.
+- Updated list/search behavior to use the Codex UI-searchable `displayTitle` by default while keeping detail output explicit about mismatched title sources.
+- Shortened long title metadata and timeline previews in human-readable `show` output; use `show --json` for full values.
+
+### Changed
+
+- Updated public positioning now that Codex Desktop includes archived-chat delete: the project is described as a local residue audit, verification, and cleanup tool rather than a replacement for a missing built-in delete button.
+
 ## 0.3.2
 
 ### Fixed

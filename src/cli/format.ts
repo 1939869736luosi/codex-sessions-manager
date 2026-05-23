@@ -81,6 +81,38 @@ function printTable(rows: string[][]): string {
     .join("\n");
 }
 
+function trimTitle(title: string): string {
+  return title.length > 56 ? `${title.slice(0, 53)}...` : title;
+}
+
+const DETAIL_TEXT_LIMIT = 180;
+const TIMELINE_PREVIEW_LIMIT = 20;
+
+function trimDetailText(value: string | null): string {
+  const normalized = value?.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "-";
+  }
+  if (normalized.length <= DETAIL_TEXT_LIMIT) {
+    return normalized;
+  }
+  return `${normalized.slice(0, DETAIL_TEXT_LIMIT - 3)}... (${normalized.length} chars)`;
+}
+
+function formatTitleCandidates(session: SessionEntry): string {
+  return session.titleCandidates.map((candidate) => `${candidate.source}=${trimDetailText(candidate.title)}`).join(" | ");
+}
+
+function formatTimelinePreview(timeline: TimelineItem[]): string[] {
+  const rows = timeline
+    .slice(0, TIMELINE_PREVIEW_LIMIT)
+    .map((item) => `- [${item.roleLabel}] ${item.body.replace(/\s+/g, " ").slice(0, 220)}`);
+  if (timeline.length > TIMELINE_PREVIEW_LIMIT) {
+    rows.push(`- ... 还有 ${timeline.length - TIMELINE_PREVIEW_LIMIT} 条，使用 show --json 查看完整时间线`);
+  }
+  return rows;
+}
+
 export function formatList(scan: ScanResult, sessions: SessionEntry[]): string {
   const rows = [
     ["状态", "项目", "更新时间", "模型", "大小", "ID", "标题"],
@@ -91,7 +123,7 @@ export function formatList(scan: ScanResult, sessions: SessionEntry[]): string {
       session.model ?? "-",
       formatBytes(session.totalFileSize),
       session.id,
-      session.title.length > 56 ? `${session.title.slice(0, 53)}...` : session.title,
+      trimTitle(session.displayTitle),
     ]),
   ];
 
@@ -173,7 +205,7 @@ export function formatGroupedList(scan: ScanResult, sessions: SessionEntry[]): s
             session.model ?? "-",
             formatBytes(session.totalFileSize),
             session.id,
-            session.title.length > 56 ? `${session.title.slice(0, 53)}...` : session.title,
+            trimTitle(session.displayTitle),
           ]),
         ]),
       ].join("\n"),
@@ -200,8 +232,14 @@ export function formatProjects(projects: ProjectSummary[]): string {
 
 export function formatShow(session: SessionEntry, timeline: TimelineItem[]): string {
   const lines = [
-    `标题: ${session.title}`,
+    `标题: ${trimDetailText(session.displayTitle)}`,
     `ID: ${session.id}`,
+    `标题来源: ${session.titleSource}`,
+    `标题不一致: ${session.titleMismatch ? "是" : "否"}`,
+    `session_index 标题: ${trimDetailText(session.indexTitle)}`,
+    `SQLite 标题: ${trimDetailText(session.sqliteTitle)}`,
+    `第一条用户请求: ${trimDetailText(session.firstUserMessage)}`,
+    `标题候选: ${formatTitleCandidates(session)}`,
     `状态: ${session.kind}`,
     `创建时间: ${formatDate(session.createdAt)}`,
     `更新时间: ${formatDate(session.updatedAt)}`,
@@ -214,7 +252,7 @@ export function formatShow(session: SessionEntry, timeline: TimelineItem[]): str
     `SQLite 线程: ${session.hasThread ? "是" : "否"}`,
     "",
     "时间线预览:",
-    ...timeline.map((item) => `- [${item.roleLabel}] ${item.body.replace(/\n/g, " ").slice(0, 220)}`),
+    ...formatTimelinePreview(timeline),
   ];
 
   return lines.join("\n");

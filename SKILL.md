@@ -1,6 +1,6 @@
 ---
 name: codex-sessions-manager
-description: Use this skill when the user wants to inspect, search, export, verify, clean up, delete, restore, or purge local Codex sessions stored under a Codex root such as ~/.codex.
+description: Use this skill when the user wants to inspect, search, export, verify, clean up, delete, restore, or purge local Codex sessions stored under a Codex root such as ~/.codex, including auditing leftovers after Codex Desktop's built-in delete.
 metadata:
   source: https://github.com/1939869736luosi/codex-sessions-manager
 ---
@@ -12,6 +12,8 @@ metadata:
 This skill manages local Codex sessions through the `codex-sessions` toolkit.
 
 Use it when the user wants to work with local Codex conversation history instead of the current live conversation.
+
+Codex Desktop has a built-in delete action for archived chats. Use this toolkit when the user needs local proof of what remains, exact ID-based cleanup, batch handling, recoverable trash, restore, or post-delete verification.
 
 This repository provides:
 
@@ -62,6 +64,7 @@ Use this skill for requests like:
 - "Find side conversations for this session"
 - "Export this session"
 - "Preview deleting these sessions"
+- "Check what Codex Desktop left behind after deleting a chat"
 - "Move these sessions to trash"
 - "Restore this trash entry"
 - "Purge this trash entry"
@@ -72,6 +75,7 @@ Use this skill for requests like:
 Do not use this skill for:
 
 - generic ChatGPT history questions
+- replacing the ordinary Codex Desktop delete UI for simple archived-chat deletion
 - non-Codex chat clients
 - editing the current live conversation
 - automatic cleanup schedules
@@ -209,9 +213,10 @@ When a user asks about side conversations:
 
 ## Response Style
 
-- For list requests: show session ID, updated time, size, project, status, and readable title.
+- For list requests: show session ID, updated time, size, project, status, and `displayTitle`.
 - For project requests: show project name/path, session count, status counts, latest updated time, and total size.
-- For show requests: summarize the session and include key metadata.
+- For show requests: summarize the session and include key metadata. Include `displayTitle`, `indexTitle`, `sqliteTitle`, `firstUserMessage`, `titleSource`, `titleMismatch`, and `titleCandidates` when available. Human-readable CLI output may shorten long title fields and timeline previews; use JSON/MCP output for full values.
+- Treat `displayTitle` as the default user-facing title. It prefers `session_index.jsonl.thread_name`, which is usually the title searchable in Codex UI. Do not present `sqliteTitle` as the only title when sources disagree.
 - For side-conversation requests: distinguish parent thread ID and child thread ID, and say whether the requested action covers one or both.
 - For delete requests: explain whether this is preview-only, permanent delete, or recoverable trash delete.
 - For trash requests: distinguish moved to trash, restored, and purged.

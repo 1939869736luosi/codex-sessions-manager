@@ -37,13 +37,53 @@ describe("core integration", () => {
 
   it("scans active, archived, and stale sessions", async () => {
     const scan = await scanCodexRoot(fixture.rootDir);
+    const active = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID])[0];
 
     expect(new Set(scan.sessions.map((session) => session.id))).toEqual(
       new Set([FIXTURE_IDS.ACTIVE_ID, FIXTURE_IDS.ARCHIVED_ID, FIXTURE_IDS.STALE_ID]),
     );
-    expect(resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID])[0].kind).toBe("active");
+    expect(active.kind).toBe("active");
+    expect(active.displayTitle).toBe("Active thread");
+    expect(active.title).toBe(active.displayTitle);
+    expect(active.indexTitle).toBe("Active thread");
+    expect(active.sqliteTitle).toBe(`Title ${FIXTURE_IDS.ACTIVE_ID}`);
+    expect(active.firstUserMessage).toBe("active input");
+    expect(active.titleSource).toBe("session_index");
+    expect(active.titleMismatch).toBe(true);
+    expect(active.titleCandidates).toEqual([
+      { source: "session_index", title: "Active thread" },
+      { source: "sqlite", title: `Title ${FIXTURE_IDS.ACTIVE_ID}` },
+      { source: "first_user_message", title: "active input" },
+      { source: "id", title: FIXTURE_IDS.ACTIVE_ID },
+    ]);
     expect(resolveSessions(scan, [FIXTURE_IDS.ARCHIVED_ID])[0].kind).toBe("archived");
     expect(resolveSessions(scan, [FIXTURE_IDS.STALE_ID])[0].kind).toBe("stale");
+  });
+
+  it("searches all title candidates while showing the session_index title by default", async () => {
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const byDisplayTitle = filterSessions(scan, { query: "Active thread" });
+    const bySqliteTitle = filterSessions(scan, { query: `Title ${FIXTURE_IDS.ACTIVE_ID}` });
+    const byFirstMessage = filterSessions(scan, { query: "active input" });
+
+    expect(byDisplayTitle.map((session) => session.id)).toContain(FIXTURE_IDS.ACTIVE_ID);
+    expect(bySqliteTitle.map((session) => session.id)).toContain(FIXTURE_IDS.ACTIVE_ID);
+    expect(byFirstMessage.map((session) => session.id)).toContain(FIXTURE_IDS.ACTIVE_ID);
+    expect(bySqliteTitle[0].displayTitle).toBe("Active thread");
+  });
+
+  it("does not mark first user message differences as title mismatch", async () => {
+    const db = new Database(fixture.paths.sqlite);
+    db.prepare("update threads set title = ? where id = ?").run("Active thread", FIXTURE_IDS.ACTIVE_ID);
+    db.close();
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const active = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID])[0];
+
+    expect(active.indexTitle).toBe("Active thread");
+    expect(active.sqliteTitle).toBe("Active thread");
+    expect(active.firstUserMessage).toBe("active input");
+    expect(active.titleMismatch).toBe(false);
   });
 
   it("filters sessions by project, status, and updated time", async () => {

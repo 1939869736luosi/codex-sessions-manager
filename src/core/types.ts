@@ -36,6 +36,13 @@ export interface ThreadRow {
   cwd: string | null;
 }
 
+export type SessionTitleSource = "session_index" | "sqlite" | "first_user_message" | "id";
+
+export interface SessionTitleCandidate {
+  source: SessionTitleSource;
+  title: string;
+}
+
 export interface SessionFileTarget {
   id: string;
   bucket: "sessions" | "archived_sessions";
@@ -57,6 +64,13 @@ export interface ShellSnapshotFile {
 
 export interface SessionEntry {
   id: string;
+  displayTitle: string;
+  indexTitle: string | null;
+  sqliteTitle: string | null;
+  firstUserMessage: string | null;
+  titleSource: SessionTitleSource;
+  titleMismatch: boolean;
+  titleCandidates: SessionTitleCandidate[];
   title: string;
   kind: SessionKind;
   archived: boolean;

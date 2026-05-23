@@ -48,9 +48,21 @@ describe("mcp server", () => {
         },
       });
 
-      const sessions = result.structuredContent?.sessions as Array<{ id: string }>;
+      const sessions = result.structuredContent?.sessions as Array<{
+        id: string;
+        displayTitle: string;
+        sqliteTitle: string;
+        titleSource: string;
+        titleMismatch: boolean;
+      }>;
       const projects = result.structuredContent?.projectSummaries as Array<{ projectName: string; sessionCount: number }>;
       expect(sessions.map((session) => session.id)).toEqual([FIXTURE_IDS.ACTIVE_ID]);
+      expect(sessions[0]).toMatchObject({
+        displayTitle: "Active thread",
+        sqliteTitle: `Title ${FIXTURE_IDS.ACTIVE_ID}`,
+        titleSource: "session_index",
+        titleMismatch: true,
+      });
       expect(projects[0]).toMatchObject({ projectName: "demo", sessionCount: 1 });
     } finally {
       await client.close();

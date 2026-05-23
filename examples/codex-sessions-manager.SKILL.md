@@ -1,6 +1,6 @@
 ---
 name: codex-sessions-manager
-description: Use this skill when the user wants to inspect, search, export, verify, clean up, delete, restore, or purge local Codex sessions.
+description: Use this skill when the user wants to inspect, search, export, verify, clean up, delete, restore, or purge local Codex sessions, including auditing leftovers after Codex Desktop's built-in delete.
 ---
 
 # Codex Sessions Manager
@@ -34,7 +34,7 @@ For local development, use the repository from:
 <path-to-codex-sessions-repo>
 ```
 
-This Skill is for Codex session inspection and safety operations. It is not for generic chat history, non-Codex clients, or editing the current live conversation.
+This Skill is for Codex session inspection and safety operations. Codex Desktop has a built-in delete action for ordinary archived-chat deletion; this Skill is for local verification, exact ID cleanup, batch cleanup, trash/restore, and residue audits. It is not for generic chat history, non-Codex clients, or editing the current live conversation.
 
 ## Preferred Order
 
@@ -57,6 +57,8 @@ Prefer MCP tools when the `codex-sessions` MCP server is available:
 Use CLI only when MCP is unavailable or blocked.
 
 For Codex `/side` conversations, treat the parent thread and side child thread as separate sessions. Do not assume parent operations include side child transcripts. If the user wants both handled, identify the child session IDs first and include them in the preview or confirmed operation.
+
+For session titles, treat `displayTitle` as the default user-facing title. It prefers `session_index.jsonl.thread_name`, which is usually closest to Codex UI search. When showing one session in detail, include `indexTitle`, `sqliteTitle`, `firstUserMessage`, `titleSource`, `titleMismatch`, and `titleCandidates` if the tool returns them. Human-readable CLI output may shorten long title fields and timeline previews; use JSON/MCP output for full values.
 
 ## CLI Fallback
 

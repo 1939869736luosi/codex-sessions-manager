@@ -16,6 +16,8 @@ import type {
   SessionFileTarget,
   SessionIndexData,
   SessionIndexRecord,
+  SessionTitleCandidate,
+  SessionTitleSource,
 } from "./types.js";
 
 async function readOptionalText(filePath: string | null): Promise<string | null> {
@@ -191,6 +193,50 @@ function chooseSessionKind(hasFile: boolean, archived: boolean, hasThread: boole
   return "stale";
 }
 
+function normalizeTitle(value: string | null | undefined): string | null {
+  const normalized = value?.trim();
+  return normalized ? normalized : null;
+}
+
+function buildTitleMetadata(
+  id: string,
+  indexRecord: SessionIndexRecord | undefined,
+  thread: ScanResult["sqlite"]["threadsById"] extends Map<string, infer T> ? T | undefined : never,
+): Pick<
+  SessionEntry,
+  | "displayTitle"
+  | "indexTitle"
+  | "sqliteTitle"
+  | "firstUserMessage"
+  | "titleSource"
+  | "titleMismatch"
+  | "titleCandidates"
+  | "title"
+> {
+  const indexTitle = normalizeTitle(indexRecord?.thread_name);
+  const sqliteTitle = normalizeTitle(thread?.title);
+  const firstUserMessage = normalizeTitle(thread?.firstUserMessage);
+  const candidates: SessionTitleCandidate[] = [
+    indexTitle ? { source: "session_index", title: indexTitle } : null,
+    sqliteTitle ? { source: "sqlite", title: sqliteTitle } : null,
+    firstUserMessage ? { source: "first_user_message", title: firstUserMessage } : null,
+    { source: "id", title: id },
+  ].filter((candidate): candidate is SessionTitleCandidate => Boolean(candidate));
+  const preferred = candidates[0] ?? ({ source: "id", title: id } satisfies SessionTitleCandidate);
+  const titleMismatch = Boolean(indexTitle && sqliteTitle && indexTitle !== sqliteTitle);
+
+  return {
+    displayTitle: preferred.title,
+    indexTitle,
+    sqliteTitle,
+    firstUserMessage,
+    titleSource: preferred.source as SessionTitleSource,
+    titleMismatch,
+    titleCandidates: candidates,
+    title: preferred.title,
+  };
+}
+
 function buildSession(
   id: string,
   fileTargets: SessionFileTarget[],
@@ -206,7 +252,7 @@ function buildSession(
       (fileTargets.length > 0 && fileTargets.every((target) => target.bucket === "archived_sessions")) ||
       thread?.rolloutPath?.includes("/archived_sessions/"),
   );
-  const title = (thread?.title || indexRecord?.thread_name || thread?.firstUserMessage || id).trim();
+  const titleMetadata = buildTitleMetadata(id, indexRecord, thread);
   const createdAt = formatIsoFromUnix(thread?.createdAt ?? null);
   const updatedAt =
     formatIsoFromUnix(thread?.updatedAt ?? null) ||
@@ -224,7 +270,7 @@ function buildSession(
 
   return {
     id,
-    title,
+    ...titleMetadata,
     kind,
     archived,
     projectPath: project.projectPath,

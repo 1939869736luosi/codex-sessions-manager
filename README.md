@@ -5,13 +5,13 @@
 
 [简体中文](./README.zh-CN.md)
 
-> Codex has no built-in way to delete sessions. Archive ≠ delete. Your `~/.codex` grows forever.
+> Codex Desktop now includes a delete action for archived chats. Local testing shows that it removes the main session file and some thread rows, but may still leave session index rows, execution logs, and desktop state references behind.
 
-**codex-sessions-manager** is the most thorough local Codex session cleanup tool available. It works as a **Skill** (Claude Code / Codex), a **CLI**, and an **MCP server** — all sharing the same core. It doesn't just delete files — it cleans all four storage layers, rolls back on failure, and lets AI agents manage sessions directly.
+**codex-sessions-manager** is a local Codex session audit and cleanup tool. It works as a **Skill** (Claude Code / Codex), a **CLI**, and an **MCP server** — all sharing the same core. Use it to inspect what remains under `~/.codex`, clean hidden local residues, batch-delete by session ID, and verify that deletion actually left no local orphans.
 
 ## Why this one?
 
-Other tools delete a SQLite row or remove some files and call it done. This tool does more:
+Codex Desktop's built-in delete is the right first stop for ordinary archived-chat cleanup. This tool is for the harder local cases: proving what remains after deletion, cleaning orphaned records, handling exact session IDs, and giving agents a safe way to manage local history.
 
 | | codex-sessions-manager | Others |
 |--|:---:|:---:|
@@ -69,8 +69,10 @@ After deletion, run `verify` to confirm zero orphans remain.
 | Feature | What it does |
 |---------|-------------|
 | **List & filter** | By project, status, time range; group by project |
+| **Split title sources** | Lists show the Codex UI-searchable title by default; detail output shows `session_index`, SQLite, and first-message title differences |
 | **Export** | Backup any session to JSON before you touch it |
 | **Delete** | Permanent or recoverable trash — your choice |
+| **Post-delete audit** | Check what Codex Desktop's built-in delete left behind |
 | **Trash & Restore** | Full snapshot saved; restore checks for SQLite key conflicts before writing |
 | **Verify** | Reports any remaining files, index rows, or DB records |
 | **Cleanup** | Remove stale index entries without touching raw data |
@@ -118,7 +120,23 @@ codex-sessions verify <session-id...> [--json]
 
 **Safety first**: All destructive commands require `--yes`. Without it, you only get a preview.
 
+## Session Titles
+
+A local Codex session can have multiple title sources:
+
+- `displayTitle`: the default title shown in lists, preferred from `session_index.jsonl.thread_name`, and usually closest to what Codex UI search can find.
+- `indexTitle`: the title from `session_index.jsonl`.
+- `sqliteTitle`: the `threads.title` value from `state_N.sqlite`, which can be an older internal long title.
+- `firstUserMessage`: the first user request.
+- `titleSource`: where the current display title came from.
+- `titleMismatch`: whether title sources disagree.
+- `titleCandidates`: all candidate titles.
+
+`list` and search results show `displayTitle` by default. Human-readable `show` prints shortened `sqliteTitle`, `firstUserMessage`, title candidates, and timeline preview so title drift is visible without dumping large transcript-like text. Use `show --json` when you need the full values and full timeline.
+
 ## What Codex stores (and what we clean)
+
+When Codex Desktop deletes an archived chat, it may already remove some of these surfaces. `verify` reports what is still present; `delete --yes` or `cleanup-index --yes` can remove the remaining local records when you intentionally choose to do so.
 
 ```
 ~/.codex/

@@ -5,13 +5,13 @@
 
 [English](./README.md)
 
-> Codex 没有删除会话的功能。归档 ≠ 删除。你的 `~/.codex` 只会越来越大。
+> Codex Desktop 现在已经有归档聊天删除入口。实测中，它会删除主会话文件和部分 thread 记录，但仍可能留下索引、执行日志和桌面状态引用。
 
-**codex-sessions-manager** 是目前最彻底的本地 Codex 会话清理工具。它同时是 **Skill**（Claude Code / Codex 可直接调用）、**CLI** 和 **MCP Server**——三种形态共享同一套核心逻辑。不只是删文件——四层存储全清、失败自动回滚、AI Agent 可直接调用。
+**codex-sessions-manager** 是本地 Codex 会话审计和清理工具。它同时是 **Skill**（Claude Code / Codex 可直接调用）、**CLI** 和 **MCP Server**——三种形态共享同一套核心逻辑。它用来检查 `~/.codex` 里还剩什么、清理隐藏残留、按 session ID 批量处理，并验证删除后是否真的没有本机孤儿记录。
 
 ## 为什么选这个？
 
-其他工具删个 SQLite 行或者删几个文件就完事了。这个工具不一样：
+普通归档聊天优先用 Codex Desktop 官方删除入口。这个工具面向更难的本机场景：官方删完后验残留、清理孤儿记录、按精确 session ID 处理，以及让 AI Agent 安全管理本地历史。
 
 | | codex-sessions-manager | 其他工具 |
 |--|:---:|:---:|
@@ -69,8 +69,10 @@ codex-sessions verify <session-id>
 | 功能 | 说明 |
 |------|------|
 | **列出 & 筛选** | 按项目、状态、时间范围筛选；按项目分组 |
+| **标题来源拆分** | 列表默认显示 Codex UI 可搜标题；详情显示 `session_index`、SQLite 和首条请求的标题差异 |
 | **导出** | 删之前先备份为 JSON |
 | **删除** | 永久删除或放入回收站，你选 |
+| **删除后审计** | 检查 Codex Desktop 官方删除后还留下什么 |
 | **回收站 & 恢复** | 完整快照保存；恢复时检查 SQLite 主键冲突 |
 | **验证** | 报告是否还有残留文件、索引行、数据库记录 |
 | **清理索引** | 移除失效索引条目，不动原始数据 |
@@ -118,7 +120,23 @@ codex-sessions verify <session-id...> [--json]
 
 **安全第一**：所有破坏性命令需要 `--yes` 才执行，不加只看预览。
 
+## 标题怎么看
+
+Codex 本地会话可能同时有多个标题：
+
+- `displayTitle`：默认展示标题，优先来自 `session_index.jsonl.thread_name`，更接近 Codex UI 里能搜到的标题。
+- `indexTitle`：`session_index.jsonl` 里的标题。
+- `sqliteTitle`：`state_N.sqlite` 的 `threads.title`，可能是旧的内部长标题。
+- `firstUserMessage`：第一条用户请求。
+- `titleSource`：当前展示标题来自哪里。
+- `titleMismatch`：这些来源是否出现不一致。
+- `titleCandidates`：所有候选标题。
+
+`list` 和搜索结果默认显示 `displayTitle`。人类可读的 `show` 会用短摘要列出 `sqliteTitle`、`firstUserMessage`、所有候选标题和时间线预览，方便确认标题分裂问题，同时避免刷出大段正文。需要完整值和完整时间线时用 `show --json`。
+
 ## Codex 存了什么（我们清理什么）
+
+Codex Desktop 删除归档聊天时，可能已经清掉其中一部分。`verify` 会告诉你还剩什么；确认要清理时，再用 `delete --yes` 或 `cleanup-index --yes` 处理残留。
 
 ```
 ~/.codex/

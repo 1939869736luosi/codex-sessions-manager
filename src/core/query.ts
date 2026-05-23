@@ -140,12 +140,17 @@ export function filterSessions(scan: ScanResult, options: ListSessionsOptions = 
       }
 
       const haystack = [
+        session.displayTitle,
+        session.indexTitle ?? "",
+        session.sqliteTitle ?? "",
+        session.firstUserMessage ?? "",
         session.title,
         session.id,
         session.cwd ?? "",
         session.rolloutPath ?? "",
         session.previewSummary,
         ...session.historyPreview,
+        ...session.titleCandidates.map((candidate) => candidate.title),
       ]
         .join(" ")
         .toLowerCase();
@@ -185,6 +190,13 @@ export function resolveSessions(scan: ScanResult, sessionIds: string[]): Session
       const id = residualExact ?? residualPrefixed[0];
       return {
         id,
+        displayTitle: id,
+        indexTitle: null,
+        sqliteTitle: null,
+        firstUserMessage: null,
+        titleSource: "id",
+        titleMismatch: false,
+        titleCandidates: [{ source: "id", title: id }],
         title: id,
         kind: "stale",
         archived: false,

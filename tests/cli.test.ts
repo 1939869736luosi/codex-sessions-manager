@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { readFile } from "node:fs/promises";
+import { appendFile, readFile } from "node:fs/promises";
+import Database from "better-sqlite3";
 
 import { runCli } from "../src/cli/run.js";
 import { createFixture, FIXTURE_IDS, type Fixture } from "./helpers/fixture.js";
@@ -35,6 +36,66 @@ describe("cli", () => {
     expect(exitCode).toBe(0);
     expect(capture.stdout.join("\n")).toContain("状态");
     expect(capture.stdout.join("\n")).toContain(FIXTURE_IDS.ACTIVE_ID);
+    expect(capture.stdout.join("\n")).toContain("Active thread");
+    expect(capture.stdout.join("\n")).not.toContain(`Title ${FIXTURE_IDS.ACTIVE_ID}`);
+  });
+
+  it("shows title source details in show output", async () => {
+    const capture = createIo();
+    const exitCode = await runCli(["show", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir], capture.io);
+    const output = capture.stdout.join("\n");
+
+    expect(exitCode).toBe(0);
+    expect(output).toContain("标题: Active thread");
+    expect(output).toContain("标题来源: session_index");
+    expect(output).toContain("标题不一致: 是");
+    expect(output).toContain(`session_index 标题: Active thread`);
+    expect(output).toContain(`SQLite 标题: Title ${FIXTURE_IDS.ACTIVE_ID}`);
+    expect(output).toContain("第一条用户请求: active input");
+  });
+
+  it("truncates long title metadata in human-readable show output", async () => {
+    const longSqliteTitle = `sqlite-title-start ${"x".repeat(260)} sqlite-title-end`;
+    const longFirstUserMessage = `first-message-start ${"y".repeat(260)} first-message-end`;
+    const db = new Database(fixture.paths.sqlite);
+    db.prepare("update threads set title = ?, first_user_message = ? where id = ?").run(
+      longSqliteTitle,
+      longFirstUserMessage,
+      FIXTURE_IDS.ACTIVE_ID,
+    );
+    db.close();
+
+    const capture = createIo();
+    const exitCode = await runCli(["show", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir], capture.io);
+    const output = capture.stdout.join("\n");
+
+    expect(exitCode).toBe(0);
+    expect(output).toContain("SQLite 标题: sqlite-title-start");
+    expect(output).toContain("第一条用户请求: first-message-start");
+    expect(output).toContain("chars)");
+    expect(output).not.toContain("sqlite-title-end");
+    expect(output).not.toContain("first-message-end");
+  });
+
+  it("limits human-readable timeline preview in show output", async () => {
+    const extraRows = Array.from({ length: 25 }, (_, index) =>
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-04-03T04:00:00.000Z",
+        payload: { type: "user_message", message: `extra timeline row ${index}` },
+      }),
+    ).join("\n");
+    await appendFile(fixture.paths.activeSessionFile, `${extraRows}\n`, "utf8");
+
+    const capture = createIo();
+    const exitCode = await runCli(["show", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir], capture.io);
+    const output = capture.stdout.join("\n");
+
+    expect(exitCode).toBe(0);
+    expect(output).toContain("还有");
+    expect(output).toContain("show --json");
+    expect(output).toContain("extra timeline row 18");
+    expect(output).not.toContain("extra timeline row 19");
   });
 
   it("lists sessions with project and updated date filters", async () => {

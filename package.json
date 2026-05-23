@@ -1,7 +1,7 @@
 {
   "name": "codex-sessions-manager",
   "version": "0.3.2",
-  "description": "Complete local Codex session management: list, filter, export, delete, trash, restore, verify, and cleanup — via CLI or MCP server.",
+  "description": "Audit and clean local Codex session leftovers: list, export, delete, trash, restore, verify, and cleanup — via CLI or MCP server.",
   "type": "module",
   "bin": {
     "codex-sessions": "dist/cli/index.js",

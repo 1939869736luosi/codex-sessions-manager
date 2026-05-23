@@ -2,6 +2,8 @@
 
 `codex-sessions` is a local Codex session management toolkit. It provides a CLI and a stdio MCP server for inspecting, listing, exporting, verifying, deleting, moving to trash, restoring, purging, and diagnosing local Codex sessions.
 
+Codex Desktop has its own delete action for archived chats. Use that for ordinary UI-driven deletion. Use this toolkit when you need to verify local leftovers, clean exact session IDs, inspect hidden storage, or perform recoverable/batch cleanup.
+
 It is not a UI product and does not include a TUI, detail page, incremental project scanner, automatic stale cleanup, or automatic trash purge.
 
 ## Root Selection
