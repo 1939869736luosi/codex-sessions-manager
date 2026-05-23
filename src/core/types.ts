@@ -405,6 +405,7 @@ export interface RootResidueFilters {
 
 export interface RootResidueAudit {
   rootPath: string;
+  safetyNotice: string;
   filters: RootResidueFilters;
   totalCandidatesBeforeFilter: number;
   totalCandidatesAfterFilter: number;
@@ -447,11 +448,13 @@ export interface RootDeletePreviewCandidate {
   previewCounts: RootDeletePreviewCounts;
   familyWarnings: DeleteFamilyWarning[];
   recommendedAuditCommand: string;
+  previewOnlyCommand: string;
   recommendedPreviewCommand: string;
 }
 
 export interface RootDeletePreview {
   rootPath: string;
+  safetyNotice: string;
   filters: RootResidueFilters;
   totalCandidatesBeforeFilter: number;
   totalCandidatesAfterFilter: number;

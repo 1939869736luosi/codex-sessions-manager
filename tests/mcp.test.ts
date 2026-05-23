@@ -464,6 +464,7 @@ describe("mcp server", () => {
           previewCounts: { possibleUnknownGlobalStateRefs: number };
           familyWarnings: unknown[];
           recommendedAuditCommand: string;
+          previewOnlyCommand: string;
           recommendedPreviewCommand: string;
         }>;
         warnings: string[];
@@ -490,6 +491,7 @@ describe("mcp server", () => {
         familyWarnings: [],
       });
       expect(preview.candidates[0].recommendedAuditCommand).not.toContain("--yes");
+      expect(preview.candidates[0].previewOnlyCommand).not.toContain("--yes");
       expect(preview.candidates[0].recommendedPreviewCommand).not.toContain("--yes");
       expect(preview.warnings).toEqual([]);
       await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
@@ -536,7 +538,7 @@ describe("mcp server", () => {
         totalCandidatesAfterFilter: number;
         previewedCandidates: number;
         omittedCandidates: number;
-        candidates: Array<{ sessionId: string; recommendedPreviewCommand: string }>;
+        candidates: Array<{ sessionId: string; previewOnlyCommand: string; recommendedPreviewCommand: string }>;
       };
 
       expect(preview.filters.statuses).toEqual(["db-only", "risky-global-state"]);
@@ -548,6 +550,7 @@ describe("mcp server", () => {
       expect(preview.candidates.map((candidate) => candidate.sessionId).sort()).toEqual(
         [unknownGlobalId, dbOnlyId].sort(),
       );
+      expect(preview.candidates.every((candidate) => !candidate.previewOnlyCommand.includes("--yes"))).toBe(true);
       expect(preview.candidates.every((candidate) => !candidate.recommendedPreviewCommand.includes("--yes"))).toBe(true);
     } finally {
       await client.close();

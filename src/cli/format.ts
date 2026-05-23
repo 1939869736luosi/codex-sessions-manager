@@ -554,6 +554,33 @@ function formatRootPreviewCounts(counts: RootDeletePreviewCounts): string {
   ].join(", ");
 }
 
+function formatRootSourceLabel(source: string): string {
+  switch (source) {
+    case "rollout_files":
+      return "rollout 文件";
+    case "shell_snapshots":
+      return "shell snapshot";
+    case "session_index":
+      return "session_index";
+    case "history":
+      return "history";
+    case "sqlite":
+      return "SQLite";
+    case "global_state_known":
+      return "已知 global-state";
+    case "global_state_unknown":
+      return "未知 global-state";
+    case "thread_spawn_edges":
+      return "thread_spawn_edges（parent/child 关系边）";
+    default:
+      return source;
+  }
+}
+
+function formatRootSources(sources: string[]): string {
+  return sources.length ? sources.map(formatRootSourceLabel).join(",") : "-";
+}
+
 function formatRootPreviewFamilyWarning(candidate: RootDeletePreviewCandidate): string {
   const warningCount = candidate.familyWarnings.length;
   const missingParents = candidate.familyWarnings.reduce((sum, warning) => sum + warning.missingParentIds.length, 0);
@@ -577,25 +604,26 @@ function formatRootResidueFamily(candidate: RootResidueAudit["candidates"][numbe
 function formatRootResidueFilters(audit: RootResidueAudit): string {
   const parts = [
     audit.filters.statuses.length ? `status=${audit.filters.statuses.join("|")}` : null,
-    audit.filters.sources.length ? `source=${audit.filters.sources.join("|")}` : null,
+    audit.filters.sources.length ? `source=${audit.filters.sources.map(formatRootSourceLabel).join("|")}` : null,
     audit.filters.includeAll ? "all=true" : null,
   ].filter((part): part is string => Boolean(part));
 
   return parts.length ? parts.join(", ") : "无";
 }
 
-function formatCountLines(counts: Record<string, number>): string[] {
+function formatCountLines(counts: Record<string, number>, formatKey: (key: string) => string = (key) => key): string[] {
   const entries = Object.entries(counts);
   if (entries.length === 0) {
     return ["- 无"];
   }
 
-  return entries.map(([key, value]) => `- ${key}: ${value}`);
+  return entries.map(([key, value]) => `- ${formatKey(key)}: ${value}`);
 }
 
 function formatRootResidueSummary(audit: RootResidueAudit): string[] {
   return [
     `Root: ${audit.rootPath}`,
+    `注意: ${audit.safetyNotice}`,
     `疑似残留: ${audit.returnedCandidates}/${audit.totalCandidatesAfterFilter}，limit=${audit.limit}`,
     `筛选前候选: ${audit.totalCandidatesBeforeFilter}`,
     `筛选: ${formatRootResidueFilters(audit)}`,
@@ -604,7 +632,7 @@ function formatRootResidueSummary(audit: RootResidueAudit): string[] {
     ...formatCountLines(audit.byStatus),
     "",
     "按来源（筛选后，limit 前）:",
-    ...formatCountLines(audit.bySource),
+    ...formatCountLines(audit.bySource, formatRootSourceLabel),
   ];
 }
 
@@ -627,7 +655,7 @@ export function formatRootResidueAudit(audit: RootResidueAudit): string {
       ["状态", "来源", "数量摘要", "family", "session id", "建议 audit 命令"],
       ...audit.candidates.map((candidate) => [
         candidate.statuses.join(","),
-        candidate.sources.join(",") || "-",
+        formatRootSources(candidate.sources),
         formatRootResidueCounts(candidate),
         formatRootResidueFamily(candidate),
         candidate.sessionId,
@@ -641,7 +669,7 @@ export function formatRootResidueAudit(audit: RootResidueAudit): string {
 function formatRootDeletePreviewFilters(preview: RootDeletePreview): string {
   const parts = [
     preview.filters.statuses.length ? `status=${preview.filters.statuses.join("|")}` : null,
-    preview.filters.sources.length ? `source=${preview.filters.sources.join("|")}` : null,
+    preview.filters.sources.length ? `source=${preview.filters.sources.map(formatRootSourceLabel).join("|")}` : null,
     preview.filters.includeAll ? "all=true" : null,
   ].filter((part): part is string => Boolean(part));
 
@@ -668,11 +696,11 @@ export function formatRootDeletePreview(preview: RootDeletePreview): string {
     ? [
         "",
         printTable([
-          ["session id", "statuses", "sources", "preview counts", "family warning", "建议 audit 命令"],
+          ["session id", "statuses", "sources", "只读预览计数", "family warning", "建议 audit 命令"],
           ...preview.candidates.map((candidate) => [
             candidate.sessionId,
             candidate.statuses.join(","),
-            candidate.sources.join(",") || "-",
+            formatRootSources(candidate.sources),
             formatRootPreviewCounts(candidate.previewCounts),
             formatRootPreviewFamilyWarning(candidate),
             candidate.recommendedAuditCommand,
@@ -684,6 +712,7 @@ export function formatRootDeletePreview(preview: RootDeletePreview): string {
   return [
     "root 批量 delete preview（只读，未删除）",
     `Root: ${preview.rootPath}`,
+    `注意: ${preview.safetyNotice}`,
     `筛选条件: ${formatRootDeletePreviewFilters(preview)}`,
     `匹配候选数: ${preview.totalCandidatesAfterFilter}`,
     `筛选前候选数: ${preview.totalCandidatesBeforeFilter}`,
@@ -699,7 +728,7 @@ export function formatRootDeletePreview(preview: RootDeletePreview): string {
     `- SQLite: ${preview.aggregatePreview.sqliteRows}`,
     `- known global-state: ${preview.aggregatePreview.knownGlobalStateRefs}`,
     `- unknown global-state: ${preview.aggregatePreview.possibleUnknownGlobalStateRefs}`,
-    `- thread_spawn_edges: ${preview.aggregatePreview.threadSpawnEdges}`,
+    `- thread_spawn_edges（parent/child 关系边）: ${preview.aggregatePreview.threadSpawnEdges}`,
     "",
     ...formatFamilyWarningSummary(preview),
     ...candidateRows,

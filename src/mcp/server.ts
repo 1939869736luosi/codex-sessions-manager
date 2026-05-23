@@ -208,7 +208,7 @@ export function createServer(): McpServer {
     "audit_root",
     {
       description:
-        "Read-only scan of a Codex root for likely local residue candidates without requiring a session id.",
+        "Read-only scan of a Codex root for likely local residue candidates without requiring a session id. Candidates are not deletion recommendations.",
       outputSchema: TOOL_OUTPUT_SCHEMA,
       inputSchema: z.object({
         root: z.string().optional().describe("Optional explicit path to the .codex root."),
@@ -233,7 +233,7 @@ export function createServer(): McpServer {
       return textResult(
         audit.totalCandidatesAfterFilter === 0
           ? `No likely residue candidates found in ${audit.rootPath}.`
-          : `Found ${audit.totalCandidatesAfterFilter} likely residue candidates in ${audit.rootPath}.`,
+          : `Found ${audit.totalCandidatesAfterFilter} likely residue candidates in ${audit.rootPath}. These are not deletion recommendations.`,
         audit as unknown as Record<string, unknown>,
       );
     },
@@ -243,7 +243,7 @@ export function createServer(): McpServer {
     "preview_root_delete",
     {
       description:
-        "Read-only batch delete preview for candidates selected by audit_root filters. It never deletes and never recursively selects parent/child/family sessions.",
+        "Read-only batch delete preview for candidates selected by audit_root filters. It never deletes, never recommends deletion, and never recursively selects parent/child/family sessions.",
       outputSchema: TOOL_OUTPUT_SCHEMA,
       inputSchema: z.object({
         root: z.string().optional().describe("Optional explicit path to the .codex root."),
@@ -266,7 +266,7 @@ export function createServer(): McpServer {
         sources: typeof source === "string" ? [source] : source,
       });
       return textResult(
-        `Prepared read-only root delete preview for ${preview.previewedCandidates} of ${preview.totalCandidatesAfterFilter} matching candidates.`,
+        `Prepared read-only root delete preview for ${preview.previewedCandidates} of ${preview.totalCandidatesAfterFilter} matching candidates. No session was deleted or recommended for deletion.`,
         preview as unknown as Record<string, unknown>,
       );
     },

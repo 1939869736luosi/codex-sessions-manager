@@ -463,6 +463,7 @@ describe("cli", () => {
         sources: string[];
         previewCounts: { sessionIndexRows: number; shellSnapshots: number };
         recommendedAuditCommand: string;
+        previewOnlyCommand: string;
         recommendedPreviewCommand: string;
       }>;
       warnings: string[];
@@ -470,6 +471,8 @@ describe("cli", () => {
 
     expect(humanExitCode).toBe(0);
     expect(humanOutput).toContain("root 批量 delete preview（只读，未删除）");
+    expect(humanOutput).toContain("候选不是删除清单");
+    expect(humanOutput).toContain("没有建议删除任何 session");
     expect(humanOutput).toContain("Root:");
     expect(humanOutput).toContain("筛选条件");
     expect(humanOutput).toContain("匹配候选数");
@@ -502,8 +505,10 @@ describe("cli", () => {
     expect(result.familyWarningSummary.candidatesWithFamilyWarnings).toBe(0);
     expect(result.candidates).toHaveLength(1);
     expect(result.candidates[0].recommendedAuditCommand).toContain("codex-sessions audit");
+    expect(result.candidates[0].previewOnlyCommand).toContain("codex-sessions delete");
     expect(result.candidates[0].recommendedPreviewCommand).toContain("codex-sessions delete");
     expect(result.candidates[0].recommendedAuditCommand).not.toContain("--yes");
+    expect(result.candidates[0].previewOnlyCommand).not.toContain("--yes");
     expect(result.candidates[0].recommendedPreviewCommand).not.toContain("--yes");
     expect(result.warnings).toEqual([]);
     await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
@@ -555,7 +560,7 @@ describe("cli", () => {
       totalCandidatesAfterFilter: number;
       previewedCandidates: number;
       omittedCandidates: number;
-      candidates: Array<{ sessionId: string; recommendedPreviewCommand: string }>;
+      candidates: Array<{ sessionId: string; previewOnlyCommand: string; recommendedPreviewCommand: string }>;
     };
 
     expect(exitCode).toBe(0);
@@ -566,6 +571,7 @@ describe("cli", () => {
     expect(result.previewedCandidates).toBe(1);
     expect(result.omittedCandidates).toBe(1);
     expect([unknownGlobalId, dbOnlyId]).toContain(result.candidates[0].sessionId);
+    expect(result.candidates[0].previewOnlyCommand).not.toContain("--yes");
     expect(result.candidates[0].recommendedPreviewCommand).not.toContain("--yes");
   });
 

@@ -19,6 +19,9 @@ import type {
 } from "./types.js";
 
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const ROOT_AUDIT_SAFETY_NOTICE = "候选不是删除清单；每条候选只说明需要继续核验，不能直接当成应该删除。";
+export const ROOT_PREVIEW_SAFETY_NOTICE =
+  "候选不是删除清单；这是只读预览，不会删除，也没有建议删除任何 session；真正删除必须另行指定 ID 并显式确认。";
 const ROOT_RESIDUE_STATUS_VALUES = new Set<RootResidueCandidateStatus>([
   "absent",
   "clean",
@@ -710,6 +713,7 @@ export function buildRootResidueAudit(
 
   return {
     rootPath: scan.root.rootPath,
+    safetyNotice: ROOT_AUDIT_SAFETY_NOTICE,
     filters,
     totalCandidatesBeforeFilter: candidatesBeforeFilter.length,
     totalCandidatesAfterFilter: candidates.length,
@@ -742,6 +746,8 @@ export function buildRootDeletePreview(
       throw new Error(`无法生成 preview：缺少候选 ${candidate.sessionId}。`);
     }
 
+    const previewOnlyCommand = buildRecommendedPreviewCommand(scan, candidate.sessionId);
+
     return {
       sessionId: candidate.sessionId,
       statuses: candidate.statuses,
@@ -749,12 +755,14 @@ export function buildRootDeletePreview(
       previewCounts: toPreviewCounts(previewItem),
       familyWarnings: warningsForSession(preview, candidate.sessionId),
       recommendedAuditCommand: candidate.recommendedAuditCommand,
-      recommendedPreviewCommand: buildRecommendedPreviewCommand(scan, candidate.sessionId),
+      previewOnlyCommand,
+      recommendedPreviewCommand: previewOnlyCommand,
     };
   });
 
   return {
     rootPath: audit.rootPath,
+    safetyNotice: ROOT_PREVIEW_SAFETY_NOTICE,
     filters: audit.filters,
     totalCandidatesBeforeFilter: audit.totalCandidatesBeforeFilter,
     totalCandidatesAfterFilter: audit.totalCandidatesAfterFilter,

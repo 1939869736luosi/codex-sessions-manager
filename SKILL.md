@@ -98,8 +98,8 @@ If the `codex-sessions` MCP server is available in the current agent session, us
 - `get_session`
 - `get_session_family` (read-only session family inspection)
 - `audit_session` (read-only residue audit)
-- `audit_root` (read-only root residue scan)
-- `preview_root_delete` (read-only root delete preview)
+- `audit_root` (read-only root residue scan; candidates are not deletion recommendations)
+- `preview_root_delete` (read-only root delete preview; never deletes and never recommends deletion)
 - `export_session_backup`
 - `preview_delete_sessions`
 - `delete_sessions` (requires `confirm=true` to execute; pass `trash=true` for recoverable deletion)
@@ -219,8 +219,8 @@ node dist/cli/index.js verify <session-id...> --root <path-to-codex-root>
 - `get_session_family` and CLI `family` are read-only. They do not delete, export, restore, or select related sessions automatically.
 - `audit_session` and CLI `audit` are read-only. They report local residue after official UI delete/archive actions and must not rewrite files, SQLite, shell snapshots, or global state.
 - `audit_root` and CLI `audit-root` are read-only. They scan for likely residue candidates across a Codex root and must not delete, rewrite, or select parent/child sessions automatically.
-- `audit_root` / `audit-root` status and source filters only narrow displayed candidates. Multiple statuses or multiple sources use OR; combining status and source uses AND. A matching candidate still needs per-session audit or delete preview before any cleanup decision.
-- `preview_root_delete` and CLI `preview-root` are read-only. They reuse `audit-root` filters to build a batch delete preview, but do not delete, do not rewrite JSONL, SQLite, shell snapshots, or global state, do not accept `--yes`, and do not recursively select parent, child, or family sessions.
+- `audit_root` / `audit-root` status and source filters only narrow displayed candidates. Multiple statuses or multiple sources use OR; combining status and source uses AND. A matching candidate is not a deletion list entry or deletion recommendation; it still needs per-session audit or read-only preview before any cleanup decision.
+- `preview_root_delete` and CLI `preview-root` are read-only. They reuse `audit-root` filters to build a batch delete preview, but do not delete, do not rewrite JSONL, SQLite, shell snapshots, or global state, do not accept `--yes`, do not recommend deleting any session, and do not recursively select parent, child, or family sessions.
 - A `preview-root` result is not a deletion recommendation. Actual deletion requires the user to run `delete ... --yes` explicitly.
 - Delete previews warn when selected sessions have unselected parent, child, or family sessions, and when relationship edges point at missing sessions or missing file/index surfaces.
 - CLI `delete` without `--yes` is preview-only.
@@ -262,8 +262,8 @@ When a user asks about side conversations:
 - For family requests: distinguish current session, root, parent IDs, child IDs, relationship status, archived state, file existence, short `source` label, and source metadata. Human CLI output shows compact `source` labels; JSON/MCP output keeps the full raw `source` field. Report broken relationship warnings clearly. Say clearly that the action covers only explicitly selected session IDs.
 - For side-conversation requests: distinguish parent thread ID and child thread ID, and say whether the requested action covers one or both.
 - For audit requests: report the overall status, each residue surface count, family summary, warnings, and the preview-only next command. Say clearly that audit does not delete anything and that parent/child sessions are not handled recursively.
-- For root residue requests: use MCP `audit_root` or CLI `audit-root`. Report `filters`, `totalCandidatesBeforeFilter`, `totalCandidatesAfterFilter`, `returnedCandidates`, limit, `byStatus`, `bySource`, session IDs, status labels, residue source counts, family/broken-family state, and the recommended per-session audit command. Do not print chat content. Say clearly that root scans do not delete anything, filtered candidates are not automatically safe to delete, and parent/child sessions are not handled recursively.
-- For root delete preview requests: use MCP `preview_root_delete` or CLI `preview-root`. Report filters, candidate totals before and after filters, previewed and omitted counts, aggregate preview counts, family warning summary, each candidate ID, statuses, sources, preview counts, family warning state, and recommended single-session audit/preview commands. Say clearly that it is read-only, does not delete, does not recurse through family, and does not prove the candidates should be deleted.
+- For root residue requests: use MCP `audit_root` or CLI `audit-root`. Report `filters`, `totalCandidatesBeforeFilter`, `totalCandidatesAfterFilter`, `returnedCandidates`, limit, `byStatus`, `bySource`, session IDs, status labels, residue source counts, family/broken-family state, and the recommended per-session audit command. Do not print chat content. Say clearly that root scans do not delete anything, candidates are not a deletion list, filtered candidates are not automatically safe to delete, and parent/child sessions are not handled recursively.
+- For root delete preview requests: use MCP `preview_root_delete` or CLI `preview-root`. Report filters, candidate totals before and after filters, previewed and omitted counts, aggregate preview counts, family warning summary, each candidate ID, statuses, sources, preview counts, family warning state, and recommended single-session audit/preview commands. Say clearly that it is read-only, does not delete, does not recommend deleting any session, does not recurse through family, and does not prove the candidates should be deleted.
 - For delete requests: explain whether this is preview-only, permanent delete, or recoverable trash delete.
 - For trash requests: distinguish moved to trash, restored, and purged.
 - For restore conflicts: explain that the live session already exists and identify conflicting surfaces when available.

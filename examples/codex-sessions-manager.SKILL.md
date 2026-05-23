@@ -46,8 +46,8 @@ Prefer MCP tools when the `codex-sessions` MCP server is available:
 - `get_session`
 - `get_session_family` (read-only session family inspection)
 - `audit_session` (read-only residue audit)
-- `audit_root` (read-only root residue scan)
-- `preview_root_delete` (read-only root delete preview)
+- `audit_root` (read-only root residue scan; candidates are not deletion recommendations)
+- `preview_root_delete` (read-only root delete preview; never deletes and never recommends deletion)
 - `export_session_backup`
 - `preview_delete_sessions`
 - `delete_sessions`
@@ -146,8 +146,8 @@ node dist/cli/index.js verify <session-id> --root <path-to-codex-root>
 - `get_session_family` and CLI `family` are read-only. They do not delete, export, restore, or select related sessions automatically.
 - `audit_session` and CLI `audit` are read-only. They report local residue after official UI delete/archive actions and must not rewrite files, SQLite, shell snapshots, or global state.
 - `audit_root` and CLI `audit-root` are read-only. They scan for likely residue candidates across a Codex root and must not delete, rewrite, or select parent/child sessions automatically.
-- `audit_root` / `audit-root` status and source filters only narrow displayed candidates. Multiple statuses or multiple sources use OR; combining status and source uses AND. A matching candidate still needs per-session audit or delete preview before any cleanup decision.
-- `preview_root_delete` and CLI `preview-root` are read-only. They reuse `audit-root` filters to build a batch delete preview, but do not delete, do not rewrite JSONL, SQLite, shell snapshots, or global state, do not accept `--yes`, and do not recursively select parent, child, or family sessions.
+- `audit_root` / `audit-root` status and source filters only narrow displayed candidates. Multiple statuses or multiple sources use OR; combining status and source uses AND. A matching candidate is not a deletion list entry or deletion recommendation; it still needs per-session audit or read-only preview before any cleanup decision.
+- `preview_root_delete` and CLI `preview-root` are read-only. They reuse `audit-root` filters to build a batch delete preview, but do not delete, do not rewrite JSONL, SQLite, shell snapshots, or global state, do not accept `--yes`, do not recommend deleting any session, and do not recursively select parent, child, or family sessions.
 - A `preview-root` result is not a deletion recommendation. Actual deletion requires the user to run `delete ... --yes` explicitly.
 - Delete previews warn when selected sessions have unselected parent, child, or family sessions, and when relationship edges point at missing sessions or missing file/index surfaces.
 - `delete` without `--yes` is preview-only.
