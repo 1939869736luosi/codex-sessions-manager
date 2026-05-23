@@ -55,6 +55,8 @@ describe("mcp server", () => {
         sqliteTitle: string;
         titleSource: string;
         titleMismatch: boolean;
+        sourceKind: string;
+        modelProvider: string;
       }>;
       const projects = result.structuredContent?.projectSummaries as Array<{ projectName: string; sessionCount: number }>;
       expect(sessions.map((session) => session.id)).toEqual([FIXTURE_IDS.ACTIVE_ID]);
@@ -63,8 +65,95 @@ describe("mcp server", () => {
         sqliteTitle: `Title ${FIXTURE_IDS.ACTIVE_ID}`,
         titleSource: "session_index",
         titleMismatch: true,
+        sourceKind: "cli",
+        modelProvider: "openai",
       });
       expect(projects[0]).toMatchObject({ projectName: "demo", sessionCount: 1 });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("lists sessions through MCP with source and model filters", async () => {
+    const { client, server } = await createConnectedClient();
+
+    try {
+      const result = await client.callTool({
+        name: "list_sessions",
+        arguments: {
+          root: fixture.rootDir,
+          sourceKind: "subagent",
+          source: "side",
+          threadSource: "side",
+          agentRole: "subagent",
+          agentNickname: "helper",
+          modelProvider: "sub2api",
+          model: "gpt-5.4",
+        },
+      });
+
+      const sessions = result.structuredContent?.sessions as Array<{
+        id: string;
+        sourceKind: string;
+        source: string;
+        threadSource: string;
+        modelProvider: string;
+      }>;
+      expect(sessions).toEqual([
+        expect.objectContaining({
+          id: FIXTURE_IDS.ARCHIVED_ID,
+          sourceKind: "subagent",
+          source: "side",
+          threadSource: "side",
+          modelProvider: "sub2api",
+        }),
+      ]);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("summarizes sources through MCP", async () => {
+    const { client, server } = await createConnectedClient();
+
+    try {
+      const result = await client.callTool({
+        name: "summarize_sources",
+        arguments: {
+          root: fixture.rootDir,
+        },
+      });
+
+      const summary = result.structuredContent?.summary as {
+        totalSessions: number;
+        bySourceKind: Record<string, number>;
+        rows: Array<{
+          sourceKind: string;
+          source: string | null;
+          threadSource: string | null;
+          modelProvider: string | null;
+          model: string | null;
+          agentRole: string | null;
+          count: number;
+        }>;
+      };
+      expect(summary.totalSessions).toBe(3);
+      expect(summary.bySourceKind).toMatchObject({ cli: 1, subagent: 1, unknown: 1 });
+      expect(summary.rows).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            sourceKind: "cli",
+            source: "cli",
+            threadSource: "cli",
+            modelProvider: "openai",
+            model: "gpt-5.4",
+            agentRole: null,
+            count: 1,
+          }),
+        ]),
+      );
     } finally {
       await client.close();
       await server.close();

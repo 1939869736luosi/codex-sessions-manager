@@ -23,10 +23,13 @@ import { resolveSessionFamily } from "../core/family.js";
 import { groupSessionsByProject, listProjectSummaries } from "../core/project.js";
 import { filterSessions, resolveSessions } from "../core/query.js";
 import { scanCodexRoot } from "../core/scan.js";
+import { SOURCE_KINDS, summarizeSources } from "../core/sources.js";
 import { readSessionTimeline } from "../core/timeline.js";
 import { listTrashEntries, moveSessionsToTrash, purgeTrashEntry, restoreTrashEntry } from "../core/trash.js";
 
 const TOOL_OUTPUT_SCHEMA = z.object({}).passthrough();
+const stringOrStringArraySchema = z.union([z.string(), z.array(z.string())]);
+const sourceKindSchema = z.union([z.enum(SOURCE_KINDS), z.array(z.enum(SOURCE_KINDS))]);
 
 function textResult(text: string, structuredContent?: Record<string, unknown> | undefined) {
   return {
@@ -81,13 +84,38 @@ export function createServer(): McpServer {
         updatedBefore: z.string().optional(),
         createdAfter: z.string().optional(),
         createdBefore: z.string().optional(),
+        sourceKind: sourceKindSchema.optional().describe("Filter by inferred sourceKind."),
+        source: stringOrStringArraySchema.optional().describe("Filter by raw threads.source value."),
+        threadSource: stringOrStringArraySchema.optional().describe("Filter by threads.thread_source value."),
+        agentRole: stringOrStringArraySchema.optional().describe("Filter by threads.agent_role value."),
+        agentNickname: stringOrStringArraySchema.optional().describe("Filter by threads.agent_nickname value."),
+        modelProvider: stringOrStringArraySchema.optional().describe("Filter by threads.model_provider value."),
+        model: stringOrStringArraySchema.optional().describe("Filter by threads.model value."),
       }),
       annotations: {
         readOnlyHint: true,
         idempotentHint: true,
       },
     },
-    async ({ root, query, project, groupBy, status, limit, updatedAfter, updatedBefore, createdAfter, createdBefore }) => {
+    async ({
+      root,
+      query,
+      project,
+      groupBy,
+      status,
+      limit,
+      updatedAfter,
+      updatedBefore,
+      createdAfter,
+      createdBefore,
+      sourceKind,
+      source,
+      threadSource,
+      agentRole,
+      agentNickname,
+      modelProvider,
+      model,
+    }) => {
       const scan = await scanCodexRoot(root);
       const sessions = filterSessions(scan, {
         query,
@@ -98,6 +126,13 @@ export function createServer(): McpServer {
         updatedBefore,
         createdAfter,
         createdBefore,
+        sourceKind,
+        source,
+        threadSource,
+        agentRole,
+        agentNickname,
+        modelProvider,
+        model,
       });
       return textResult(`Found ${sessions.length} matching sessions.`, {
         root: scan.root,
@@ -105,6 +140,30 @@ export function createServer(): McpServer {
         sessions,
         projectSummaries: groupBy === "project" ? listProjectSummaries(sessions) : undefined,
         groupedSessions: groupBy === "project" ? groupSessionsByProject(sessions) : undefined,
+      });
+    },
+  );
+
+  server.registerTool(
+    "summarize_sources",
+    {
+      description: "Summarize Codex session source fields from a local ~/.codex root without modifying anything.",
+      outputSchema: TOOL_OUTPUT_SCHEMA,
+      inputSchema: z.object({
+        root: z.string().optional().describe("Optional explicit path to the .codex root."),
+      }),
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({ root }) => {
+      const scan = await scanCodexRoot(root);
+      const summary = summarizeSources(scan.sessions);
+      return textResult(`Summarized sources for ${summary.totalSessions} sessions.`, {
+        root: scan.root,
+        warnings: scan.warnings,
+        summary,
       });
     },
   );

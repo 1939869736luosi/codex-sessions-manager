@@ -16,6 +16,7 @@ import type {
   SessionFamilyNode,
   SessionResidueAudit,
   SessionIndexCleanupResult,
+  SourceSummary,
   TimelineItem,
   TrashDeleteResult,
   TrashEntrySummary,
@@ -89,7 +90,8 @@ function printTable(rows: string[][]): string {
 }
 
 function trimTitle(title: string): string {
-  return title.length > 56 ? `${title.slice(0, 53)}...` : title;
+  const normalized = title.replace(/\s+/g, " ").trim();
+  return normalized.length > 56 ? `${normalized.slice(0, 53)}...` : normalized;
 }
 
 const DETAIL_TEXT_LIMIT = 180;
@@ -122,11 +124,13 @@ function formatTimelinePreview(timeline: TimelineItem[]): string[] {
 
 export function formatList(scan: ScanResult, sessions: SessionEntry[]): string {
   const rows = [
-    ["状态", "项目", "更新时间", "模型", "大小", "ID", "标题"],
+    ["状态", "项目", "更新时间", "来源", "provider", "模型", "大小", "ID", "标题"],
     ...sessions.map((session) => [
       session.kind,
       session.projectName,
       formatDate(session.updatedAt),
+      session.sourceKind,
+      session.modelProvider ?? "-",
       session.model ?? "-",
       formatBytes(session.totalFileSize),
       session.id,
@@ -205,10 +209,12 @@ export function formatGroupedList(scan: ScanResult, sessions: SessionEntry[]): s
       [
         `${group.project.projectName} (${group.project.sessionCount}) ${group.project.projectPath ?? ""}`.trim(),
         printTable([
-          ["状态", "更新时间", "模型", "大小", "ID", "标题"],
+          ["状态", "更新时间", "来源", "provider", "模型", "大小", "ID", "标题"],
           ...group.sessions.map((session) => [
             session.kind,
             formatDate(session.updatedAt),
+            session.sourceKind,
+            session.modelProvider ?? "-",
             session.model ?? "-",
             formatBytes(session.totalFileSize),
             session.id,
@@ -250,7 +256,13 @@ export function formatShow(session: SessionEntry, timeline: TimelineItem[]): str
     `状态: ${session.kind}`,
     `创建时间: ${formatDate(session.createdAt)}`,
     `更新时间: ${formatDate(session.updatedAt)}`,
+    `来源分类: ${session.sourceKind}`,
+    `raw source: ${trimDetailText(session.source)}`,
+    `thread_source: ${trimDetailText(session.threadSource)}`,
+    `model_provider: ${session.modelProvider ?? "-"}`,
     `模型: ${session.model ?? "-"}`,
+    `agent_role: ${trimDetailText(session.agentRole)}`,
+    `agent_nickname: ${trimDetailText(session.agentNickname)}`,
     `工作目录: ${session.cwd ?? "-"}`,
     `rollout_path: ${session.rolloutPath ?? "-"}`,
     `原始文件数: ${session.fileTargets.length}`,
@@ -263,6 +275,38 @@ export function formatShow(session: SessionEntry, timeline: TimelineItem[]): str
   ];
 
   return lines.join("\n");
+}
+
+export function formatSourceSummary(scan: ScanResult, summary: SourceSummary): string {
+  const byKindRows = [
+    ["sourceKind", "sessions"],
+    ...Object.entries(summary.bySourceKind).map(([sourceKind, count]) => [sourceKind, String(count)]),
+  ];
+  const detailRows = [
+    ["sessions", "sourceKind", "raw source", "thread_source", "model_provider", "model", "agent_role", "latest"],
+    ...summary.rows.map((row) => [
+      String(row.count),
+      row.sourceKind,
+      trimDetailText(row.source),
+      trimDetailText(row.threadSource),
+      row.modelProvider ?? "-",
+      row.model ?? "-",
+      trimDetailText(row.agentRole),
+      formatDate(row.latestUpdatedAt),
+    ]),
+  ];
+  const warnings = scan.warnings.length ? `\n\n警告:\n- ${scan.warnings.join("\n- ")}` : "";
+
+  return [
+    `Root: ${scan.root.rootPath}`,
+    `sessions: ${summary.totalSessions}`,
+    "",
+    "按 sourceKind:",
+    printTable(byKindRows),
+    "",
+    "按来源明细:",
+    printTable(detailRows),
+  ].join("\n") + warnings;
 }
 
 function formatFamilyNodes(nodes: SessionFamilyNode[]): string {

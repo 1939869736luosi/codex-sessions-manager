@@ -31,6 +31,9 @@ npm install -g codex-sessions-manager
 # List recent sessions
 codex-sessions list --limit 10
 
+# Summarize session sources (safe, no changes)
+codex-sessions sources
+
 # Inspect parent and child sessions (safe, no changes)
 codex-sessions family <session-id>
 
@@ -82,7 +85,8 @@ After deletion, run `verify` to confirm zero orphans remain.
 
 | Feature | What it does |
 |---------|-------------|
-| **List & filter** | By project, status, time range; group by project |
+| **List & filter** | By project, status, time range, source metadata, model provider, and model; group by project |
+| **Source summary** | Read-only `sourceKind` summary while preserving raw `source`, `thread_source`, `model_provider`, `model`, and `agent_role` |
 | **Split title sources** | Lists show the Codex UI-searchable title by default; detail output shows `session_index`, SQLite, and first-message title differences |
 | **Export** | Backup any session to JSON before you touch it |
 | **Delete** | Permanent or recoverable trash — your choice |
@@ -112,9 +116,9 @@ Add to your MCP config:
 }
 ```
 
-17 tools exposed: `inspect_root`, `list_sessions`, `list_projects`, `get_session`, `get_session_family`, `audit_session`, `audit_root`, `preview_root_delete`, `export_session_backup`, `preview_delete_sessions`, `delete_sessions`, `list_trash`, `restore_sessions`, `purge_trash`, `cleanup_session_indexes`, `cleanup_stale_indexes`, `verify_sessions`.
+18 tools exposed: `inspect_root`, `list_sessions`, `summarize_sources`, `list_projects`, `get_session`, `get_session_family`, `audit_session`, `audit_root`, `preview_root_delete`, `export_session_backup`, `preview_delete_sessions`, `delete_sessions`, `list_trash`, `restore_sessions`, `purge_trash`, `cleanup_session_indexes`, `cleanup_stale_indexes`, `verify_sessions`.
 
-`get_session_family`, `audit_session`, `audit_root`, and `preview_root_delete` are read-only and do not need confirmation. All destructive tools require `confirm: true`. Without it, you get a preview only.
+`summarize_sources`, `get_session_family`, `audit_session`, `audit_root`, and `preview_root_delete` are read-only and do not need confirmation. All destructive tools require `confirm: true`. Without it, you get a preview only.
 
 ## CLI Reference
 
@@ -122,6 +126,10 @@ Add to your MCP config:
 codex-sessions list [--status active|archived] [--limit N] [--project TEXT]
 codex-sessions list --updated-after 2026-04-01 --updated-before 2026-04-30
 codex-sessions list --group-by project
+codex-sessions list --source-kind cli --model-provider openai
+codex-sessions list --source mcp --thread-source mcp
+codex-sessions list --agent-role subagent --agent-nickname helper
+codex-sessions sources [--json]
 codex-sessions projects
 codex-sessions doctor [--json]
 codex-sessions show <session-id>
@@ -163,6 +171,17 @@ Use `audit-root` when you do not already have the session ID. It scans the whole
 You can pass `--status` or `--source` more than once. Multiple values of the same kind use OR. Combining status and source uses AND. These filters only narrow what is shown. A matching candidate still needs per-session `audit` or delete preview before any cleanup decision, and it does not mean the candidate should be deleted.
 
 Human and JSON output include a summary: `filters`, `totalCandidatesBeforeFilter`, `totalCandidatesAfterFilter`, `returnedCandidates`, `limit`, `byStatus`, and `bySource`. The `byStatus` and `bySource` counts are computed after status/source filters and before `limit`.
+
+Use `sources` when you need a read-only overview of where sessions came from. It groups by inferred `sourceKind`, raw `source`, `thread_source`, `model_provider`, `model`, and `agent_role`. `sourceKind` can be `subagent`, `mcp`, `vscode`, `cli`, `exec`, or `unknown`. The raw `source` value is still kept in JSON output and shown in human output, because `sourceKind` is only this tool's inferred category.
+
+`list` supports the same source-facing filters: `--source-kind`, `--source`, `--thread-source`, `--agent-role`, `--agent-nickname`, `--model-provider`, and `--model`. Filters combine with AND across different fields. Repeating the same field uses OR. MCP `list_sessions` accepts the same fields, and MCP `summarize_sources` returns the same summary shape as CLI `sources --json`.
+
+Important source limits:
+
+- `source=vscode` is a raw Codex thread source label. It should not be treated as proof that the chat came from the VS Code IDE.
+- Do not infer "Desktop" by exclusion. Sessions not marked `cli`, `mcp`, `vscode`, or `exec` are `unknown`, not automatically Desktop.
+- `source=mcp` means the thread was recorded with that source. It is not a log of every MCP tool call inside the conversation.
+- `model_provider` is only displayed and filtered here. This tool does not repair provider identity or rewrite provider history.
 
 Use `preview-root` when you want a read-only batch delete preview for the same candidates `audit-root` would select. It reuses the same status/source filters and conservative default `--limit 50`, then summarizes what a read-only preview would touch across rollout files, shell snapshots, `session_index`, `history`, SQLite, known global-state refs, unknown global-state refs, and `thread_spawn_edges`. It does not delete, does not rewrite JSONL, SQLite, shell snapshots, or global-state, does not accept `--yes`, does not recommend deleting any session, and does not recursively add parent, child, or family sessions. A `preview-root` result is not a deletion recommendation; it only shows what would be touched if you later choose explicit `delete` commands. Actual deletion still requires a separate `delete ... --yes` command.
 

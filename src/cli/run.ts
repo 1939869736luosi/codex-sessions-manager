@@ -18,6 +18,7 @@ import { resolveSessionFamily } from "../core/family.js";
 import { listProjectSummaries } from "../core/project.js";
 import { filterSessions, resolveSessions } from "../core/query.js";
 import { scanCodexRoot } from "../core/scan.js";
+import { summarizeSources } from "../core/sources.js";
 import { readSessionTimeline } from "../core/timeline.js";
 import { listTrashEntries, moveSessionsToTrash, purgeTrashEntry, restoreTrashEntry } from "../core/trash.js";
 import {
@@ -36,6 +37,7 @@ import {
   formatProjects,
   formatRootDeletePreview,
   formatRootResidueAudit,
+  formatSourceSummary,
   formatShow,
   formatTrashDeleteResult,
   formatTrashEntries,
@@ -48,6 +50,7 @@ type CommandName =
   | "scan"
   | "doctor"
   | "list"
+  | "sources"
   | "projects"
   | "show"
   | "family"
@@ -83,6 +86,10 @@ Usage:
                      [--project TEXT] [--group-by project]
                      [--updated-after DATE] [--updated-before DATE]
                      [--created-after DATE] [--created-before DATE]
+                     [--source-kind KIND] [--source SOURCE] [--thread-source SOURCE]
+                     [--agent-role ROLE] [--agent-nickname NAME]
+                     [--model-provider PROVIDER] [--model MODEL]
+  codex-sessions sources [--root PATH] [--json]
   codex-sessions projects [--root PATH] [--json]
   codex-sessions doctor [--root PATH] [--json]
   codex-sessions show <session-id> [--root PATH] [--json]
@@ -111,8 +118,14 @@ Notes:
   - restore 和 purge 未带 --yes 时只展示匹配的回收站记录
   - cleanup-index 和 cleanup-stale 未带 --yes 时只展示预览，不改写 JSONL
   - status 可选: all | active | archived | db-only | stale
+  - source-kind 可选: subagent | mcp | vscode | cli | exec | unknown
+  - sources 只读汇总 sourceKind、raw source、thread_source、model_provider、model、agent_role
   - DATE 支持 YYYY-MM-DD 或带明确时区的 ISO 字符串；YYYY-MM-DD 按本地日期整天筛选
 `;
+}
+
+function normalizeOptionValues(value: string | string[] | undefined): string[] {
+  return Array.isArray(value) ? value : value ? [value] : [];
 }
 
 async function writeBackupFile(outputPath: string, payload: unknown): Promise<void> {
@@ -134,6 +147,12 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
       project: { type: "string" },
       status: { type: "string", multiple: true },
       source: { type: "string", multiple: true },
+      "source-kind": { type: "string", multiple: true },
+      "thread-source": { type: "string", multiple: true },
+      "agent-role": { type: "string", multiple: true },
+      "agent-nickname": { type: "string", multiple: true },
+      "model-provider": { type: "string", multiple: true },
+      model: { type: "string", multiple: true },
       limit: { type: "string" },
       output: { type: "string" },
       "group-by": { type: "string" },
@@ -153,8 +172,14 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
   const [command, ...rest] = positionals as [CommandName, ...string[]];
   const rootArg = values.root;
   const asJson = values.json;
-  const statusValues = Array.isArray(values.status) ? values.status : values.status ? [values.status] : [];
-  const sourceValues = Array.isArray(values.source) ? values.source : values.source ? [values.source] : [];
+  const statusValues = normalizeOptionValues(values.status);
+  const sourceValues = normalizeOptionValues(values.source);
+  const sourceKindValues = normalizeOptionValues(values["source-kind"]);
+  const threadSourceValues = normalizeOptionValues(values["thread-source"]);
+  const agentRoleValues = normalizeOptionValues(values["agent-role"]);
+  const agentNicknameValues = normalizeOptionValues(values["agent-nickname"]);
+  const modelProviderValues = normalizeOptionValues(values["model-provider"]);
+  const modelValues = normalizeOptionValues(values.model);
   if (command === "doctor") {
     const report = await inspectCodexRoot(rootArg);
     io.stdout(asJson ? JSON.stringify(report, null, 2) : formatDoctor(report));
@@ -175,6 +200,13 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
         updatedBefore: values["updated-before"],
         createdAfter: values["created-after"],
         createdBefore: values["created-before"],
+        sourceKind: sourceKindValues,
+        source: sourceValues,
+        threadSource: threadSourceValues,
+        agentRole: agentRoleValues,
+        agentNickname: agentNicknameValues,
+        modelProvider: modelProviderValues,
+        model: modelValues,
       });
 
       if (values["group-by"] && values["group-by"] !== "project") {
@@ -201,6 +233,16 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
       } else {
         io.stdout(values["group-by"] === "project" ? formatGroupedList(scan, sessions) : formatList(scan, sessions));
       }
+      return 0;
+    }
+
+    case "sources": {
+      if (rest.length !== 0) {
+        throw new Error("sources 不接收 session-id。");
+      }
+
+      const summary = summarizeSources(scan.sessions);
+      io.stdout(asJson ? JSON.stringify({ root: scan.root, warnings: scan.warnings, summary }, null, 2) : formatSourceSummary(scan, summary));
       return 0;
     }
 

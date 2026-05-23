@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 
+import { deriveSourceKind } from "./sources.js";
 import type { SqliteDeletionCounts, SqliteTableInspection, ThreadRow, ThreadSpawnEdgeRow } from "./types.js";
 
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -237,6 +238,12 @@ function addLogRows(
 }
 
 function mapThreadRow(row: Record<string, unknown>): ThreadRow {
+  const source = stringOrNull(row.source);
+  const threadSource = stringOrNull(row.thread_source);
+  const agentRole = stringOrNull(row.agent_role);
+  const agentNickname = stringOrNull(row.agent_nickname);
+  const agentPath = stringOrNull(row.agent_path);
+
   return {
     id: String(row.id ?? ""),
     title: String(row.title ?? ""),
@@ -246,12 +253,14 @@ function mapThreadRow(row: Record<string, unknown>): ThreadRow {
     archived: Number(row.archived ?? 0) === 1,
     rolloutPath: row.rollout_path ? String(row.rollout_path) : null,
     model: row.model ? String(row.model) : null,
+    modelProvider: stringOrNull(row.model_provider),
     cwd: row.cwd ? String(row.cwd) : null,
-    source: stringOrNull(row.source),
-    threadSource: stringOrNull(row.thread_source),
-    agentRole: stringOrNull(row.agent_role),
-    agentNickname: stringOrNull(row.agent_nickname),
-    agentPath: stringOrNull(row.agent_path),
+    sourceKind: deriveSourceKind({ source, threadSource, agentRole, agentNickname, agentPath }),
+    source,
+    threadSource,
+    agentRole,
+    agentNickname,
+    agentPath,
   };
 }
 
@@ -269,7 +278,9 @@ export function scanThreads(sqlitePath: string | null): Map<string, ThreadRow> {
     const orderBy = columns.has("updated_at") ? "updated_at desc" : "id";
     const rows = db
       .prepare(
-        `select id, title, first_user_message, created_at, updated_at, archived, rollout_path, model, cwd,
+        `select id, title, first_user_message, created_at, updated_at, archived, rollout_path, model,
+           ${selectOptionalColumn(columns, "model_provider")},
+           cwd,
            ${selectOptionalColumn(columns, "source")},
            ${selectOptionalColumn(columns, "thread_source")},
            ${selectOptionalColumn(columns, "agent_role")},

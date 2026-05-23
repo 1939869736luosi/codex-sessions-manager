@@ -94,6 +94,7 @@ If the `codex-sessions` MCP server is available in the current agent session, us
 
 - `inspect_root`
 - `list_sessions`
+- `summarize_sources` (read-only source summary)
 - `list_projects`
 - `get_session`
 - `get_session_family` (read-only session family inspection)
@@ -123,6 +124,8 @@ For project-aware listing, pass `project` to `list_sessions` or use `groupBy="pr
 
 For time filters, pass `updatedAfter`, `updatedBefore`, `createdAfter`, or `createdBefore`. Date-only filters use the local calendar day. Timezone-less datetime strings must be rejected.
 
+For source-aware listing, pass `sourceKind`, `source`, `threadSource`, `agentRole`, `agentNickname`, `modelProvider`, or `model` to `list_sessions`. Use `summarize_sources` for a read-only count by `sourceKind`, raw `source`, `thread_source`, `model_provider`, `model`, and `agent_role`.
+
 ### 2. Fall back to CLI
 
 Prefer the installed CLI:
@@ -134,6 +137,11 @@ codex-sessions list --root <path-to-codex-root> --limit 20
 codex-sessions list --root <path-to-codex-root> --project TEXT
 codex-sessions list --root <path-to-codex-root> --group-by project
 codex-sessions list --root <path-to-codex-root> --updated-after 2026-04-01 --updated-before 2026-04-30
+codex-sessions list --root <path-to-codex-root> --source-kind cli --model-provider openai
+codex-sessions list --root <path-to-codex-root> --source mcp --thread-source mcp
+codex-sessions list --root <path-to-codex-root> --agent-role subagent --agent-nickname helper
+codex-sessions sources --root <path-to-codex-root>
+codex-sessions sources --root <path-to-codex-root> --json
 codex-sessions projects --root <path-to-codex-root>
 codex-sessions show <session-id> --root <path-to-codex-root>
 codex-sessions family <session-id> --root <path-to-codex-root>
@@ -180,6 +188,11 @@ node dist/cli/index.js list --root <path-to-codex-root> --limit 20
 node dist/cli/index.js list --root <path-to-codex-root> --project TEXT
 node dist/cli/index.js list --root <path-to-codex-root> --group-by project
 node dist/cli/index.js list --root <path-to-codex-root> --updated-after 2026-04-01 --updated-before 2026-04-30
+node dist/cli/index.js list --root <path-to-codex-root> --source-kind cli --model-provider openai
+node dist/cli/index.js list --root <path-to-codex-root> --source mcp --thread-source mcp
+node dist/cli/index.js list --root <path-to-codex-root> --agent-role subagent --agent-nickname helper
+node dist/cli/index.js sources --root <path-to-codex-root>
+node dist/cli/index.js sources --root <path-to-codex-root> --json
 node dist/cli/index.js projects --root <path-to-codex-root>
 node dist/cli/index.js show <session-id> --root <path-to-codex-root>
 node dist/cli/index.js family <session-id> --root <path-to-codex-root>
@@ -216,6 +229,12 @@ node dist/cli/index.js verify <session-id...> --root <path-to-codex-root>
 - Run MCP `inspect_root` or CLI `doctor` before delete, restore, purge, or cleanup when Codex storage may have changed.
 - Treat delete, restore, purge, and cleanup as dangerous write paths.
 - Always preview before destructive actions unless the user has already clearly confirmed execution.
+- `summarize_sources`, source filters on `list_sessions`, CLI `sources`, and CLI source filters on `list` are read-only. They must not be treated as cleanup recommendations.
+- `sourceKind` is an inferred category only: `subagent`, `mcp`, `vscode`, `cli`, `exec`, or `unknown`. Preserve and report raw `source` when source details matter.
+- `source=vscode` is a raw Codex thread source label. Do not present it as proof that the session came from VS Code IDE.
+- Do not infer Desktop by exclusion. Anything not classified as `cli`, `mcp`, `vscode`, or `exec` is `unknown`, not automatically Desktop.
+- `source=mcp` is a thread source label, not a per-call MCP tool log.
+- `model_provider` is display/filter metadata in this skill. Do not use this workflow to repair or rewrite provider identity.
 - `get_session_family` and CLI `family` are read-only. They do not delete, export, restore, or select related sessions automatically.
 - `audit_session` and CLI `audit` are read-only. They report local residue after official UI delete/archive actions and must not rewrite files, SQLite, shell snapshots, or global state.
 - `audit_root` and CLI `audit-root` are read-only. They scan for likely residue candidates across a Codex root and must not delete, rewrite, or select parent/child sessions automatically.
@@ -256,6 +275,8 @@ When a user asks about side conversations:
 ## Response Style
 
 - For list requests: show session ID, updated time, size, project, status, and `displayTitle`.
+- For source requests: use MCP `summarize_sources` or CLI `sources`. Report counts by `sourceKind` and include raw `source`, `thread_source`, `model_provider`, `model`, and `agent_role` when useful. Say clearly that source queries are read-only and do not prove Desktop, VS Code IDE, or individual MCP tool calls.
+- For source-filtered list requests: use `list_sessions` or CLI `list` with `sourceKind`, `source`, `threadSource`, `agentRole`, `agentNickname`, `modelProvider`, and `model` filters. Different fields combine; repeated values inside one field are alternatives.
 - For project requests: show project name/path, session count, status counts, latest updated time, and total size.
 - For show requests: summarize the session and include key metadata. Include `displayTitle`, `indexTitle`, `sqliteTitle`, `firstUserMessage`, `titleSource`, `titleMismatch`, and `titleCandidates` when available. Human-readable CLI output may shorten long title fields and timeline previews; use JSON/MCP output for full values.
 - Treat `displayTitle` as the default user-facing title. It prefers `session_index.jsonl.thread_name`, which is usually the title searchable in Codex UI. Do not present `sqliteTitle` as the only title when sources disagree.

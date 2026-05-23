@@ -35,8 +35,12 @@ describe("cli", () => {
 
     expect(exitCode).toBe(0);
     expect(capture.stdout.join("\n")).toContain("状态");
+    expect(capture.stdout.join("\n")).toContain("来源");
+    expect(capture.stdout.join("\n")).toContain("provider");
     expect(capture.stdout.join("\n")).toContain(FIXTURE_IDS.ACTIVE_ID);
     expect(capture.stdout.join("\n")).toContain("Active thread");
+    expect(capture.stdout.join("\n")).toContain("cli");
+    expect(capture.stdout.join("\n")).toContain("openai");
     expect(capture.stdout.join("\n")).not.toContain(`Title ${FIXTURE_IDS.ACTIVE_ID}`);
   });
 
@@ -47,6 +51,10 @@ describe("cli", () => {
 
     expect(exitCode).toBe(0);
     expect(output).toContain("标题: Active thread");
+    expect(output).toContain("来源分类: cli");
+    expect(output).toContain("raw source: cli");
+    expect(output).toContain("thread_source: cli");
+    expect(output).toContain("model_provider: openai");
     expect(output).toContain("标题来源: session_index");
     expect(output).toContain("标题不一致: 是");
     expect(output).toContain(`session_index 标题: Active thread`);
@@ -208,6 +216,96 @@ describe("cli", () => {
     expect(exitCode).toBe(0);
     expect(capture.stdout.join("\n")).toContain(FIXTURE_IDS.ACTIVE_ID);
     expect(capture.stdout.join("\n")).not.toContain(FIXTURE_IDS.ARCHIVED_ID);
+  });
+
+  it("lists sessions with source and model filters", async () => {
+    const capture = createIo();
+    const exitCode = await runCli(
+      [
+        "list",
+        "--root",
+        fixture.rootDir,
+        "--source-kind",
+        "subagent",
+        "--source",
+        "side",
+        "--thread-source",
+        "side",
+        "--agent-role",
+        "subagent",
+        "--agent-nickname",
+        "helper",
+        "--model-provider",
+        "sub2api",
+        "--model",
+        "gpt-5.4",
+      ],
+      capture.io,
+    );
+    const output = capture.stdout.join("\n");
+
+    expect(exitCode).toBe(0);
+    expect(output).toContain(FIXTURE_IDS.ARCHIVED_ID);
+    expect(output).toContain("subagent");
+    expect(output).toContain("sub2api");
+    expect(output).not.toContain(FIXTURE_IDS.ACTIVE_ID);
+  });
+
+  it("summarizes session sources from the cli", async () => {
+    const beforeSessionIndex = await readFile(fixture.paths.sessionIndex, "utf8");
+    const human = createIo();
+    const humanExitCode = await runCli(["sources", "--root", fixture.rootDir], human.io);
+    const humanOutput = human.stdout.join("\n");
+    const json = createIo();
+    const jsonExitCode = await runCli(["sources", "--root", fixture.rootDir, "--json"], json.io);
+    const result = JSON.parse(json.stdout.join("\n")) as {
+      summary: {
+        totalSessions: number;
+        bySourceKind: Record<string, number>;
+        rows: Array<{
+          sourceKind: string;
+          source: string | null;
+          threadSource: string | null;
+          modelProvider: string | null;
+          model: string | null;
+          agentRole: string | null;
+          count: number;
+        }>;
+      };
+    };
+
+    expect(humanExitCode).toBe(0);
+    expect(humanOutput).toContain("按 sourceKind");
+    expect(humanOutput).toContain("raw source");
+    expect(humanOutput).toContain("model_provider");
+    expect(humanOutput).toContain("cli");
+    expect(humanOutput).toContain("side");
+    expect(jsonExitCode).toBe(0);
+    expect(result.summary.totalSessions).toBe(3);
+    expect(result.summary.bySourceKind).toMatchObject({ cli: 1, subagent: 1, unknown: 1 });
+    expect(result.summary.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sourceKind: "cli",
+          source: "cli",
+          threadSource: "cli",
+          modelProvider: "openai",
+          model: "gpt-5.4",
+          agentRole: null,
+          count: 1,
+        }),
+        expect.objectContaining({
+          sourceKind: "subagent",
+          source: "side",
+          threadSource: "side",
+          modelProvider: "sub2api",
+          model: "gpt-5.4",
+          agentRole: "subagent",
+          count: 1,
+        }),
+      ]),
+    );
+    await expect(readFile(fixture.paths.sessionIndex, "utf8")).resolves.toBe(beforeSessionIndex);
   });
 
   it("lists project summaries and grouped sessions", async () => {

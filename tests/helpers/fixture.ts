@@ -213,6 +213,7 @@ export async function createFixture(options: FixtureOptions = {}): Promise<Fixtu
       archived integer,
       rollout_path text,
       model text,
+      model_provider text,
       cwd text,
       source text,
       thread_source text,
@@ -275,16 +276,30 @@ export async function createFixture(options: FixtureOptions = {}): Promise<Fixtu
     `);
   }
 
-  for (const [id, rolloutPath, archived, firstUserMessage, createdAt, updatedAt, cwd, source, threadSource, agentRole, agentNickname, agentPath] of [
-    [ACTIVE_ID, activeSessionFile, 0, "active input", 1775198400, 1775198460, ACTIVE_CWD, "main", "main", null, null, null],
-    [ARCHIVED_ID, archivedSessionFile, 1, "archived input", 1775118000, 1775118060, ARCHIVED_CWD, "side", "side", "subagent", "helper", "/tmp/helper"],
+  for (const [
+    id,
+    rolloutPath,
+    archived,
+    firstUserMessage,
+    createdAt,
+    updatedAt,
+    cwd,
+    modelProvider,
+    source,
+    threadSource,
+    agentRole,
+    agentNickname,
+    agentPath,
+  ] of [
+    [ACTIVE_ID, activeSessionFile, 0, "active input", 1775198400, 1775198460, ACTIVE_CWD, "openai", "cli", "cli", null, null, null],
+    [ARCHIVED_ID, archivedSessionFile, 1, "archived input", 1775118000, 1775118060, ARCHIVED_CWD, "sub2api", "side", "side", "subagent", "helper", "/tmp/helper"],
   ] as const) {
     db.prepare(
       `insert into threads (
-         id, title, first_user_message, created_at, updated_at, archived, rollout_path, model, cwd,
+         id, title, first_user_message, created_at, updated_at, archived, rollout_path, model, model_provider, cwd,
          source, thread_source, agent_role, agent_nickname, agent_path
        )
-       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       id,
       `Title ${id}`,
@@ -294,6 +309,7 @@ export async function createFixture(options: FixtureOptions = {}): Promise<Fixtu
       archived,
       rolloutPath,
       "gpt-5.4",
+      modelProvider,
       cwd,
       source,
       threadSource,

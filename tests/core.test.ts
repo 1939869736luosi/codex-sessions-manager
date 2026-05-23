@@ -20,6 +20,7 @@ import { inspectCodexRoot } from "../src/core/doctor.js";
 import { listProjectSummaries } from "../src/core/project.js";
 import { filterSessions, resolveSessions } from "../src/core/query.js";
 import { scanCodexRoot } from "../src/core/scan.js";
+import { summarizeSources } from "../src/core/sources.js";
 import { readSessionTimeline } from "../src/core/timeline.js";
 import { listTrashEntries, moveSessionsToTrash, purgeTrashEntry, restoreTrashEntry } from "../src/core/trash.js";
 import { createFixture, FIXTURE_IDS, type Fixture } from "./helpers/fixture.js";
@@ -58,7 +59,12 @@ describe("core integration", () => {
       { source: "first_user_message", title: "active input" },
       { source: "id", title: FIXTURE_IDS.ACTIVE_ID },
     ]);
+    expect(active.sourceKind).toBe("cli");
+    expect(active.source).toBe("cli");
+    expect(active.threadSource).toBe("cli");
+    expect(active.modelProvider).toBe("openai");
     expect(resolveSessions(scan, [FIXTURE_IDS.ARCHIVED_ID])[0].kind).toBe("archived");
+    expect(resolveSessions(scan, [FIXTURE_IDS.ARCHIVED_ID])[0].sourceKind).toBe("subagent");
     expect(resolveSessions(scan, [FIXTURE_IDS.STALE_ID])[0].kind).toBe("stale");
   });
 
@@ -102,6 +108,67 @@ describe("core integration", () => {
     expect(sessions[0].projectPath).toBe(FIXTURE_IDS.ACTIVE_CWD);
     expect(projects.some((project) => project.projectName === "demo" && project.activeCount === 1)).toBe(true);
     expect(projects.some((project) => project.projectName === "archive-demo" && project.archivedCount === 1)).toBe(true);
+  });
+
+  it("filters sessions by source and model metadata", async () => {
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const subagentSessions = filterSessions(scan, {
+      sourceKind: "subagent",
+      source: "side",
+      threadSource: "side",
+      agentRole: "subagent",
+      agentNickname: "helper",
+      modelProvider: "sub2api",
+      model: "gpt-5.4",
+    });
+    const cliSessions = filterSessions(scan, {
+      sourceKind: ["cli"],
+      source: ["cli"],
+      modelProvider: ["openai"],
+    });
+
+    expect(subagentSessions.map((session) => session.id)).toEqual([FIXTURE_IDS.ARCHIVED_ID]);
+    expect(cliSessions.map((session) => session.id)).toEqual([FIXTURE_IDS.ACTIVE_ID]);
+    expect(() => filterSessions(scan, { sourceKind: "desktop" })).toThrow("sourceKind 可选");
+  });
+
+  it("summarizes source fields while keeping raw source values", async () => {
+    const jsonSource = JSON.stringify({
+      subagent: {
+        thread_spawn: {
+          parent_thread_id: FIXTURE_IDS.ACTIVE_ID,
+          agent_role: "explorer",
+        },
+      },
+    });
+    const db = new Database(fixture.paths.sqlite);
+    db.prepare("update threads set source = ?, thread_source = ?, agent_role = null, agent_nickname = null, agent_path = null where id = ?").run(
+      jsonSource,
+      "subagent",
+      FIXTURE_IDS.ARCHIVED_ID,
+    );
+    db.close();
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const archived = resolveSessions(scan, [FIXTURE_IDS.ARCHIVED_ID])[0];
+    const summary = summarizeSources(scan.sessions);
+
+    expect(archived.sourceKind).toBe("subagent");
+    expect(archived.source).toBe(jsonSource);
+    expect(summary.bySourceKind).toMatchObject({ cli: 1, subagent: 1, unknown: 1 });
+    expect(summary.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sourceKind: "subagent",
+          source: jsonSource,
+          threadSource: "subagent",
+          modelProvider: "sub2api",
+          model: "gpt-5.4",
+          agentRole: null,
+          count: 1,
+        }),
+      ]),
+    );
   });
 
   it("reports invalid date filters clearly", async () => {

@@ -1,4 +1,5 @@
 export type SessionKind = "active" | "archived" | "db-only" | "stale";
+export type SourceKind = "subagent" | "mcp" | "vscode" | "cli" | "exec" | "unknown";
 
 export interface CodexRootPaths {
   rootPath: string;
@@ -33,7 +34,9 @@ export interface ThreadRow {
   archived: boolean;
   rolloutPath: string | null;
   model: string | null;
+  modelProvider: string | null;
   cwd: string | null;
+  sourceKind: SourceKind;
   source: string | null;
   threadSource: string | null;
   agentRole: string | null;
@@ -92,8 +95,10 @@ export interface SessionEntry {
   createdAt: string | null;
   updatedAt: string | null;
   model: string | null;
+  modelProvider: string | null;
   cwd: string | null;
   rolloutPath: string | null;
+  sourceKind: SourceKind;
   source: string | null;
   threadSource: string | null;
   agentRole: string | null;
@@ -174,6 +179,23 @@ export interface ProjectSummary {
   staleCount: number;
   latestUpdatedAt: string | null;
   totalFileSize: number;
+}
+
+export interface SourceSummaryRow {
+  sourceKind: SourceKind;
+  source: string | null;
+  threadSource: string | null;
+  modelProvider: string | null;
+  model: string | null;
+  agentRole: string | null;
+  count: number;
+  latestUpdatedAt: string | null;
+}
+
+export interface SourceSummary {
+  totalSessions: number;
+  bySourceKind: Record<SourceKind, number>;
+  rows: SourceSummaryRow[];
 }
 
 export interface TimelineItem {

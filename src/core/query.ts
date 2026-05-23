@@ -1,4 +1,5 @@
-import type { ScanResult, SessionEntry, SessionKind } from "./types.js";
+import { parseSourceKind } from "./sources.js";
+import type { ScanResult, SessionEntry, SessionKind, SourceKind } from "./types.js";
 import { matchesProject } from "./project.js";
 
 export interface ListSessionsOptions {
@@ -10,6 +11,13 @@ export interface ListSessionsOptions {
   updatedBefore?: string;
   createdAfter?: string;
   createdBefore?: string;
+  sourceKind?: SourceKind | SourceKind[] | string | string[];
+  source?: string | string[];
+  threadSource?: string | string[];
+  agentRole?: string | string[];
+  agentNickname?: string | string[];
+  modelProvider?: string | string[];
+  model?: string | string[];
 }
 
 function getDatePrefix(value: string): string | null {
@@ -107,6 +115,33 @@ function matchesDateRange(
   return true;
 }
 
+function normalizeTextFilters(value: string | string[] | undefined): string[] {
+  if (value === undefined) {
+    return [];
+  }
+
+  return (Array.isArray(value) ? value : [value])
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function normalizeSourceKindFilters(value: ListSessionsOptions["sourceKind"]): SourceKind[] {
+  if (value === undefined) {
+    return [];
+  }
+
+  return (Array.isArray(value) ? value : [value]).map((item) => parseSourceKind(String(item)));
+}
+
+function matchesTextFilters(value: string | null, filters: string[]): boolean {
+  if (filters.length === 0) {
+    return true;
+  }
+
+  const normalized = value?.trim().toLowerCase();
+  return Boolean(normalized && filters.includes(normalized));
+}
+
 export function filterSessions(scan: ScanResult, options: ListSessionsOptions = {}): SessionEntry[] {
   const query = options.query?.trim().toLowerCase() ?? "";
   const project = options.project?.trim() ?? "";
@@ -116,6 +151,13 @@ export function filterSessions(scan: ScanResult, options: ListSessionsOptions = 
   const updatedBefore = parseDateBoundary(options.updatedBefore, "updatedBefore", "end");
   const createdAfter = parseDateBoundary(options.createdAfter, "createdAfter", "start");
   const createdBefore = parseDateBoundary(options.createdBefore, "createdBefore", "end");
+  const sourceKindFilters = normalizeSourceKindFilters(options.sourceKind);
+  const sourceFilters = normalizeTextFilters(options.source);
+  const threadSourceFilters = normalizeTextFilters(options.threadSource);
+  const agentRoleFilters = normalizeTextFilters(options.agentRole);
+  const agentNicknameFilters = normalizeTextFilters(options.agentNickname);
+  const modelProviderFilters = normalizeTextFilters(options.modelProvider);
+  const modelFilters = normalizeTextFilters(options.model);
 
   return scan.sessions
     .filter((session) => {
@@ -132,6 +174,34 @@ export function filterSessions(scan: ScanResult, options: ListSessionsOptions = 
       }
 
       if (!matchesDateRange(session.createdAt, createdAfter, createdBefore)) {
+        return false;
+      }
+
+      if (sourceKindFilters.length > 0 && !sourceKindFilters.includes(session.sourceKind)) {
+        return false;
+      }
+
+      if (!matchesTextFilters(session.source, sourceFilters)) {
+        return false;
+      }
+
+      if (!matchesTextFilters(session.threadSource, threadSourceFilters)) {
+        return false;
+      }
+
+      if (!matchesTextFilters(session.agentRole, agentRoleFilters)) {
+        return false;
+      }
+
+      if (!matchesTextFilters(session.agentNickname, agentNicknameFilters)) {
+        return false;
+      }
+
+      if (!matchesTextFilters(session.modelProvider, modelProviderFilters)) {
+        return false;
+      }
+
+      if (!matchesTextFilters(session.model, modelFilters)) {
         return false;
       }
 
@@ -206,8 +276,10 @@ export function resolveSessions(scan: ScanResult, sessionIds: string[]): Session
         createdAt: null,
         updatedAt: null,
         model: null,
+        modelProvider: null,
         cwd: null,
         rolloutPath: null,
+        sourceKind: "unknown",
         source: null,
         threadSource: null,
         agentRole: null,

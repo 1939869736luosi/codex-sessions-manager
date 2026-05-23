@@ -31,6 +31,9 @@ npm install -g codex-sessions-manager
 # 列出最近的会话
 codex-sessions list --limit 10
 
+# 汇总会话来源（安全，不做任何修改）
+codex-sessions sources
+
 # 查看父子关系（安全，不做任何修改）
 codex-sessions family <session-id>
 
@@ -82,7 +85,8 @@ codex-sessions verify <session-id>
 
 | 功能 | 说明 |
 |------|------|
-| **列出 & 筛选** | 按项目、状态、时间范围筛选；按项目分组 |
+| **列出 & 筛选** | 按项目、状态、时间范围、来源信息、model provider 和 model 筛选；按项目分组 |
+| **来源汇总** | 只读汇总 `sourceKind`，同时保留 raw `source`、`thread_source`、`model_provider`、`model` 和 `agent_role` |
 | **标题来源拆分** | 列表默认显示 Codex UI 可搜标题；详情显示 `session_index`、SQLite 和首条请求的标题差异 |
 | **导出** | 删之前先备份为 JSON |
 | **删除** | 永久删除或放入回收站，你选 |
@@ -112,9 +116,9 @@ codex-sessions verify <session-id>
 }
 ```
 
-暴露 17 个工具：`inspect_root`、`list_sessions`、`list_projects`、`get_session`、`get_session_family`、`audit_session`、`audit_root`、`preview_root_delete`、`export_session_backup`、`preview_delete_sessions`、`delete_sessions`、`list_trash`、`restore_sessions`、`purge_trash`、`cleanup_session_indexes`、`cleanup_stale_indexes`、`verify_sessions`。
+暴露 18 个工具：`inspect_root`、`list_sessions`、`summarize_sources`、`list_projects`、`get_session`、`get_session_family`、`audit_session`、`audit_root`、`preview_root_delete`、`export_session_backup`、`preview_delete_sessions`、`delete_sessions`、`list_trash`、`restore_sessions`、`purge_trash`、`cleanup_session_indexes`、`cleanup_stale_indexes`、`verify_sessions`。
 
-`get_session_family`、`audit_session`、`audit_root` 和 `preview_root_delete` 是只读工具，不需要确认。所有破坏性操作需要 `confirm: true`，否则只返回预览。
+`summarize_sources`、`get_session_family`、`audit_session`、`audit_root` 和 `preview_root_delete` 是只读工具，不需要确认。所有破坏性操作需要 `confirm: true`，否则只返回预览。
 
 ## CLI 命令
 
@@ -122,6 +126,10 @@ codex-sessions verify <session-id>
 codex-sessions list [--status active|archived] [--limit N] [--project TEXT]
 codex-sessions list --updated-after 2026-04-01 --updated-before 2026-04-30
 codex-sessions list --group-by project
+codex-sessions list --source-kind cli --model-provider openai
+codex-sessions list --source mcp --thread-source mcp
+codex-sessions list --agent-role subagent --agent-nickname helper
+codex-sessions sources [--json]
 codex-sessions projects
 codex-sessions doctor [--json]
 codex-sessions show <session-id>
@@ -163,6 +171,17 @@ codex-sessions verify <session-id...> [--json]
 `--status` 和 `--source` 都可以写多次。同一类多个值是 OR；同时使用 status 和 source 时是 AND。这些筛选只缩小显示范围。命中的候选不是删除清单，也不是建议删除；仍然需要逐个 `audit` 或先看只读预览，不能因为出现在筛选结果里就直接认为应该删除。
 
 人类输出和 JSON 都会带摘要：`filters`、`totalCandidatesBeforeFilter`、`totalCandidatesAfterFilter`、`returnedCandidates`、`limit`、`byStatus`、`bySource`。`byStatus` 和 `bySource` 是“筛选后、limit 前”的统计。
+
+需要看会话来源时，用 `sources`。它只读，按推导出来的 `sourceKind`、raw `source`、`thread_source`、`model_provider`、`model` 和 `agent_role` 汇总。`sourceKind` 只会是 `subagent`、`mcp`、`vscode`、`cli`、`exec`、`unknown`。raw `source` 仍会保留在 JSON 输出里，人类输出也会显示；`sourceKind` 只是工具推导出来的分类，不替代原始字段。
+
+`list` 支持同一套来源筛选：`--source-kind`、`--source`、`--thread-source`、`--agent-role`、`--agent-nickname`、`--model-provider`、`--model`。不同字段之间是 AND；同一个字段写多次是 OR。MCP `list_sessions` 支持同名参数，MCP `summarize_sources` 返回和 CLI `sources --json` 相同结构的摘要。
+
+来源字段的边界：
+
+- `source=vscode` 只是 Codex thread 的原始来源标签，不能直接等同 VS Code IDE。
+- 不能用排除法判断剩下的是 Desktop。没有标成 `cli`、`mcp`、`vscode` 或 `exec` 的会话是 `unknown`，不是自动归为 Desktop。
+- `source=mcp` 表示这个 thread 的来源是 mcp，不是每一次 MCP 工具调用日志。
+- `model_provider` 这里只做显示和筛选，不修复 provider 身份，也不改写历史。
 
 如果想对 `audit-root` 选出的候选做批量删除预览，用 `preview-root`。它复用同一套 `status/source` 筛选和保守默认 `--limit 50`，汇总展示只读预览会碰到哪些位置：rollout 文件、shell snapshots、`session_index`、`history`、SQLite、已知 global-state 引用、未知 global-state 引用和 `thread_spawn_edges`。它只读，不删除，不改写 JSONL、SQLite、shell snapshot 或 global-state，不接受 `--yes`，也不会自动递归加入 parent、child 或 family session。`preview-root` 的结果不等于“这些都该删”，也不会建议删除任何 session；它只说明如果之后你明确运行 delete，会碰到什么。真正删除仍然必须单独运行 `delete ... --yes`。
 
