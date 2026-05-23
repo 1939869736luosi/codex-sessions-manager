@@ -36,6 +36,10 @@ codex-sessions sources
 
 # Inspect parent and child sessions (safe, no changes)
 codex-sessions family <session-id>
+codex-sessions family <session-id> --children
+codex-sessions family <session-id> --parents
+codex-sessions family <session-id> --subagents
+codex-sessions family <session-id> --impact
 
 # Audit what still exists locally after official UI archive/delete (safe, no changes)
 codex-sessions audit <session-id>
@@ -98,7 +102,7 @@ After deletion, run `verify` to confirm zero orphans remain.
 | **Cleanup** | Remove stale index entries without touching raw data |
 | **Health check** | `doctor` command for full root diagnostics |
 | **MCP server** | AI agents (Claude Code, Codex, Kiro) manage sessions directly |
-| **Session family** | Read-only parent, child, `/fork`, and `/side` relationship view; human output uses short `source` labels |
+| **Session family** | Read-only parent, child, ancestor, descendant, sibling, subagent, `/fork`, `/side`, and impact views; human output uses short `source` labels unless `--full` is used |
 | **Side conversations** | Parent and child sessions stay separate; delete/export/verify never recurses automatically |
 
 ## Use with AI Agents (MCP)
@@ -118,7 +122,7 @@ Add to your MCP config:
 
 18 tools exposed: `inspect_root`, `list_sessions`, `summarize_sources`, `list_projects`, `get_session`, `get_session_family`, `audit_session`, `audit_root`, `preview_root_delete`, `export_session_backup`, `preview_delete_sessions`, `delete_sessions`, `list_trash`, `restore_sessions`, `purge_trash`, `cleanup_session_indexes`, `cleanup_stale_indexes`, `verify_sessions`.
 
-`summarize_sources`, `get_session_family`, `audit_session`, `audit_root`, and `preview_root_delete` are read-only and do not need confirmation. All destructive tools require `confirm: true`. Without it, you get a preview only.
+`summarize_sources`, `get_session_family`, `audit_session`, `audit_root`, and `preview_root_delete` are read-only and do not need confirmation. `get_session_family` accepts `mode: full | children | parents | subagents | impact` plus optional `sourceKind`. All destructive tools require `confirm: true`. Without it, you get a preview only.
 
 ## CLI Reference
 
@@ -133,7 +137,7 @@ codex-sessions sources [--json]
 codex-sessions projects
 codex-sessions doctor [--json]
 codex-sessions show <session-id>
-codex-sessions family <session-id> [--json]
+codex-sessions family <session-id> [--json] [--children|--parents|--subagents|--impact] [--full] [--source-kind KIND]
 codex-sessions audit <session-id> [--json]
 codex-sessions audit-root [--json] [--limit 50] [--status STATUS...] [--source SOURCE...] [--all]
 codex-sessions preview-root [--json] [--limit 50] [--status STATUS...] [--source SOURCE...] [--all]
@@ -187,7 +191,17 @@ Use `preview-root` when you want a read-only batch delete preview for the same c
 
 Use `family` before deleting a parent or child session. Parent and child sessions are independent sessions with their own IDs. Deleting a parent does not delete children, and deleting a child does not delete its parent. Delete previews and audits warn when relationship records point at missing sessions or missing file/index surfaces. To process multiple related sessions, put every intended session ID into the preview/delete command explicitly. The tool never recurses into parent or child sessions automatically.
 
-Human-readable `family` output keeps the table narrow by showing compact `source` labels such as `subagent`, `mcp`, `exec`, `side-thread`, or `unknown`. Use `family --json` or MCP `get_session_family` when you need the full raw `source` field.
+`thread_spawn_edges` is a generic parent/child relationship edge table. It is not a subagent-only table. `/side`, `/fork`, subagent, MCP, exec, VS Code, CLI, and unknown child threads can all appear as child threads. Child type is inferred from the child session itself: inferred `sourceKind`, raw `source`, `thread_source`, `agent_role`, `agent_nickname`, and `agent_path`.
+
+Family modes are all read-only:
+
+- `family <id> --children` shows direct children only, including `sourceKind`, edge status, child type, title, updated time, agent metadata, and file/index/thread presence.
+- `family <id> --parents` shows direct parents only with the same source and edge metadata.
+- `family <id> --subagents` shows family members whose `sourceKind` is `subagent` or that have agent metadata.
+- `family <id> --impact` shows what parent, child, family member, missing parent/child, and missing file/index/thread risks would remain if you later choose to process only this session. It does not delete anything, does not recommend deletion, and does not generate `--yes`.
+- `family <id> --full` keeps full raw `source` and full titles in human output. JSON output always keeps complete fields.
+
+Use `--source-kind subagent|mcp|vscode|cli|exec|unknown` with family modes when you only want matching family nodes. Use `family --json` or MCP `get_session_family` when exact raw fields matter. Actual deletion still requires a separate preview and explicit confirmation.
 
 ## Session Titles
 

@@ -234,6 +234,106 @@ describe("mcp server", () => {
       expect(family.familyMembers.map((node) => node.sessionId).sort()).toEqual(
         [FIXTURE_IDS.ACTIVE_ID, FIXTURE_IDS.ARCHIVED_ID].sort(),
       );
+      expect(result.structuredContent).toMatchObject({
+        mode: "full",
+        sourceKinds: [],
+        readOnly: true,
+      });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("returns family modes and sourceKind filters through MCP as read-only data", async () => {
+    const { client, server } = await createConnectedClient();
+
+    try {
+      const tools = await client.listTools();
+      const familyTool = tools.tools.find((tool) => tool.name === "get_session_family");
+      expect(familyTool?.annotations?.readOnlyHint).toBe(true);
+
+      const children = await client.callTool({
+        name: "get_session_family",
+        arguments: {
+          root: fixture.rootDir,
+          sessionId: FIXTURE_IDS.ACTIVE_ID,
+          mode: "children",
+          sourceKind: "subagent",
+        },
+      });
+      const childrenContent = children.structuredContent as {
+        mode: string;
+        sourceKinds: string[];
+        nodes: Array<{
+          sessionId: string;
+          relationship: string;
+          sourceKind: string;
+          source: string;
+          threadSource: string;
+          agentRole: string;
+          agentNickname: string;
+          hasSessionIndex: boolean;
+          hasThread: boolean;
+          fileExists: boolean;
+        }>;
+      };
+
+      expect(childrenContent.mode).toBe("children");
+      expect(childrenContent.sourceKinds).toEqual(["subagent"]);
+      expect(childrenContent.nodes).toEqual([
+        expect.objectContaining({
+          sessionId: FIXTURE_IDS.ARCHIVED_ID,
+          relationship: "child",
+          sourceKind: "subagent",
+          source: "side",
+          threadSource: "side",
+          agentRole: "subagent",
+          agentNickname: "helper",
+          hasSessionIndex: true,
+          hasThread: true,
+          fileExists: true,
+        }),
+      ]);
+
+      const parents = await client.callTool({
+        name: "get_session_family",
+        arguments: {
+          root: fixture.rootDir,
+          sessionId: FIXTURE_IDS.ARCHIVED_ID,
+          mode: "parents",
+        },
+      });
+      expect((parents.structuredContent?.nodes as Array<{ sessionId: string }>).map((node) => node.sessionId)).toEqual([
+        FIXTURE_IDS.ACTIVE_ID,
+      ]);
+
+      const impact = await client.callTool({
+        name: "get_session_family",
+        arguments: {
+          root: fixture.rootDir,
+          sessionId: FIXTURE_IDS.ACTIVE_ID,
+          mode: "impact",
+        },
+      });
+      const impactContent = impact.structuredContent as {
+        mode: string;
+        readOnly: boolean;
+        impact: {
+          readOnly: boolean;
+          unselectedChildIds: string[];
+          missingParentIds: string[];
+          missingChildIds: string[];
+        };
+      };
+      expect(impactContent.mode).toBe("impact");
+      expect(impactContent.readOnly).toBe(true);
+      expect(impactContent.impact).toMatchObject({
+        readOnly: true,
+        unselectedChildIds: [FIXTURE_IDS.ARCHIVED_ID],
+        missingParentIds: [],
+        missingChildIds: [],
+      });
     } finally {
       await client.close();
       await server.close();

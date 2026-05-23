@@ -19,7 +19,7 @@ import {
   previewCleanupStaleIndexes,
   validateDeletion,
 } from "../core/delete.js";
-import { resolveSessionFamily } from "../core/family.js";
+import { buildSessionFamilyQuery, FAMILY_MODES } from "../core/family.js";
 import { groupSessionsByProject, listProjectSummaries } from "../core/project.js";
 import { filterSessions, resolveSessions } from "../core/query.js";
 import { scanCodexRoot } from "../core/scan.js";
@@ -222,19 +222,21 @@ export function createServer(): McpServer {
       inputSchema: z.object({
         sessionId: z.string().describe("Exact session id or unique prefix."),
         root: z.string().optional(),
+        mode: z.enum(FAMILY_MODES).optional().describe("Family view: full, children, parents, subagents, or impact."),
+        sourceKind: sourceKindSchema.optional().describe("Optional inferred sourceKind filter for returned family nodes."),
       }),
       annotations: {
         readOnlyHint: true,
         idempotentHint: true,
       },
     },
-    async ({ sessionId, root }) => {
+    async ({ sessionId, root, mode, sourceKind }) => {
       const scan = await scanCodexRoot(root);
-      const family = resolveSessionFamily(scan, sessionId);
-      return textResult(`Loaded session family for ${family.current.sessionId}.`, {
+      const query = buildSessionFamilyQuery(scan, sessionId, { mode, sourceKind });
+      return textResult(`Loaded session family for ${query.family.current.sessionId}.`, {
         root: scan.root,
         warnings: scan.warnings,
-        family,
+        ...query,
       });
     },
   );

@@ -1,14 +1,27 @@
 import { resolveSessions } from "./query.js";
+import { parseSourceKind } from "./sources.js";
 import type {
   DeleteFamilyWarning,
   ScanResult,
   SessionEntry,
   SessionFamily,
   SessionFamilyBrokenRelation,
+  SessionFamilyChildCategory,
+  SessionFamilyEdgeStatus,
+  SessionFamilyImpact,
+  SessionFamilyMissingSurfaceWarning,
+  SessionFamilyMode,
   SessionFamilyNode,
+  SessionFamilyQuery,
   SessionFamilyRelationship,
+  SourceKind,
   ThreadSpawnEdgeRow,
 } from "./types.js";
+
+export const FAMILY_MODES = ["full", "children", "parents", "subagents", "impact"] as const satisfies readonly SessionFamilyMode[];
+
+const OPEN_EDGE_STATUSES = new Set(["active", "created", "in_progress", "open", "pending", "queued", "running", "started"]);
+const CLOSED_EDGE_STATUSES = new Set(["cancelled", "canceled", "closed", "complete", "completed", "done", "error", "failed", "finished", "success"]);
 
 function sortByUpdatedAtThenId(left: SessionEntry, right: SessionEntry): number {
   const rightTime = new Date(right.updatedAt ?? 0).getTime();
@@ -173,12 +186,12 @@ function parseJsonObject(value: string | null): Record<string, unknown> | null {
   }
 }
 
-function inferSourceLabel(session: SessionEntry): string {
+function sourceHaystack(session: SessionEntry): string {
   const rawSource = session.source?.trim() ?? "";
   const rawThreadSource = session.threadSource?.trim() ?? "";
   const sourceObject = parseJsonObject(rawSource);
   const sourceKeys = sourceObject ? Object.keys(sourceObject).join(" ") : "";
-  const haystack = [
+  return [
     rawSource,
     rawThreadSource,
     sourceKeys,
@@ -186,6 +199,13 @@ function inferSourceLabel(session: SessionEntry): string {
     session.agentNickname ?? "",
     session.agentPath ?? "",
   ].join(" ").toLowerCase();
+}
+
+function inferSourceLabel(session: SessionEntry): string {
+  const rawSource = session.source?.trim() ?? "";
+  const rawThreadSource = session.threadSource?.trim() ?? "";
+  const sourceObject = parseJsonObject(rawSource);
+  const haystack = sourceHaystack(session);
 
   if (haystack.includes("subagent") || Boolean(session.agentRole || session.agentNickname || session.agentPath)) {
     return "subagent";
@@ -216,6 +236,53 @@ function inferSourceLabel(session: SessionEntry): string {
   }
 
   return "unknown";
+}
+
+function inferChildCategory(session: SessionEntry): SessionFamilyChildCategory {
+  const haystack = sourceHaystack(session);
+
+  if (session.sourceKind === "subagent" || haystack.includes("subagent") || Boolean(session.agentRole || session.agentNickname || session.agentPath)) {
+    return "subagent";
+  }
+
+  if (haystack.includes("side") || haystack.includes("fork")) {
+    return "side/fork";
+  }
+
+  if (session.sourceKind === "mcp" || haystack.includes("mcp")) {
+    return "mcp";
+  }
+
+  if (session.sourceKind === "exec" || haystack.includes("exec")) {
+    return "exec";
+  }
+
+  if (session.sourceKind === "vscode" || haystack.includes("vscode")) {
+    return "vscode";
+  }
+
+  if (session.sourceKind === "cli" || haystack.includes("cli")) {
+    return "cli";
+  }
+
+  return "unknown";
+}
+
+function inferEdgeStatus(status: string | null): SessionFamilyEdgeStatus {
+  const normalized = status?.trim().toLowerCase();
+  if (!normalized) {
+    return "none";
+  }
+
+  if (OPEN_EDGE_STATUSES.has(normalized)) {
+    return "open";
+  }
+
+  if (CLOSED_EDGE_STATUSES.has(normalized)) {
+    return "closed";
+  }
+
+  return "other";
 }
 
 function findRelationshipEdge(
@@ -249,17 +316,25 @@ function createNode(
     kind: session.kind,
     relationship,
     relationshipStatus: edge?.status ?? null,
+    edgeStatus: inferEdgeStatus(edge?.status ?? null),
     parentEdgeStatus: (parentEdgesByChild.get(session.id) ?? [])[0]?.status ?? null,
     archived: session.archived,
     updatedAt: session.updatedAt,
     fileExists: session.fileTargets.length > 0,
     fileCount: session.fileTargets.length,
+    hasSessionIndex: session.hasSessionIndex,
+    sessionIndexCount: session.sessionIndexCount,
+    hasHistory: session.hasHistory,
+    historyCount: session.historyCount,
+    hasThread: session.hasThread,
+    sourceKind: session.sourceKind,
     source: session.source,
     sourceLabel: inferSourceLabel(session),
     threadSource: session.threadSource,
     agentRole: session.agentRole,
     agentNickname: session.agentNickname,
     agentPath: session.agentPath,
+    childCategory: inferChildCategory(session),
     parentIds: uniqueSortedIds((parentEdgesByChild.get(session.id) ?? []).map((item) => item.parentThreadId)),
     childIds: uniqueSortedIds((childEdgesByParent.get(session.id) ?? []).map((item) => item.childThreadId)),
     edge,
@@ -326,6 +401,26 @@ function buildBrokenRelation(
   };
 }
 
+function emptyChildrenByCategory(): Record<SessionFamilyChildCategory, SessionFamilyNode[]> {
+  return {
+    subagent: [],
+    "side/fork": [],
+    mcp: [],
+    exec: [],
+    vscode: [],
+    cli: [],
+    unknown: [],
+  };
+}
+
+function groupChildrenByCategory(children: SessionFamilyNode[]): Record<SessionFamilyChildCategory, SessionFamilyNode[]> {
+  const result = emptyChildrenByCategory();
+  for (const child of children) {
+    result[child.childCategory].push(child);
+  }
+  return result;
+}
+
 export function buildSessionFamily(scan: ScanResult, session: SessionEntry): SessionFamily {
   const sessionById = entriesById(scan);
   const parentEdgesByChild = edgesByChild(scan.sqlite.threadSpawnEdges);
@@ -385,6 +480,9 @@ export function buildSessionFamily(scan: ScanResult, session: SessionEntry): Ses
     createNode(rootSession, rootId === session.id ? "self" : "root", null, parentEdgesByChild, childEdgesByParent);
   const parents = nodes.filter((node) => directParentIds.has(node.sessionId));
   const directChildren = nodes.filter((node) => directChildIds.has(node.sessionId));
+  const ancestorNodes = nodes.filter((node) => ancestors.has(node.sessionId));
+  const descendantNodes = nodes.filter((node) => descendants.has(node.sessionId));
+  const siblingNodes = nodes.filter((node) => siblingIds.has(node.sessionId));
   const familyEdges = scan.sqlite.threadSpawnEdges.filter(
     (edge) => familyIds.has(edge.parentThreadId) && familyIds.has(edge.childThreadId),
   );
@@ -398,7 +496,11 @@ export function buildSessionFamily(scan: ScanResult, session: SessionEntry): Ses
     parent: parents[0] ?? null,
     parents,
     directChildren,
+    ancestors: ancestorNodes,
+    descendants: descendantNodes,
+    siblings: siblingNodes,
     familyMembers: nodes,
+    childrenByCategory: groupChildrenByCategory(directChildren),
     edges: familyEdges,
     brokenRelations,
     warnings: uniqueSortedMessages([
@@ -411,6 +513,183 @@ export function buildSessionFamily(scan: ScanResult, session: SessionEntry): Ses
 export function resolveSessionFamily(scan: ScanResult, sessionId: string): SessionFamily {
   const session = resolveSessions(scan, [sessionId])[0];
   return buildSessionFamily(scan, session);
+}
+
+function normalizeSourceKindFilters(value: SourceKind | SourceKind[] | string | string[] | undefined): SourceKind[] {
+  const values = Array.isArray(value) ? value : value ? [value] : [];
+  return values.map((item) => parseSourceKind(item));
+}
+
+function isSubagentNode(node: SessionFamilyNode): boolean {
+  return node.sourceKind === "subagent" || Boolean(node.agentRole || node.agentNickname || node.agentPath);
+}
+
+function nodesForMode(family: SessionFamily, mode: SessionFamilyMode): SessionFamilyNode[] {
+  switch (mode) {
+    case "children":
+      return family.directChildren;
+    case "parents":
+      return family.parents;
+    case "subagents":
+      return family.familyMembers.filter(isSubagentNode);
+    case "impact":
+      return [];
+    case "full":
+      return family.familyMembers;
+  }
+}
+
+function filterNodesBySourceKind(nodes: SessionFamilyNode[], sourceKinds: SourceKind[]): SessionFamilyNode[] {
+  if (sourceKinds.length === 0) {
+    return nodes;
+  }
+  return nodes.filter((node) => sourceKinds.includes(node.sourceKind));
+}
+
+function missingSurfaceRole(node: SessionFamilyNode): SessionFamilyMissingSurfaceWarning["role"] {
+  if (node.relationship === "parent" || node.relationship === "ancestor" || node.relationship === "root") {
+    return "parent";
+  }
+  if (node.relationship === "child" || node.relationship === "descendant") {
+    return "child";
+  }
+  return "family";
+}
+
+function addMissingSurfaceWarning(
+  warningsByKey: Map<string, SessionFamilyMissingSurfaceWarning>,
+  warning: SessionFamilyMissingSurfaceWarning,
+): void {
+  const key = `${warning.sessionId}:${warning.role}:${warning.edgeStatus ?? ""}`;
+  const existing = warningsByKey.get(key);
+  if (!existing) {
+    warningsByKey.set(key, { ...warning, missingSurfaces: uniqueSortedMessages(warning.missingSurfaces) });
+    return;
+  }
+
+  existing.missingSurfaces = uniqueSortedMessages([...existing.missingSurfaces, ...warning.missingSurfaces]);
+}
+
+export function buildFamilyImpact(family: SessionFamily): SessionFamilyImpact {
+  const selectedIds = new Set([family.current.sessionId]);
+  const unselectedParentIds = family.parents
+    .map((node) => node.sessionId)
+    .filter((id) => !selectedIds.has(id));
+  const unselectedChildIds = family.directChildren
+    .map((node) => node.sessionId)
+    .filter((id) => !selectedIds.has(id));
+  const unselectedFamilyMemberIds = family.familyMembers
+    .map((node) => node.sessionId)
+    .filter((id) =>
+      id !== family.current.sessionId &&
+      !selectedIds.has(id) &&
+      !unselectedParentIds.includes(id) &&
+      !unselectedChildIds.includes(id),
+    );
+  const unselectedRelatedSessionIds = uniqueSortedIds([
+    ...unselectedParentIds,
+    ...unselectedChildIds,
+    ...unselectedFamilyMemberIds,
+  ]);
+  const missingParentIds = uniqueSortedIds(family.brokenRelations
+    .filter((relation) => relation.missingParentSession)
+    .map((relation) => relation.parentThreadId));
+  const missingChildIds = uniqueSortedIds(family.brokenRelations
+    .filter((relation) => relation.missingChildSession)
+    .map((relation) => relation.childThreadId));
+  const missingFileSessionIds = uniqueSortedIds(family.familyMembers
+    .filter((node) => !node.fileExists)
+    .map((node) => node.sessionId));
+  const missingSessionIndexIds = uniqueSortedIds(family.familyMembers
+    .filter((node) => !node.hasSessionIndex)
+    .map((node) => node.sessionId));
+  const missingThreadIds = uniqueSortedIds(family.familyMembers
+    .filter((node) => !node.hasThread)
+    .map((node) => node.sessionId));
+  const warningsByKey = new Map<string, SessionFamilyMissingSurfaceWarning>();
+
+  for (const node of family.familyMembers) {
+    const missingSurfaces = [
+      !node.fileExists ? "file" : null,
+      !node.hasSessionIndex ? "session_index" : null,
+      !node.hasThread ? "thread" : null,
+    ].filter((surface): surface is string => Boolean(surface));
+
+    if (missingSurfaces.length > 0) {
+      addMissingSurfaceWarning(warningsByKey, {
+        sessionId: node.sessionId,
+        role: missingSurfaceRole(node),
+        missingSurfaces,
+        edgeStatus: node.relationshipStatus,
+      });
+    }
+  }
+
+  for (const relation of family.brokenRelations) {
+    if (relation.parentMissingSurfaces.length > 0) {
+      addMissingSurfaceWarning(warningsByKey, {
+        sessionId: relation.parentThreadId,
+        role: "parent",
+        missingSurfaces: relation.parentMissingSurfaces,
+        edgeStatus: relation.status,
+      });
+    }
+    if (relation.childMissingSurfaces.length > 0) {
+      addMissingSurfaceWarning(warningsByKey, {
+        sessionId: relation.childThreadId,
+        role: "child",
+        missingSurfaces: relation.childMissingSurfaces,
+        edgeStatus: relation.status,
+      });
+    }
+  }
+
+  return {
+    readOnly: true,
+    targetSessionId: family.current.sessionId,
+    selectedSessionIds: [family.current.sessionId],
+    unselectedParentIds: uniqueSortedIds(unselectedParentIds),
+    unselectedChildIds: uniqueSortedIds(unselectedChildIds),
+    unselectedFamilyMemberIds: uniqueSortedIds(unselectedFamilyMemberIds),
+    unselectedRelatedSessionIds,
+    missingParentIds,
+    missingChildIds,
+    missingFileSessionIds,
+    missingSessionIndexIds,
+    missingThreadIds,
+    missingSurfaceWarnings: [...warningsByKey.values()].sort((left, right) =>
+      left.sessionId.localeCompare(right.sessionId) ||
+      left.role.localeCompare(right.role) ||
+      (left.edgeStatus ?? "").localeCompare(right.edgeStatus ?? ""),
+    ),
+    brokenRelations: family.brokenRelations,
+    warnings: uniqueSortedMessages(family.brokenRelations.flatMap((relation) => relation.warnings)),
+  };
+}
+
+export function buildSessionFamilyQuery(
+  scan: ScanResult,
+  sessionId: string,
+  options: {
+    mode?: SessionFamilyMode;
+    sourceKind?: SourceKind | SourceKind[] | string | string[];
+  } = {},
+): SessionFamilyQuery {
+  const mode = options.mode ?? "full";
+  const family = resolveSessionFamily(scan, sessionId);
+  const sourceKinds = normalizeSourceKindFilters(options.sourceKind);
+  const nodes = filterNodesBySourceKind(nodesForMode(family, mode), sourceKinds);
+  const directChildren = filterNodesBySourceKind(family.directChildren, sourceKinds);
+
+  return {
+    mode,
+    sourceKinds,
+    family,
+    nodes,
+    childrenByCategory: groupChildrenByCategory(directChildren),
+    impact: mode === "impact" ? buildFamilyImpact(family) : null,
+    readOnly: true,
+  };
 }
 
 export function buildDeleteFamilyWarnings(scan: ScanResult, sessions: SessionEntry[]): DeleteFamilyWarning[] {

@@ -62,7 +62,7 @@ Use CLI only when MCP is unavailable or blocked.
 
 For Codex `/side` conversations, treat the parent thread and side child thread as separate sessions. Do not assume parent operations include side child transcripts. If the user wants both handled, identify the child session IDs first and include them in the preview or confirmed operation. If family output reports a broken relationship warning, tell the user the relationship record exists but the related session may be missing files, index rows, or full session records.
 
-Use `get_session_family` first when the request mentions parent, child, `/side`, or `/fork` relationships. It is read-only and does not select related sessions for write operations. Human CLI output uses short `source` labels; use JSON/MCP output when the full raw `source` field is needed.
+Use `get_session_family` first when the request mentions parent, child, `/side`, `/fork`, subagent, or family impact. It is read-only and does not select related sessions for write operations. It supports `mode: full | children | parents | subagents | impact` and optional `sourceKind`. Human CLI output uses short `source` labels unless `--full` is used; use JSON/MCP output when the full raw `source` field is needed.
 
 For session titles, treat `displayTitle` as the default user-facing title. It prefers `session_index.jsonl.thread_name`, which is usually closest to Codex UI search. When showing one session in detail, include `indexTitle`, `sqliteTitle`, `firstUserMessage`, `titleSource`, `titleMismatch`, and `titleCandidates` if the tool returns them. Human-readable CLI output may shorten long title fields and timeline previews; use JSON/MCP output for full values.
 
@@ -76,6 +76,11 @@ codex-sessions list --root <path-to-codex-root> --limit 20
 codex-sessions projects --root <path-to-codex-root>
 codex-sessions show <session-id> --root <path-to-codex-root>
 codex-sessions family <session-id> --root <path-to-codex-root>
+codex-sessions family <session-id> --root <path-to-codex-root> --children
+codex-sessions family <session-id> --root <path-to-codex-root> --parents
+codex-sessions family <session-id> --root <path-to-codex-root> --subagents
+codex-sessions family <session-id> --root <path-to-codex-root> --impact
+codex-sessions family <session-id> --root <path-to-codex-root> --full
 codex-sessions family <session-id> --root <path-to-codex-root> --json
 codex-sessions audit <session-id> --root <path-to-codex-root>
 codex-sessions audit <session-id> --root <path-to-codex-root> --json
@@ -115,6 +120,11 @@ node dist/cli/index.js list --root <path-to-codex-root> --limit 20
 node dist/cli/index.js projects --root <path-to-codex-root>
 node dist/cli/index.js show <session-id> --root <path-to-codex-root>
 node dist/cli/index.js family <session-id> --root <path-to-codex-root>
+node dist/cli/index.js family <session-id> --root <path-to-codex-root> --children
+node dist/cli/index.js family <session-id> --root <path-to-codex-root> --parents
+node dist/cli/index.js family <session-id> --root <path-to-codex-root> --subagents
+node dist/cli/index.js family <session-id> --root <path-to-codex-root> --impact
+node dist/cli/index.js family <session-id> --root <path-to-codex-root> --full
 node dist/cli/index.js family <session-id> --root <path-to-codex-root> --json
 node dist/cli/index.js audit <session-id> --root <path-to-codex-root>
 node dist/cli/index.js audit <session-id> --root <path-to-codex-root> --json
@@ -144,6 +154,11 @@ node dist/cli/index.js verify <session-id> --root <path-to-codex-root>
 
 - Run `inspect_root` or CLI `doctor` before delete, restore, purge, or cleanup when Codex storage may have changed.
 - `get_session_family` and CLI `family` are read-only. They do not delete, export, restore, or select related sessions automatically.
+- `get_session_family` modes `full`, `children`, `parents`, `subagents`, and `impact` are read-only. CLI `family --children`, `--parents`, `--subagents`, `--impact`, and `--full` are also read-only.
+- `family --impact` and MCP `mode=impact` show relationship impact only. Do not present them as deletion advice, do not generate `--yes`, and do not change delete behavior.
+- `thread_spawn_edges` is a generic parent/child edge table, not a subagent-only table. `/side`, `/fork`, subagent, MCP, exec, VS Code, CLI, and unknown sessions may all appear as child threads.
+- Classify child type from the child session's own `sourceKind`, raw `source`, `thread_source`, `agent_role`, `agent_nickname`, and `agent_path`.
+- Parent deletion does not automatically process children. Child deletion does not automatically process parents. Real deletion still requires a separate preview and explicit confirmation.
 - `audit_session` and CLI `audit` are read-only. They report local residue after official UI delete/archive actions and must not rewrite files, SQLite, shell snapshots, or global state.
 - `audit_root` and CLI `audit-root` are read-only. They scan for likely residue candidates across a Codex root and must not delete, rewrite, or select parent/child sessions automatically.
 - `audit_root` / `audit-root` status and source filters only narrow displayed candidates. Multiple statuses or multiple sources use OR; combining status and source uses AND. A matching candidate is not a deletion list entry or deletion recommendation; it still needs per-session audit or read-only preview before any cleanup decision.

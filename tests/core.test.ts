@@ -15,7 +15,7 @@ import {
   previewCleanupStaleIndexes,
   validateDeletion,
 } from "../src/core/delete.js";
-import { buildSessionFamily } from "../src/core/family.js";
+import { buildSessionFamily, buildSessionFamilyQuery } from "../src/core/family.js";
 import { inspectCodexRoot } from "../src/core/doctor.js";
 import { listProjectSummaries } from "../src/core/project.js";
 import { filterSessions, resolveSessions } from "../src/core/query.js";
@@ -241,6 +241,129 @@ describe("core integration", () => {
       agentNickname: "helper",
       agentPath: "/tmp/helper",
     });
+    expect(family.directChildren[0]).toMatchObject({
+      edgeStatus: "open",
+      sourceKind: "subagent",
+      childCategory: "subagent",
+      hasSessionIndex: true,
+      hasThread: true,
+    });
+  });
+
+  it("queries family modes and classifies direct children from child metadata", async () => {
+    const childRows = [
+      {
+        id: "019d6666-7777-7888-8999-ffffffffffff",
+        title: "Fork child",
+        source: "fork",
+        threadSource: "fork",
+        status: "complete",
+        expectedCategory: "side/fork",
+        expectedSourceKind: "unknown",
+      },
+      {
+        id: "019d7777-8888-7999-8aaa-111111111111",
+        title: "MCP child",
+        source: "mcp",
+        threadSource: "mcp",
+        status: "running",
+        expectedCategory: "mcp",
+        expectedSourceKind: "mcp",
+      },
+      {
+        id: "019d8888-9999-7aaa-8bbb-222222222222",
+        title: "Exec child",
+        source: "exec",
+        threadSource: "exec",
+        status: "running",
+        expectedCategory: "exec",
+        expectedSourceKind: "exec",
+      },
+      {
+        id: "019d9999-aaaa-7bbb-8ccc-333333333333",
+        title: "VS Code child",
+        source: "vscode",
+        threadSource: "vscode",
+        status: "running",
+        expectedCategory: "vscode",
+        expectedSourceKind: "vscode",
+      },
+      {
+        id: "019daaaa-bbbb-7ccc-8ddd-444444444444",
+        title: "CLI child",
+        source: "cli",
+        threadSource: "cli",
+        status: "running",
+        expectedCategory: "cli",
+        expectedSourceKind: "cli",
+      },
+      {
+        id: "019dbbbb-cccc-7ddd-8eee-555555555555",
+        title: "Unknown child",
+        source: "desktop",
+        threadSource: "desktop",
+        status: "mystery",
+        expectedCategory: "unknown",
+        expectedSourceKind: "unknown",
+      },
+    ] as const;
+    const db = new Database(fixture.paths.sqlite);
+    const insertThread = db.prepare(
+      `insert into threads (
+         id, title, first_user_message, created_at, updated_at, archived, rollout_path, model, cwd,
+         source, thread_source, agent_role, agent_nickname, agent_path
+       )
+       values (?, ?, 'child input', 1775119000, 1775119060, 0, null, 'gpt-5.4', '/workspace/child', ?, ?, null, null, null)`,
+    );
+    const insertEdge = db.prepare(
+      "insert into thread_spawn_edges (parent_thread_id, child_thread_id, status) values (?, ?, ?)",
+    );
+    for (const row of childRows) {
+      insertThread.run(row.id, row.title, row.source, row.threadSource);
+      insertEdge.run(FIXTURE_IDS.ACTIVE_ID, row.id, row.status);
+    }
+    db.close();
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const childrenQuery = buildSessionFamilyQuery(scan, FIXTURE_IDS.ACTIVE_ID, { mode: "children" });
+    const byId = new Map(childrenQuery.nodes.map((node) => [node.sessionId, node]));
+
+    expect(childrenQuery.nodes.every((node) => node.relationship === "child")).toBe(true);
+    expect(childrenQuery.nodes).toHaveLength(7);
+    expect(childrenQuery.childrenByCategory.subagent.map((node) => node.sessionId)).toEqual([FIXTURE_IDS.ARCHIVED_ID]);
+    for (const row of childRows) {
+      expect(byId.get(row.id)).toMatchObject({
+        childCategory: row.expectedCategory,
+        sourceKind: row.expectedSourceKind,
+        hasThread: true,
+        hasSessionIndex: false,
+        fileExists: false,
+      });
+    }
+    expect(byId.get(childRows[0].id)?.edgeStatus).toBe("closed");
+    expect(byId.get(childRows[5].id)?.edgeStatus).toBe("other");
+
+    const parentsQuery = buildSessionFamilyQuery(scan, FIXTURE_IDS.ARCHIVED_ID, { mode: "parents" });
+    expect(parentsQuery.nodes.map((node) => node.sessionId)).toEqual([FIXTURE_IDS.ACTIVE_ID]);
+
+    const subagentsQuery = buildSessionFamilyQuery(scan, FIXTURE_IDS.ACTIVE_ID, { mode: "subagents" });
+    expect(subagentsQuery.nodes.map((node) => node.sessionId)).toEqual([FIXTURE_IDS.ARCHIVED_ID]);
+
+    const filteredQuery = buildSessionFamilyQuery(scan, FIXTURE_IDS.ACTIVE_ID, { mode: "children", sourceKind: "mcp" });
+    expect(filteredQuery.nodes.map((node) => node.sessionId)).toEqual([childRows[1].id]);
+
+    const impactQuery = buildSessionFamilyQuery(scan, FIXTURE_IDS.ACTIVE_ID, { mode: "impact" });
+    expect(impactQuery.impact?.missingFileSessionIds).toEqual(childRows.map((row) => row.id).sort());
+    expect(impactQuery.impact?.missingSessionIndexIds).toEqual(childRows.map((row) => row.id).sort());
+    expect(impactQuery.impact?.missingSurfaceWarnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sessionId: childRows[0].id,
+          role: "child",
+          missingSurfaces: ["file", "session_index"],
+        }),
+      ]),
+    );
   });
 
   it("builds a session family for a child with a parent", async () => {
@@ -353,6 +476,7 @@ describe("core integration", () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     const active = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID])[0];
     const family = buildSessionFamily(scan, active);
+    const impactQuery = buildSessionFamilyQuery(scan, FIXTURE_IDS.ACTIVE_ID, { mode: "impact" });
     const preview = buildDeletePreview(scan, [active]);
 
     expect(family.warnings).toContain(`missing parent session: ${missingParentId}`);
@@ -382,6 +506,29 @@ describe("core integration", () => {
       expect.arrayContaining([
         `missing parent session: ${missingParentId}`,
         `missing child session: ${missingChildId}`,
+      ]),
+    );
+    expect(impactQuery.impact).toMatchObject({
+      readOnly: true,
+      targetSessionId: FIXTURE_IDS.ACTIVE_ID,
+      unselectedChildIds: [FIXTURE_IDS.ARCHIVED_ID, missingChildId],
+      missingParentIds: [missingParentId],
+      missingChildIds: [missingChildId],
+      missingFileSessionIds: [missingParentId, missingChildId],
+      missingSessionIndexIds: [missingParentId, missingChildId],
+    });
+    expect(impactQuery.impact?.missingSurfaceWarnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sessionId: missingParentId,
+          role: "parent",
+          missingSurfaces: expect.arrayContaining(["session"]),
+        }),
+        expect.objectContaining({
+          sessionId: missingChildId,
+          role: "child",
+          missingSurfaces: expect.arrayContaining(["session"]),
+        }),
       ]),
     );
   });

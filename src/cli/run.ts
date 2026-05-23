@@ -14,7 +14,7 @@ import {
   previewCleanupStaleIndexes,
   validateDeletion,
 } from "../core/delete.js";
-import { resolveSessionFamily } from "../core/family.js";
+import { buildSessionFamilyQuery } from "../core/family.js";
 import { listProjectSummaries } from "../core/project.js";
 import { filterSessions, resolveSessions } from "../core/query.js";
 import { scanCodexRoot } from "../core/scan.js";
@@ -30,7 +30,7 @@ import {
   formatCleanupResult,
   formatDeleteResult,
   formatDoctor,
-  formatFamily,
+  formatFamilyQuery,
   formatGroupedList,
   formatList,
   formatPreview,
@@ -94,6 +94,8 @@ Usage:
   codex-sessions doctor [--root PATH] [--json]
   codex-sessions show <session-id> [--root PATH] [--json]
   codex-sessions family <session-id> [--root PATH] [--json]
+                       [--children | --parents | --subagents | --impact] [--full]
+                       [--source-kind KIND]
   codex-sessions audit <session-id> [--root PATH] [--json]
   codex-sessions audit-root [--root PATH] [--json] [--limit N] [--status STATUS...] [--source SOURCE...] [--all]
   codex-sessions preview-root [--root PATH] [--json] [--limit N] [--status STATUS...] [--source SOURCE...] [--all]
@@ -109,7 +111,8 @@ Usage:
 Notes:
   - 默认根目录是 ~/.codex
   - delete 未带 --yes 时只展示预览，不执行删除
-  - family 只读查看 parent / children / side / fork 关系，不会自动递归处理
+  - family 只读查看 parent / child / side / fork / subagent 关系，不会自动递归处理
+  - family --impact 只读查看关系影响，不执行删除，也不生成 --yes
   - audit 只读检查官方 UI 删除或归档后本地还剩哪些记录
   - audit-root 只读扫描整个 root 的疑似残留，默认 limit=50
   - audit-root 多个 --status 或 --source 为 OR；同时使用 status 和 source 时为 AND
@@ -143,6 +146,11 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
       yes: { type: "boolean", default: false },
       trash: { type: "boolean", default: false },
       all: { type: "boolean", default: false },
+      children: { type: "boolean", default: false },
+      parents: { type: "boolean", default: false },
+      subagents: { type: "boolean", default: false },
+      impact: { type: "boolean", default: false },
+      full: { type: "boolean", default: false },
       query: { type: "string" },
       project: { type: "string" },
       status: { type: "string", multiple: true },
@@ -268,8 +276,25 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
         throw new Error("family 需要 1 个 session-id。");
       }
 
-      const family = resolveSessionFamily(scan, rest[0]);
-      io.stdout(asJson ? JSON.stringify({ root: scan.root, warnings: scan.warnings, family }, null, 2) : formatFamily(family));
+      const selectedModes = [
+        values.children ? "children" : null,
+        values.parents ? "parents" : null,
+        values.subagents ? "subagents" : null,
+        values.impact ? "impact" : null,
+      ].filter((mode): mode is "children" | "parents" | "subagents" | "impact" => Boolean(mode));
+      if (selectedModes.length > 1) {
+        throw new Error("family 一次只能选择一个 mode：--children、--parents、--subagents 或 --impact。");
+      }
+
+      const query = buildSessionFamilyQuery(scan, rest[0], {
+        mode: selectedModes[0] ?? "full",
+        sourceKind: sourceKindValues,
+      });
+      io.stdout(
+        asJson
+          ? JSON.stringify({ root: scan.root, warnings: scan.warnings, ...query }, null, 2)
+          : formatFamilyQuery(query, { full: Boolean(values.full) }),
+      );
       return 0;
     }
 

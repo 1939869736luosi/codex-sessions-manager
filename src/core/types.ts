@@ -225,23 +225,37 @@ export type SessionFamilyRelationship =
   | "sibling"
   | "related";
 
+export type SessionFamilyEdgeStatus = "open" | "closed" | "other" | "none";
+
+export type SessionFamilyChildCategory = "subagent" | "side/fork" | "mcp" | "exec" | "vscode" | "cli" | "unknown";
+
+export type SessionFamilyMode = "full" | "children" | "parents" | "subagents" | "impact";
+
 export interface SessionFamilyNode {
   sessionId: string;
   displayTitle: string;
   kind: SessionKind;
   relationship: SessionFamilyRelationship;
   relationshipStatus: string | null;
+  edgeStatus: SessionFamilyEdgeStatus;
   parentEdgeStatus: string | null;
   archived: boolean;
   updatedAt: string | null;
   fileExists: boolean;
   fileCount: number;
+  hasSessionIndex: boolean;
+  sessionIndexCount: number;
+  hasHistory: boolean;
+  historyCount: number;
+  hasThread: boolean;
+  sourceKind: SourceKind;
   source: string | null;
   sourceLabel: string;
   threadSource: string | null;
   agentRole: string | null;
   agentNickname: string | null;
   agentPath: string | null;
+  childCategory: SessionFamilyChildCategory;
   parentIds: string[];
   childIds: string[];
   edge: ThreadSpawnEdgeRow | null;
@@ -264,7 +278,11 @@ export interface SessionFamily {
   parent: SessionFamilyNode | null;
   parents: SessionFamilyNode[];
   directChildren: SessionFamilyNode[];
+  ancestors: SessionFamilyNode[];
+  descendants: SessionFamilyNode[];
+  siblings: SessionFamilyNode[];
   familyMembers: SessionFamilyNode[];
+  childrenByCategory: Record<SessionFamilyChildCategory, SessionFamilyNode[]>;
   edges: ThreadSpawnEdgeRow[];
   brokenRelations: SessionFamilyBrokenRelation[];
   warnings: string[];
@@ -280,6 +298,41 @@ export interface DeleteFamilyWarning {
   missingChildIds: string[];
   brokenRelations: SessionFamilyBrokenRelation[];
   warnings: string[];
+}
+
+export interface SessionFamilyMissingSurfaceWarning {
+  sessionId: string;
+  role: "parent" | "child" | "family";
+  missingSurfaces: string[];
+  edgeStatus: string | null;
+}
+
+export interface SessionFamilyImpact {
+  readOnly: true;
+  targetSessionId: string;
+  selectedSessionIds: string[];
+  unselectedParentIds: string[];
+  unselectedChildIds: string[];
+  unselectedFamilyMemberIds: string[];
+  unselectedRelatedSessionIds: string[];
+  missingParentIds: string[];
+  missingChildIds: string[];
+  missingFileSessionIds: string[];
+  missingSessionIndexIds: string[];
+  missingThreadIds: string[];
+  missingSurfaceWarnings: SessionFamilyMissingSurfaceWarning[];
+  brokenRelations: SessionFamilyBrokenRelation[];
+  warnings: string[];
+}
+
+export interface SessionFamilyQuery {
+  mode: SessionFamilyMode;
+  sourceKinds: SourceKind[];
+  family: SessionFamily;
+  nodes: SessionFamilyNode[];
+  childrenByCategory: Record<SessionFamilyChildCategory, SessionFamilyNode[]>;
+  impact: SessionFamilyImpact | null;
+  readOnly: true;
 }
 
 export type SessionResidueAuditStatus =

@@ -36,6 +36,10 @@ codex-sessions sources
 
 # 查看父子关系（安全，不做任何修改）
 codex-sessions family <session-id>
+codex-sessions family <session-id> --children
+codex-sessions family <session-id> --parents
+codex-sessions family <session-id> --subagents
+codex-sessions family <session-id> --impact
 
 # 审计官方 UI 删除/归档后本机还剩什么（安全，不做任何修改）
 codex-sessions audit <session-id>
@@ -98,7 +102,7 @@ codex-sessions verify <session-id>
 | **清理索引** | 移除失效索引条目，不动原始数据 |
 | **健康检查** | `doctor` 命令做完整诊断 |
 | **MCP 服务** | AI Agent（Claude Code、Codex、Kiro）直接管理会话 |
-| **会话家族** | 只读查看 parent、child、`/fork`、`/side` 关系；人类输出使用短 `source` 标签 |
+| **会话家族** | 只读查看 parent、child、ancestor、descendant、sibling、subagent、`/fork`、`/side` 和 impact；人类输出默认使用短 `source` 标签，`--full` 显示更完整 |
 | **子对话感知** | 父会话和子会话仍是独立 session；删除、导出、验证都不会自动递归 |
 
 ## 给 AI Agent 用（MCP）
@@ -118,7 +122,7 @@ codex-sessions verify <session-id>
 
 暴露 18 个工具：`inspect_root`、`list_sessions`、`summarize_sources`、`list_projects`、`get_session`、`get_session_family`、`audit_session`、`audit_root`、`preview_root_delete`、`export_session_backup`、`preview_delete_sessions`、`delete_sessions`、`list_trash`、`restore_sessions`、`purge_trash`、`cleanup_session_indexes`、`cleanup_stale_indexes`、`verify_sessions`。
 
-`summarize_sources`、`get_session_family`、`audit_session`、`audit_root` 和 `preview_root_delete` 是只读工具，不需要确认。所有破坏性操作需要 `confirm: true`，否则只返回预览。
+`summarize_sources`、`get_session_family`、`audit_session`、`audit_root` 和 `preview_root_delete` 是只读工具，不需要确认。`get_session_family` 支持 `mode: full | children | parents | subagents | impact`，也支持可选 `sourceKind`。所有破坏性操作需要 `confirm: true`，否则只返回预览。
 
 ## CLI 命令
 
@@ -133,7 +137,7 @@ codex-sessions sources [--json]
 codex-sessions projects
 codex-sessions doctor [--json]
 codex-sessions show <session-id>
-codex-sessions family <session-id> [--json]
+codex-sessions family <session-id> [--json] [--children|--parents|--subagents|--impact] [--full] [--source-kind KIND]
 codex-sessions audit <session-id> [--json]
 codex-sessions audit-root [--json] [--limit 50] [--status STATUS...] [--source SOURCE...] [--all]
 codex-sessions preview-root [--json] [--limit 50] [--status STATUS...] [--source SOURCE...] [--all]
@@ -187,7 +191,17 @@ codex-sessions verify <session-id...> [--json]
 
 删除 parent 或 child 前先看 `family`。parent 和 child 是不同 session，各自有自己的 ID。删除 parent 不等于删除 child，删除 child 也不等于删除 parent。删除预览和 audit 会提示关系记录指向缺失 session，或相关 session 缺文件/索引。要一起处理多个相关 session，需要把每个 session ID 明确放进预览或删除命令。工具不会自动递归处理 parent 或 child。
 
-人类可读的 `family` 输出会用短 `source` 标签保持表格清楚，例如 `subagent`、`mcp`、`exec`、`side-thread`、`unknown`。需要完整原始 `source` 字段时，用 `family --json` 或 MCP `get_session_family`。
+`thread_spawn_edges` 是通用 parent/child 关系边，不是 subagent 专用表。`/side`、`/fork`、subagent、MCP、exec、VS Code、CLI 和 unknown 都可能表现为 child thread。判断 child 类型时，看 child 自己的 `sourceKind`、raw `source`、`thread_source`、`agent_role`、`agent_nickname` 和 `agent_path`。
+
+`family` 的这些视图全部只读：
+
+- `family <id> --children` 只显示直接 children，包含 `sourceKind`、edge 状态、child 类型、标题、更新时间、agent 信息，以及 file/index/thread 是否存在。
+- `family <id> --parents` 只显示直接 parents，保留同样的来源和 edge 信息。
+- `family <id> --subagents` 显示 family 里 `sourceKind=subagent` 或带 agent 信息的成员。
+- `family <id> --impact` 只读显示如果之后只处理当前 session，哪些 parent、child、family member 没被选中，以及 missing parent/child、缺 file/index/thread 等风险。它不删除，不建议删除，也不会生成 `--yes`。
+- `family <id> --full` 在人类输出里显示完整 raw `source` 和完整标题。JSON 输出始终保留完整字段。
+
+可以给 family 视图加 `--source-kind subagent|mcp|vscode|cli|exec|unknown`，只看匹配成员。需要完整原始字段时，用 `family --json` 或 MCP `get_session_family`。真正删除仍然必须单独 preview，并显式确认。
 
 ## 标题怎么看
 

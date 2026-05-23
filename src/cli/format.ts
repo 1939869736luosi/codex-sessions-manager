@@ -13,7 +13,9 @@ import type {
   ScanResult,
   SessionEntry,
   SessionFamily,
+  SessionFamilyImpact,
   SessionFamilyNode,
+  SessionFamilyQuery,
   SessionResidueAudit,
   SessionIndexCleanupResult,
   SourceSummary,
@@ -309,30 +311,109 @@ export function formatSourceSummary(scan: ScanResult, summary: SourceSummary): s
   ].join("\n") + warnings;
 }
 
-function formatFamilyNodes(nodes: SessionFamilyNode[]): string {
+function existsLabel(value: boolean, count?: number): string {
+  if (!value) {
+    return "no";
+  }
+
+  return count === undefined ? "yes" : `yes(${count})`;
+}
+
+function formatFamilyNodes(nodes: SessionFamilyNode[], options: { full?: boolean } = {}): string {
   if (nodes.length === 0) {
     return "无";
   }
 
+  const sourceValue = (node: SessionFamilyNode) =>
+    options.full ? (node.source?.replace(/\s+/g, " ").trim() || "-") : node.sourceLabel;
+  const titleValue = (node: SessionFamilyNode) => options.full ? node.displayTitle : trimTitle(node.displayTitle);
+
   return printTable([
-    ["关系", "edge", "archived", "updated", "file", "source", "thread_source", "agent_role", "agent_nickname", "ID", "标题"],
+    [
+      "关系",
+      "edge",
+      "edgeStatus",
+      "archived",
+      "updated",
+      "file",
+      "index",
+      "thread",
+      "sourceKind",
+      "childType",
+      "source",
+      "thread_source",
+      "agent_role",
+      "agent_nickname",
+      "ID",
+      "标题",
+    ],
     ...nodes.map((node) => [
       node.relationship,
       node.relationshipStatus ?? "-",
+      node.edgeStatus,
       node.archived ? "yes" : "no",
       formatDate(node.updatedAt),
-      node.fileExists ? `yes(${node.fileCount})` : "no",
-      node.sourceLabel,
+      existsLabel(node.fileExists, node.fileCount),
+      existsLabel(node.hasSessionIndex, node.sessionIndexCount),
+      existsLabel(node.hasThread),
+      node.sourceKind,
+      node.childCategory,
+      sourceValue(node),
       trimDetailText(node.threadSource),
       trimDetailText(node.agentRole),
       trimDetailText(node.agentNickname),
       node.sessionId,
-      trimTitle(node.displayTitle),
+      titleValue(node),
     ]),
   ]);
 }
 
-export function formatFamily(family: SessionFamily): string {
+function formatChildrenByCategory(nodes: SessionFamilyNode[]): string[] {
+  const counts = nodes.reduce<Record<string, number>>((result, node) => {
+    result[node.childCategory] = (result[node.childCategory] ?? 0) + 1;
+    return result;
+  }, {});
+  const lines = Object.entries(counts)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([category, count]) => `- ${category}: ${count}`);
+
+  return lines.length ? ["child 分类:", ...lines] : ["child 分类: 无"];
+}
+
+function formatFamilyImpact(impact: SessionFamilyImpact): string {
+  const missingSurfaceRows = impact.missingSurfaceWarnings.length
+    ? printTable([
+      ["session", "role", "missing", "edge"],
+      ...impact.missingSurfaceWarnings.map((warning) => [
+        warning.sessionId,
+        warning.role,
+        warning.missingSurfaces.join(", "),
+        warning.edgeStatus ?? "-",
+      ]),
+    ])
+    : "无";
+  const warningLines = impact.warnings.length ? ["", "断裂关系警告:", ...impact.warnings.map((warning) => `- ${warning}`)] : [];
+
+  return [
+    "family impact（只读，未执行删除）",
+    `目标会话: ${impact.targetSessionId}`,
+    `当前选择: ${impact.selectedSessionIds.join(", ")}`,
+    `未选中的 parent: ${impact.unselectedParentIds.join(", ") || "-"}`,
+    `未选中的 child: ${impact.unselectedChildIds.join(", ") || "-"}`,
+    `未选中的 family member: ${impact.unselectedFamilyMemberIds.join(", ") || "-"}`,
+    `missing parent: ${impact.missingParentIds.join(", ") || "-"}`,
+    `missing child: ${impact.missingChildIds.join(", ") || "-"}`,
+    `缺 file: ${impact.missingFileSessionIds.join(", ") || "-"}`,
+    `缺 session_index: ${impact.missingSessionIndexIds.join(", ") || "-"}`,
+    `缺 thread: ${impact.missingThreadIds.join(", ") || "-"}`,
+    "",
+    "缺失明细:",
+    missingSurfaceRows,
+    ...warningLines,
+  ].join("\n");
+}
+
+export function formatFamily(family: SessionFamily, options: { full?: boolean } = {}): string {
   const parentIds = family.parents.map((node) => node.sessionId);
   const childIds = family.directChildren.map((node) => node.sessionId);
   const warningLines = family.warnings.length ? ["", "警告:", ...family.warnings.map((warning) => `- ${warning}`)] : [];
@@ -345,19 +426,81 @@ export function formatFamily(family: SessionFamily): string {
     `children: ${childIds.length ? childIds.join(", ") : "-"}`,
     `family members: ${family.familyMembers.length}`,
     "",
+    ...formatChildrenByCategory(family.directChildren),
+    "",
     "当前会话信息:",
-    formatFamilyNodes([family.current]),
+    formatFamilyNodes([family.current], options),
+    "",
+    "root:",
+    formatFamilyNodes([family.root], options),
     "",
     "直接 parent:",
-    formatFamilyNodes(family.parents),
+    formatFamilyNodes(family.parents, options),
     "",
     "直接 children:",
-    formatFamilyNodes(family.directChildren),
+    formatFamilyNodes(family.directChildren, options),
+    "",
+    "ancestors:",
+    formatFamilyNodes(family.ancestors, options),
+    "",
+    "descendants:",
+    formatFamilyNodes(family.descendants, options),
+    "",
+    "siblings:",
+    formatFamilyNodes(family.siblings, options),
     "",
     "family:",
-    formatFamilyNodes(family.familyMembers),
+    formatFamilyNodes(family.familyMembers, options),
     ...warningLines,
   ].join("\n");
+}
+
+export function formatFamilyQuery(query: SessionFamilyQuery, options: { full?: boolean } = {}): string {
+  const filterLine = query.sourceKinds.length ? `sourceKind filter: ${query.sourceKinds.join(", ")}` : "sourceKind filter: -";
+  const warningLines = query.family.warnings.length ? ["", "警告:", ...query.family.warnings.map((warning) => `- ${warning}`)] : [];
+
+  if (query.mode === "impact") {
+    return formatFamilyImpact(query.impact as SessionFamilyImpact);
+  }
+
+  if (query.mode === "full") {
+    if (query.sourceKinds.length > 0) {
+      return [
+        `当前会话: ${query.family.current.sessionId}`,
+        `标题: ${trimDetailText(query.family.current.displayTitle)}`,
+        `root: ${query.family.root.sessionId}`,
+        "mode: full",
+        filterLine,
+        `结果数: ${query.nodes.length}`,
+        "",
+        "family members:",
+        formatFamilyNodes(query.nodes, options),
+        ...warningLines,
+      ].join("\n");
+    }
+    return formatFamily(query.family, options);
+  }
+
+  const titleByMode = {
+    children: "直接 children",
+    parents: "直接 parent",
+    subagents: "family subagents",
+  } as const;
+
+  return [
+    `当前会话: ${query.family.current.sessionId}`,
+    `标题: ${trimDetailText(query.family.current.displayTitle)}`,
+    `root: ${query.family.root.sessionId}`,
+    `mode: ${query.mode}`,
+    filterLine,
+    `结果数: ${query.nodes.length}`,
+    "",
+    ...(query.mode === "children" ? formatChildrenByCategory(query.nodes) : []),
+    query.mode === "children" ? "" : null,
+    `${titleByMode[query.mode]}:`,
+    formatFamilyNodes(query.nodes, options),
+    ...warningLines,
+  ].filter((line): line is string => line !== null).join("\n");
 }
 
 function formatFamilyWarnings(warnings: DeletePreview["familyWarnings"]): string[] {

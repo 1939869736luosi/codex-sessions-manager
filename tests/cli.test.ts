@@ -152,6 +152,116 @@ describe("cli", () => {
     expect(result.family.directChildren).toEqual([]);
   });
 
+  it("supports family query modes without producing confirmation flags", async () => {
+    const children = createIo();
+    const childrenExit = await runCli(["family", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--children"], children.io);
+    const childrenOutput = children.stdout.join("\n");
+    expect(childrenExit).toBe(0);
+    expect(childrenOutput).toContain("mode: children");
+    expect(childrenOutput).toContain("直接 children");
+    expect(childrenOutput).toContain(FIXTURE_IDS.ARCHIVED_ID);
+    expect(childrenOutput).toContain("sourceKind");
+    expect(childrenOutput).toContain("childType");
+    expect(childrenOutput).toContain("index");
+    expect(childrenOutput).toContain("thread");
+
+    const parents = createIo();
+    const parentsExit = await runCli(["family", FIXTURE_IDS.ARCHIVED_ID, "--root", fixture.rootDir, "--parents"], parents.io);
+    expect(parentsExit).toBe(0);
+    expect(parents.stdout.join("\n")).toContain("mode: parents");
+    expect(parents.stdout.join("\n")).toContain(FIXTURE_IDS.ACTIVE_ID);
+
+    const subagents = createIo();
+    const subagentsExit = await runCli(["family", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--subagents"], subagents.io);
+    expect(subagentsExit).toBe(0);
+    expect(subagents.stdout.join("\n")).toContain("mode: subagents");
+    expect(subagents.stdout.join("\n")).toContain("helper");
+    expect(subagents.stdout.join("\n")).toContain(FIXTURE_IDS.ARCHIVED_ID);
+
+    const impact = createIo();
+    const impactExit = await runCli(["family", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--impact"], impact.io);
+    const impactOutput = impact.stdout.join("\n");
+    expect(impactExit).toBe(0);
+    expect(impactOutput).toContain("family impact（只读，未执行删除）");
+    expect(impactOutput).toContain(`未选中的 child: ${FIXTURE_IDS.ARCHIVED_ID}`);
+    expect(impactOutput).not.toContain("--yes");
+  });
+
+  it("filters family modes by sourceKind and keeps complete json fields", async () => {
+    const rawSource = JSON.stringify({
+      subagent: {
+        thread_spawn: {
+          parent_thread_id: FIXTURE_IDS.ACTIVE_ID,
+          agent_nickname: "helper",
+          agent_role: "explorer",
+        },
+      },
+    });
+    const db = new Database(fixture.paths.sqlite);
+    db.prepare("update threads set source = ?, thread_source = ?, agent_role = ?, agent_nickname = ? where id = ?").run(
+      rawSource,
+      "subagent",
+      "explorer",
+      "helper",
+      FIXTURE_IDS.ARCHIVED_ID,
+    );
+    db.close();
+
+    const human = createIo();
+    const humanExit = await runCli(
+      ["family", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--children", "--source-kind", "subagent"],
+      human.io,
+    );
+    expect(humanExit).toBe(0);
+    expect(human.stdout.join("\n")).toContain("sourceKind filter: subagent");
+    expect(human.stdout.join("\n")).toContain("结果数: 1");
+    expect(human.stdout.join("\n")).toContain(FIXTURE_IDS.ARCHIVED_ID);
+
+    const full = createIo();
+    const fullExit = await runCli(["family", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--children", "--full"], full.io);
+    expect(fullExit).toBe(0);
+    expect(full.stdout.join("\n")).toContain("thread_spawn");
+    expect(full.stdout.join("\n")).toContain("parent_thread_id");
+
+    const json = createIo();
+    const jsonExit = await runCli(
+      ["family", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--children", "--source-kind", "subagent", "--json"],
+      json.io,
+    );
+    const result = JSON.parse(json.stdout.join("\n")) as {
+      mode: string;
+      sourceKinds: string[];
+      nodes: Array<{
+        sessionId: string;
+        sourceKind: string;
+        source: string;
+        threadSource: string;
+        agentRole: string;
+        agentNickname: string;
+        hasSessionIndex: boolean;
+        hasThread: boolean;
+        fileExists: boolean;
+      }>;
+      family: { current: { sessionId: string } };
+    };
+    expect(jsonExit).toBe(0);
+    expect(result.mode).toBe("children");
+    expect(result.sourceKinds).toEqual(["subagent"]);
+    expect(result.nodes).toHaveLength(1);
+    expect(result.nodes[0]).toMatchObject({
+      sessionId: FIXTURE_IDS.ARCHIVED_ID,
+      sourceKind: "subagent",
+      source: rawSource,
+      threadSource: "subagent",
+      agentRole: "explorer",
+      agentNickname: "helper",
+      hasSessionIndex: true,
+      hasThread: true,
+      fileExists: true,
+    });
+    expect(result.family.current.sessionId).toBe(FIXTURE_IDS.ACTIVE_ID);
+  });
+
   it("truncates long title metadata in human-readable show output", async () => {
     const longSqliteTitle = `sqlite-title-start ${"x".repeat(260)} sqlite-title-end`;
     const longFirstUserMessage = `first-message-start ${"y".repeat(260)} first-message-end`;

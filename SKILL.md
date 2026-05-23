@@ -126,6 +126,8 @@ For time filters, pass `updatedAfter`, `updatedBefore`, `createdAfter`, or `crea
 
 For source-aware listing, pass `sourceKind`, `source`, `threadSource`, `agentRole`, `agentNickname`, `modelProvider`, or `model` to `list_sessions`. Use `summarize_sources` for a read-only count by `sourceKind`, raw `source`, `thread_source`, `model_provider`, `model`, and `agent_role`.
 
+For family lookups, call `get_session_family` with optional `mode: full | children | parents | subagents | impact` and optional `sourceKind`. These modes are read-only. `impact` is a relationship risk view only; it is not a deletion recommendation and must not execute or imply confirmation.
+
 ### 2. Fall back to CLI
 
 Prefer the installed CLI:
@@ -145,6 +147,11 @@ codex-sessions sources --root <path-to-codex-root> --json
 codex-sessions projects --root <path-to-codex-root>
 codex-sessions show <session-id> --root <path-to-codex-root>
 codex-sessions family <session-id> --root <path-to-codex-root>
+codex-sessions family <session-id> --root <path-to-codex-root> --children
+codex-sessions family <session-id> --root <path-to-codex-root> --parents
+codex-sessions family <session-id> --root <path-to-codex-root> --subagents
+codex-sessions family <session-id> --root <path-to-codex-root> --impact
+codex-sessions family <session-id> --root <path-to-codex-root> --full
 codex-sessions family <session-id> --root <path-to-codex-root> --json
 codex-sessions audit <session-id> --root <path-to-codex-root>
 codex-sessions audit <session-id> --root <path-to-codex-root> --json
@@ -196,6 +203,11 @@ node dist/cli/index.js sources --root <path-to-codex-root> --json
 node dist/cli/index.js projects --root <path-to-codex-root>
 node dist/cli/index.js show <session-id> --root <path-to-codex-root>
 node dist/cli/index.js family <session-id> --root <path-to-codex-root>
+node dist/cli/index.js family <session-id> --root <path-to-codex-root> --children
+node dist/cli/index.js family <session-id> --root <path-to-codex-root> --parents
+node dist/cli/index.js family <session-id> --root <path-to-codex-root> --subagents
+node dist/cli/index.js family <session-id> --root <path-to-codex-root> --impact
+node dist/cli/index.js family <session-id> --root <path-to-codex-root> --full
 node dist/cli/index.js family <session-id> --root <path-to-codex-root> --json
 node dist/cli/index.js audit <session-id> --root <path-to-codex-root>
 node dist/cli/index.js audit <session-id> --root <path-to-codex-root> --json
@@ -236,6 +248,11 @@ node dist/cli/index.js verify <session-id...> --root <path-to-codex-root>
 - `source=mcp` is a thread source label, not a per-call MCP tool log.
 - `model_provider` is display/filter metadata in this skill. Do not use this workflow to repair or rewrite provider identity.
 - `get_session_family` and CLI `family` are read-only. They do not delete, export, restore, or select related sessions automatically.
+- `get_session_family` modes `full`, `children`, `parents`, `subagents`, and `impact` are read-only. CLI `family --children`, `--parents`, `--subagents`, `--impact`, and `--full` are also read-only.
+- `family --impact` and MCP `mode=impact` show relationship impact only. Do not present them as deletion advice, do not generate `--yes`, and do not change delete behavior.
+- `thread_spawn_edges` is a generic parent/child edge table, not a subagent-only table. `/side`, `/fork`, subagent, MCP, exec, VS Code, CLI, and unknown sessions may all appear as child threads.
+- Classify child type from the child session's own `sourceKind`, raw `source`, `thread_source`, `agent_role`, `agent_nickname`, and `agent_path`.
+- Parent deletion does not automatically process children. Child deletion does not automatically process parents. Real deletion still requires a separate preview and explicit confirmation.
 - `audit_session` and CLI `audit` are read-only. They report local residue after official UI delete/archive actions and must not rewrite files, SQLite, shell snapshots, or global state.
 - `audit_root` and CLI `audit-root` are read-only. They scan for likely residue candidates across a Codex root and must not delete, rewrite, or select parent/child sessions automatically.
 - `audit_root` / `audit-root` status and source filters only narrow displayed candidates. Multiple statuses or multiple sources use OR; combining status and source uses AND. A matching candidate is not a deletion list entry or deletion recommendation; it still needs per-session audit or read-only preview before any cleanup decision.
@@ -265,7 +282,9 @@ Codex `/side` creates an ephemeral side conversation with a separate transcript.
 When a user asks about side conversations:
 
 - Treat the parent thread and side child thread as separate sessions with separate transcripts.
-- Use `get_session_family` or CLI `family` first to identify parent, child, `/side`, and `/fork` relationships.
+- Use `get_session_family` or CLI `family` first to identify parent, child, `/side`, `/fork`, subagent, and unknown child relationships.
+- Treat `thread_spawn_edges` as generic parent/child edges. Do not describe them as a subagent-only table.
+- Determine child type from the child session's own `sourceKind`, raw `source`, `thread_source`, and agent metadata.
 - If family output reports broken relationship warnings, tell the user the relationship record exists but the related session may be missing files, index rows, or full session records.
 - Search, show, export, delete, trash, restore, or verify the child thread by its own session ID.
 - Do not assume deleting, exporting, or summarizing a parent thread also handles its side child threads.
@@ -280,7 +299,11 @@ When a user asks about side conversations:
 - For project requests: show project name/path, session count, status counts, latest updated time, and total size.
 - For show requests: summarize the session and include key metadata. Include `displayTitle`, `indexTitle`, `sqliteTitle`, `firstUserMessage`, `titleSource`, `titleMismatch`, and `titleCandidates` when available. Human-readable CLI output may shorten long title fields and timeline previews; use JSON/MCP output for full values.
 - Treat `displayTitle` as the default user-facing title. It prefers `session_index.jsonl.thread_name`, which is usually the title searchable in Codex UI. Do not present `sqliteTitle` as the only title when sources disagree.
-- For family requests: distinguish current session, root, parent IDs, child IDs, relationship status, archived state, file existence, short `source` label, and source metadata. Human CLI output shows compact `source` labels; JSON/MCP output keeps the full raw `source` field. Report broken relationship warnings clearly. Say clearly that the action covers only explicitly selected session IDs.
+- For family requests: distinguish current session, root, direct parents, direct children, ancestors, descendants, siblings, full family members, edge status, `sourceKind`, raw `source`, `thread_source`, agent metadata, and file/index/thread presence. Human CLI output shows compact `source` labels unless `--full` is used; JSON/MCP output keeps the full raw `source` field. Report broken relationship warnings clearly. Say clearly that family views are read-only and cover only explicitly selected session IDs.
+- For family children requests: use MCP `get_session_family mode=children` or CLI `family --children`. Show direct children only, grouped or labeled by child type when useful.
+- For family parent requests: use MCP `get_session_family mode=parents` or CLI `family --parents`. Show direct parents only.
+- For family subagent requests: use MCP `get_session_family mode=subagents` or CLI `family --subagents`. Include nickname and role when available.
+- For family impact requests: use MCP `get_session_family mode=impact` or CLI `family --impact`. Report unselected parent, child, family members, missing parent/child, and missing file/index/thread risks. Say clearly that it is read-only, not deletion advice, and not a substitute for delete preview.
 - For side-conversation requests: distinguish parent thread ID and child thread ID, and say whether the requested action covers one or both.
 - For audit requests: report the overall status, each residue surface count, family summary, warnings, and the preview-only next command. Say clearly that audit does not delete anything and that parent/child sessions are not handled recursively.
 - For root residue requests: use MCP `audit_root` or CLI `audit-root`. Report `filters`, `totalCandidatesBeforeFilter`, `totalCandidatesAfterFilter`, `returnedCandidates`, limit, `byStatus`, `bySource`, session IDs, status labels, residue source counts, family/broken-family state, and the recommended per-session audit command. Do not print chat content. Say clearly that root scans do not delete anything, candidates are not a deletion list, filtered candidates are not automatically safe to delete, and parent/child sessions are not handled recursively.
