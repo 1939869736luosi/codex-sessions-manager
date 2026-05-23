@@ -702,6 +702,12 @@ export interface TrashEntrySummary {
   sessions: TrashSessionManifest[];
 }
 
+export interface TrashDuplicateSessionSummary {
+  sessionId: string;
+  count: number;
+  trashIds: string[];
+}
+
 export interface TrashDeleteResult {
   trashEntry: TrashEntrySummary;
   deletion: DeleteExecutionResult;

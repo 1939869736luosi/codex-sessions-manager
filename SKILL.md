@@ -271,6 +271,11 @@ The `--yes` examples above are execution examples, not first-step recommendation
 - `restore` and `purge` require `--yes` in CLI mode.
 - MCP `restore_sessions` and `purge_trash` require `confirm=true`.
 - Restore refuses live session conflicts and SQLite key conflicts. There is no force overwrite mode.
+- Restore does not remove the trash entry. If a restored session is moved to trash again, `trash-list` may contain multiple recoverable copies for the same session id. This is normal trash state, not live residue.
+- A newer trash entry does not replace an older one. Treat old entries as backups until the user explicitly chooses otherwise.
+- If one session id maps to multiple trash entries, confirmed `restore` or `purge` must use an exact `trashId`. Do not use the session id for writes in this state.
+- Do not auto-purge duplicate trash entries. Report them and wait for explicit user confirmation.
+- Before purging an old copy, confirm the live session is absent and at least one backup copy remains, unless the user explicitly accepts having no trash backup.
 - `purge` removes only the trash entry and must not touch live sessions.
 - `cleanup-index` and `cleanup-stale` rewrite `session_index.jsonl` and `history.jsonl`. They do not delete raw files or SQLite rows, but they still require `--yes`.
 - MCP `cleanup_session_indexes` and `cleanup_stale_indexes` require `confirm=true` to rewrite JSONL indexes.

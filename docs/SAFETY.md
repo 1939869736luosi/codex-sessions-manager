@@ -68,7 +68,16 @@ node dist/cli/index.js delete <session-id> --trash --yes
 
 `restore --yes` performs conflict checks before writing. It refuses to restore when a live session surface already contains the same session id or when a SQLite primary-key or unique-key conflict is detected. There is no force overwrite mode.
 
-`purge --yes` removes only the trash entry. It does not touch live sessions.
+Restoring a trash entry does not remove that trash entry. If you restore a session and then move it to trash again, `trash-list` may show more than one recoverable copy for the same session id. This is normal trash state, not live residue. Treat old trash entries as backups until the user explicitly chooses to purge them.
+
+Duplicate trash rules:
+
+- Duplicate trash entries are allowed. A newer trash entry does not replace an older one.
+- `restore` never deletes the restored trash entry.
+- If one session id maps to multiple trash entries, confirmed `restore` / `purge` must use an exact `trashId`; using the session id is refused as ambiguous.
+- Agents must not auto-purge duplicate trash entries. Report the duplicate entries and wait for explicit user confirmation.
+- Before purging an old copy, confirm the live session is absent and at least one backup copy remains, unless the user explicitly accepts having no trash backup.
+- `purge --yes` permanently removes only the selected trash entry. It does not touch live sessions.
 
 ## Side Conversations
 

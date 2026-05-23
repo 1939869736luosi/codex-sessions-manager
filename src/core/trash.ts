@@ -22,6 +22,7 @@ import type {
   SessionIndexRecord,
   TrashBundle,
   TrashDeleteResult,
+  TrashDuplicateSessionSummary,
   TrashEntrySummary,
   TrashPurgeResult,
   TrashRestoreResult,
@@ -266,6 +267,40 @@ function dedupeTrashBundle(bundle: TrashBundle): TrashBundle {
   };
 }
 
+export function trashEntryMatches(entry: Pick<TrashEntrySummary, "trashId" | "sessionIds">, idOrSessionId: string): boolean {
+  return (
+    entry.trashId === idOrSessionId ||
+    entry.trashId.startsWith(idOrSessionId) ||
+    entry.sessionIds.includes(idOrSessionId) ||
+    entry.sessionIds.some((sessionId) => sessionId.startsWith(idOrSessionId))
+  );
+}
+
+export function summarizeTrashDuplicateSessions(entries: TrashEntrySummary[]): TrashDuplicateSessionSummary[] {
+  const trashIdsBySessionId = new Map<string, string[]>();
+
+  for (const entry of entries) {
+    for (const sessionId of entry.sessionIds) {
+      const trashIds = trashIdsBySessionId.get(sessionId) ?? [];
+      trashIds.push(entry.trashId);
+      trashIdsBySessionId.set(sessionId, trashIds);
+    }
+  }
+
+  return [...trashIdsBySessionId.entries()]
+    .filter(([, trashIds]) => trashIds.length > 1)
+    .map(([sessionId, trashIds]) => ({
+      sessionId,
+      count: trashIds.length,
+      trashIds,
+    }));
+}
+
+function formatAmbiguousTrashEntryError(idOrSessionId: string, matches: TrashEntrySummary[]): string {
+  const details = matches.map((entry) => `${entry.trashId} (${entry.sessionIds.join(", ")})`).join("; ");
+  return `回收站记录不唯一：${idOrSessionId}。匹配 ${matches.length} 条：${details}。restore / purge 写操作必须使用精确 trashId。`;
+}
+
 async function readTrashEntries(rootPath: string): Promise<Array<{ dir: string; bundle: TrashBundle }>> {
   const trashDir = getTrashDir(rootPath);
   if (!(await pathExists(trashDir))) {
@@ -297,20 +332,14 @@ function resolveTrashEntry(
   entries: Array<{ dir: string; bundle: TrashBundle }>,
   idOrSessionId: string,
 ): { dir: string; bundle: TrashBundle } {
-  const matches = entries.filter(
-    (entry) =>
-      entry.bundle.manifest.trashId === idOrSessionId ||
-      entry.bundle.manifest.trashId.startsWith(idOrSessionId) ||
-      entry.bundle.manifest.sessionIds.includes(idOrSessionId) ||
-      entry.bundle.manifest.sessionIds.some((sessionId) => sessionId.startsWith(idOrSessionId)),
-  );
+  const matches = entries.filter((entry) => trashEntryMatches(summarizeBundle(entry.bundle), idOrSessionId));
 
   if (matches.length === 0) {
     throw new Error(`找不到回收站记录：${idOrSessionId}`);
   }
 
   if (matches.length > 1) {
-    throw new Error(`回收站记录不唯一：${idOrSessionId}`);
+    throw new Error(formatAmbiguousTrashEntryError(idOrSessionId, matches.map((entry) => summarizeBundle(entry.bundle))));
   }
 
   return matches[0];
@@ -337,7 +366,9 @@ async function resolveTrashEntryForRestore(
       }
 
       if (dirs.length > 1) {
-        throw new Error(`回收站记录不唯一：${idOrSessionId}`);
+        throw new Error(
+          `回收站记录不唯一：${idOrSessionId}。匹配 ${dirs.length} 个目录。restore / purge 写操作必须使用精确 trashId。`,
+        );
       }
     } catch (manifestError) {
       if (manifestError instanceof Error && manifestError.message.includes("回收站 manifest")) {

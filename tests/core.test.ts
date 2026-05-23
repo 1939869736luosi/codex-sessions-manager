@@ -1491,6 +1491,40 @@ describe("core integration", () => {
     await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
   });
 
+  it("keeps restored trash entries and refuses ambiguous duplicate writes by session id", async () => {
+    const firstScan = await scanCodexRoot(fixture.rootDir);
+    const firstTrash = await moveSessionsToTrash(firstScan, resolveSessions(firstScan, [FIXTURE_IDS.ACTIVE_ID]));
+
+    await restoreTrashEntry(fixture.rootDir, firstTrash.trashEntry.trashId);
+    let entries = await listTrashEntries(fixture.rootDir);
+    expect(entries.filter((entry) => entry.sessionIds.includes(FIXTURE_IDS.ACTIVE_ID))).toHaveLength(1);
+    expect(entries.map((entry) => entry.trashId)).toContain(firstTrash.trashEntry.trashId);
+    await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
+
+    const secondScan = await scanCodexRoot(fixture.rootDir);
+    const secondTrash = await moveSessionsToTrash(secondScan, resolveSessions(secondScan, [FIXTURE_IDS.ACTIVE_ID]));
+
+    entries = await listTrashEntries(fixture.rootDir);
+    expect(entries.filter((entry) => entry.sessionIds.includes(FIXTURE_IDS.ACTIVE_ID))).toHaveLength(2);
+    expect(entries.map((entry) => entry.trashId).sort()).toEqual(
+      [firstTrash.trashEntry.trashId, secondTrash.trashEntry.trashId].sort(),
+    );
+    await expect(readFile(fixture.paths.activeSessionFile, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+    await expect(restoreTrashEntry(fixture.rootDir, FIXTURE_IDS.ACTIVE_ID)).rejects.toThrow("精确 trashId");
+    await expect(purgeTrashEntry(fixture.rootDir, FIXTURE_IDS.ACTIVE_ID)).rejects.toThrow("精确 trashId");
+
+    const restore = await restoreTrashEntry(fixture.rootDir, secondTrash.trashEntry.trashId);
+    expect(restore.restoredSessionIds).toContain(FIXTURE_IDS.ACTIVE_ID);
+    await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
+
+    const purge = await purgeTrashEntry(fixture.rootDir, firstTrash.trashEntry.trashId);
+    expect(purge.purged).toBe(true);
+    await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
+    entries = await listTrashEntries(fixture.rootDir);
+    expect(entries.map((entry) => entry.trashId)).toEqual([secondTrash.trashEntry.trashId]);
+  });
+
   it("restores safely when optional sqlite surfaces are missing", async () => {
     const partialFixture = await createFixture();
 

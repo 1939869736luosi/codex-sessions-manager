@@ -903,6 +903,125 @@ describe("mcp server", () => {
     }
   });
 
+  it("requires exact trash ids for duplicate trash writes through MCP tools", async () => {
+    const { client, server } = await createConnectedClient();
+
+    try {
+      const firstDelete = await client.callTool({
+        name: "delete_sessions",
+        arguments: {
+          root: fixture.rootDir,
+          sessionIds: [FIXTURE_IDS.ACTIVE_ID],
+          trash: true,
+          confirm: true,
+        },
+      });
+      const firstTrashId = (firstDelete.structuredContent?.result as { trashEntry: { trashId: string } }).trashEntry.trashId;
+
+      await client.callTool({
+        name: "restore_sessions",
+        arguments: {
+          root: fixture.rootDir,
+          id: firstTrashId,
+          confirm: true,
+        },
+      });
+
+      const secondDelete = await client.callTool({
+        name: "delete_sessions",
+        arguments: {
+          root: fixture.rootDir,
+          sessionIds: [FIXTURE_IDS.ACTIVE_ID],
+          trash: true,
+          confirm: true,
+        },
+      });
+      const secondTrashId = (secondDelete.structuredContent?.result as { trashEntry: { trashId: string } }).trashEntry.trashId;
+
+      const trashList = await client.callTool({
+        name: "list_trash",
+        arguments: {
+          root: fixture.rootDir,
+        },
+      });
+      const entries = trashList.structuredContent?.entries as Array<{ trashId: string; sessionIds: string[] }>;
+      const duplicateSessionIds = trashList.structuredContent?.duplicateSessionIds as Array<{ sessionId: string; trashIds: string[] }>;
+      expect(entries.filter((entry) => entry.sessionIds.includes(FIXTURE_IDS.ACTIVE_ID))).toHaveLength(2);
+      expect(duplicateSessionIds).toEqual([
+        expect.objectContaining({
+          sessionId: FIXTURE_IDS.ACTIVE_ID,
+          trashIds: expect.arrayContaining([firstTrashId, secondTrashId]),
+        }),
+      ]);
+
+      const restorePreview = await client.callTool({
+        name: "restore_sessions",
+        arguments: {
+          root: fixture.rootDir,
+          id: FIXTURE_IDS.ACTIVE_ID,
+        },
+      });
+      expect(restorePreview.structuredContent?.requiresExactTrashId).toBe(true);
+
+      const ambiguousRestore = await client.callTool({
+        name: "restore_sessions",
+        arguments: {
+          root: fixture.rootDir,
+          id: FIXTURE_IDS.ACTIVE_ID,
+          confirm: true,
+        },
+      });
+      expect(ambiguousRestore.isError).toBe(true);
+      expect(ambiguousRestore.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("精确 trashId") });
+
+      const ambiguousPurge = await client.callTool({
+        name: "purge_trash",
+        arguments: {
+          root: fixture.rootDir,
+          id: FIXTURE_IDS.ACTIVE_ID,
+          confirm: true,
+        },
+      });
+      expect(ambiguousPurge.isError).toBe(true);
+      expect(ambiguousPurge.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("精确 trashId") });
+
+      const restore = await client.callTool({
+        name: "restore_sessions",
+        arguments: {
+          root: fixture.rootDir,
+          id: secondTrashId,
+          confirm: true,
+        },
+      });
+      expect((restore.structuredContent?.result as { restoredSessionIds: string[] }).restoredSessionIds).toContain(FIXTURE_IDS.ACTIVE_ID);
+      await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
+
+      const purge = await client.callTool({
+        name: "purge_trash",
+        arguments: {
+          root: fixture.rootDir,
+          id: firstTrashId,
+          confirm: true,
+        },
+      });
+      expect((purge.structuredContent?.result as { purged: boolean }).purged).toBe(true);
+      await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
+
+      const afterPurge = await client.callTool({
+        name: "list_trash",
+        arguments: {
+          root: fixture.rootDir,
+        },
+      });
+      expect((afterPurge.structuredContent?.entries as Array<{ trashId: string }>).map((entry) => entry.trashId)).toEqual([
+        secondTrashId,
+      ]);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("previews cleanup_stale_indexes without rewriting jsonl indexes", async () => {
     const { client, server } = await createConnectedClient();
     const beforeSessionIndex = await readFile(fixture.paths.sessionIndex, "utf8");

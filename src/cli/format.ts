@@ -26,6 +26,7 @@ import type {
   TrashRestoreResult,
 } from "../core/types.js";
 import { groupSessionsByProject } from "../core/project.js";
+import { summarizeTrashDuplicateSessions } from "../core/trash.js";
 
 function formatDate(value: string | null): string {
   if (!value) {
@@ -1070,7 +1071,7 @@ export function formatTrashEntries(entries: TrashEntrySummary[]): string {
     return "回收站为空";
   }
 
-  return printTable([
+  const table = printTable([
     ["trash_id", "创建时间", "sessions", "标题"],
     ...entries.map((entry) => [
       entry.trashId,
@@ -1079,6 +1080,17 @@ export function formatTrashEntries(entries: TrashEntrySummary[]): string {
       entry.sessions.map((session) => session.title).join(" | "),
     ]),
   ]);
+  const duplicateSessionIds = summarizeTrashDuplicateSessions(entries);
+  if (duplicateSessionIds.length === 0) {
+    return table;
+  }
+
+  return [
+    table,
+    "",
+    "重复 session_id:",
+    ...duplicateSessionIds.map((entry) => `- ${entry.sessionId}: ${entry.count} 条 trash entry，写操作必须使用精确 trashId`),
+  ].join("\n");
 }
 
 export function formatTrashRestoreResult(result: TrashRestoreResult): string {

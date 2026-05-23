@@ -59,7 +59,8 @@ codex-sessions delete <session-id>
 codex-sessions delete <session-id> --trash --yes
 
 # Changed your mind? Restore it
-codex-sessions restore <session-id> --yes
+# If trash-list shows multiple copies for the same session, use the exact trash_id.
+codex-sessions restore <trash-id-or-session-id> --yes
 
 # Verify nothing is left behind
 codex-sessions verify <session-id>
@@ -144,14 +145,16 @@ codex-sessions preview-root [--json] [--limit 50] [--status STATUS...] [--source
 codex-sessions export <session-id> [--output ./backup.json]
 codex-sessions delete <session-id...> [--trash] [--yes]
 codex-sessions trash-list
-codex-sessions restore <session-id> --yes
-codex-sessions purge <session-id> --yes
+codex-sessions restore <trash-id-or-session-id> --yes
+codex-sessions purge <trash-id-or-session-id> --yes
 codex-sessions cleanup-stale [--yes]
 codex-sessions cleanup-index <session-id...> [--yes]
 codex-sessions verify <session-id...> [--json]
 ```
 
 **Safety first**: All destructive commands require `--yes`. Without it, you only get a preview. Run a separate preview for the exact session IDs first; `family`, `impact`, `audit-root`, and `preview-root` never count as permission to delete.
+
+**Duplicate trash entries**: `restore` does not delete the trash entry. If a restored session is moved to trash again, `trash-list` can show multiple recoverable copies for the same session ID. This is normal trash state, not live residue. A newer copy does not replace an older one. When one session ID has multiple trash entries, confirmed `restore` and `purge` refuse the session ID and require the exact `trashId`. Do not auto-purge duplicates. `purge` permanently removes only the selected trash entry and never touches the live session.
 
 Use `audit` after the official Codex UI delete/archive flow when you need a clear local residue report. It is read-only. It reports whether the raw rollout file, shell snapshot, `session_index`, `history`, SQLite records, known global-state refs, unknown global-state refs, and `thread_spawn_edges` are still present. It also reports family membership and broken parent/child links. If anything remains, the suggested next command is a preview-only `delete` command; nothing is deleted unless you add `--yes`.
 

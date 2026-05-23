@@ -929,6 +929,55 @@ describe("cli", () => {
     await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
   });
 
+  it("requires exact trash ids for duplicate trash writes from the cli", async () => {
+    const firstDelete = createIo();
+    await runCli(["delete", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--trash", "--yes", "--json"], firstDelete.io);
+    const firstTrashId = (JSON.parse(firstDelete.stdout.join("\n")) as { trashEntry: { trashId: string } }).trashEntry.trashId;
+
+    const restoreFirst = createIo();
+    await runCli(["restore", firstTrashId, "--root", fixture.rootDir, "--yes", "--json"], restoreFirst.io);
+
+    const secondDelete = createIo();
+    await runCli(["delete", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--trash", "--yes", "--json"], secondDelete.io);
+    const secondTrashId = (JSON.parse(secondDelete.stdout.join("\n")) as { trashEntry: { trashId: string } }).trashEntry.trashId;
+
+    const trashList = createIo();
+    await runCli(["trash-list", "--root", fixture.rootDir, "--json"], trashList.io);
+    const listed = JSON.parse(trashList.stdout.join("\n")) as {
+      entries: Array<{ trashId: string; sessionIds: string[] }>;
+      duplicateSessionIds: Array<{ sessionId: string; trashIds: string[] }>;
+    };
+    expect(listed.entries.filter((entry) => entry.sessionIds.includes(FIXTURE_IDS.ACTIVE_ID))).toHaveLength(2);
+    expect(listed.duplicateSessionIds).toEqual([
+      expect.objectContaining({
+        sessionId: FIXTURE_IDS.ACTIVE_ID,
+        trashIds: expect.arrayContaining([firstTrashId, secondTrashId]),
+      }),
+    ]);
+
+    await expect(runCli(["restore", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--yes"], createIo().io)).rejects.toThrow(
+      "精确 trashId",
+    );
+    await expect(runCli(["purge", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--yes"], createIo().io)).rejects.toThrow(
+      "精确 trashId",
+    );
+
+    const exactRestore = createIo();
+    const restoreExitCode = await runCli(["restore", secondTrashId, "--root", fixture.rootDir, "--yes"], exactRestore.io);
+    expect(restoreExitCode).toBe(0);
+    await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
+
+    const exactPurge = createIo();
+    const purgeExitCode = await runCli(["purge", firstTrashId, "--root", fixture.rootDir, "--yes"], exactPurge.io);
+    expect(purgeExitCode).toBe(0);
+    await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
+
+    const trashListAfterPurge = createIo();
+    await runCli(["trash-list", "--root", fixture.rootDir, "--json"], trashListAfterPurge.io);
+    const afterPurge = JSON.parse(trashListAfterPurge.stdout.join("\n")) as { entries: Array<{ trashId: string }> };
+    expect(afterPurge.entries.map((entry) => entry.trashId)).toEqual([secondTrashId]);
+  });
+
   it("previews cleanup-stale without rewriting jsonl indexes", async () => {
     const beforeSessionIndex = await readFile(fixture.paths.sessionIndex, "utf8");
     const beforeHistory = await readFile(fixture.paths.history, "utf8");

@@ -25,7 +25,14 @@ import { filterSessions, resolveSessions } from "../core/query.js";
 import { scanCodexRoot } from "../core/scan.js";
 import { SOURCE_KINDS, summarizeSources } from "../core/sources.js";
 import { readSessionTimeline } from "../core/timeline.js";
-import { listTrashEntries, moveSessionsToTrash, purgeTrashEntry, restoreTrashEntry } from "../core/trash.js";
+import {
+  listTrashEntries,
+  moveSessionsToTrash,
+  purgeTrashEntry,
+  restoreTrashEntry,
+  summarizeTrashDuplicateSessions,
+  trashEntryMatches,
+} from "../core/trash.js";
 
 const TOOL_OUTPUT_SCHEMA = z.object({}).passthrough();
 const stringOrStringArraySchema = z.union([z.string(), z.array(z.string())]);
@@ -433,14 +440,16 @@ export function createServer(): McpServer {
     async ({ root }) => {
       const scan = await scanCodexRoot(root);
       const entries = await listTrashEntries(scan.root.rootPath);
-      return textResult(`Found ${entries.length} trash entries.`, { root: scan.root, entries });
+      const duplicateSessionIds = summarizeTrashDuplicateSessions(entries);
+      return textResult(`Found ${entries.length} trash entries.`, { root: scan.root, entries, duplicateSessionIds });
     },
   );
 
   server.registerTool(
     "restore_sessions",
     {
-      description: "Restore one trash entry by trash id or contained session id. Requires confirm=true; otherwise previews the matching trash entries.",
+      description:
+        "Restore one trash entry by trash id or contained session id. If a session id matches multiple trash entries, confirm=true refuses it and requires an exact trash id.",
       outputSchema: TOOL_OUTPUT_SCHEMA,
       inputSchema: z.object({
         id: z.string().describe("Trash id, trash id prefix, session id, or session id prefix."),
@@ -456,15 +465,12 @@ export function createServer(): McpServer {
     async ({ id, root, confirm }) => {
       const scan = await scanCodexRoot(root);
       if (!confirm) {
-        const entries = (await listTrashEntries(scan.root.rootPath)).filter(
-          (entry) =>
-            entry.trashId === id ||
-            entry.trashId.startsWith(id) ||
-            entry.sessionIds.includes(id) ||
-            entry.sessionIds.some((sessionId) => sessionId.startsWith(id)),
-        );
+        const entries = (await listTrashEntries(scan.root.rootPath)).filter((entry) => trashEntryMatches(entry, id));
+        const duplicateSessionIds = summarizeTrashDuplicateSessions(entries);
         return textResult("Restore was not executed. Pass confirm=true to restore.", {
           entries,
+          duplicateSessionIds,
+          requiresExactTrashId: entries.length > 1,
           preflight: entries.map((entry) => ({
             trashId: entry.trashId,
             sessionIds: entry.sessionIds,
@@ -482,7 +488,8 @@ export function createServer(): McpServer {
   server.registerTool(
     "purge_trash",
     {
-      description: "Permanently remove one trash entry without touching live sessions. Requires confirm=true; otherwise previews matching entries.",
+      description:
+        "Permanently remove one trash entry without touching live sessions. If a session id matches multiple trash entries, confirm=true refuses it and requires an exact trash id.",
       outputSchema: TOOL_OUTPUT_SCHEMA,
       inputSchema: z.object({
         id: z.string().describe("Trash id, trash id prefix, session id, or session id prefix."),
@@ -498,15 +505,12 @@ export function createServer(): McpServer {
     async ({ id, root, confirm }) => {
       const scan = await scanCodexRoot(root);
       if (!confirm) {
-        const entries = (await listTrashEntries(scan.root.rootPath)).filter(
-          (entry) =>
-            entry.trashId === id ||
-            entry.trashId.startsWith(id) ||
-            entry.sessionIds.includes(id) ||
-            entry.sessionIds.some((sessionId) => sessionId.startsWith(id)),
-        );
+        const entries = (await listTrashEntries(scan.root.rootPath)).filter((entry) => trashEntryMatches(entry, id));
+        const duplicateSessionIds = summarizeTrashDuplicateSessions(entries);
         return textResult("Purge was not executed. Pass confirm=true to purge.", {
           entries,
+          duplicateSessionIds,
+          requiresExactTrashId: entries.length > 1,
           requiresConfirmation: true,
         });
       }

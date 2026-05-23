@@ -20,7 +20,14 @@ import { filterSessions, resolveSessions } from "../core/query.js";
 import { scanCodexRoot } from "../core/scan.js";
 import { summarizeSources } from "../core/sources.js";
 import { readSessionTimeline } from "../core/timeline.js";
-import { listTrashEntries, moveSessionsToTrash, purgeTrashEntry, restoreTrashEntry } from "../core/trash.js";
+import {
+  listTrashEntries,
+  moveSessionsToTrash,
+  purgeTrashEntry,
+  restoreTrashEntry,
+  summarizeTrashDuplicateSessions,
+  trashEntryMatches,
+} from "../core/trash.js";
 import {
   formatAudit,
   formatBackup,
@@ -396,7 +403,8 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
 
     case "trash-list": {
       const entries = await listTrashEntries(scan.root.rootPath);
-      io.stdout(asJson ? JSON.stringify({ root: scan.root, entries }, null, 2) : formatTrashEntries(entries));
+      const duplicateSessionIds = summarizeTrashDuplicateSessions(entries);
+      io.stdout(asJson ? JSON.stringify({ root: scan.root, entries, duplicateSessionIds }, null, 2) : formatTrashEntries(entries));
       return 0;
     }
 
@@ -407,16 +415,11 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
 
       if (!values.yes) {
         const entries = await listTrashEntries(scan.root.rootPath);
-        const matches = entries.filter(
-          (entry) =>
-            entry.trashId === rest[0] ||
-            entry.trashId.startsWith(rest[0]) ||
-            entry.sessionIds.includes(rest[0]) ||
-            entry.sessionIds.some((sessionId) => sessionId.startsWith(rest[0])),
-        );
+        const matches = entries.filter((entry) => trashEntryMatches(entry, rest[0]));
+        const duplicateSessionIds = summarizeTrashDuplicateSessions(matches);
         io.stdout(
           asJson
-            ? JSON.stringify({ matches, requiresConfirmation: true }, null, 2)
+            ? JSON.stringify({ matches, duplicateSessionIds, requiresExactTrashId: matches.length > 1, requiresConfirmation: true }, null, 2)
             : `恢复未执行。确认后加 --yes。\n\n${formatTrashEntries(matches)}`,
         );
         return 0;
@@ -434,16 +437,11 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
 
       if (!values.yes) {
         const entries = await listTrashEntries(scan.root.rootPath);
-        const matches = entries.filter(
-          (entry) =>
-            entry.trashId === rest[0] ||
-            entry.trashId.startsWith(rest[0]) ||
-            entry.sessionIds.includes(rest[0]) ||
-            entry.sessionIds.some((sessionId) => sessionId.startsWith(rest[0])),
-        );
+        const matches = entries.filter((entry) => trashEntryMatches(entry, rest[0]));
+        const duplicateSessionIds = summarizeTrashDuplicateSessions(matches);
         io.stdout(
           asJson
-            ? JSON.stringify({ matches, requiresConfirmation: true }, null, 2)
+            ? JSON.stringify({ matches, duplicateSessionIds, requiresExactTrashId: matches.length > 1, requiresConfirmation: true }, null, 2)
             : `永久清除未执行。确认后加 --yes。\n\n${formatTrashEntries(matches)}`,
         );
         return 0;
