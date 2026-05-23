@@ -39,6 +39,7 @@ codex-sessions audit <session-id>
 
 # 扫描整个 root 里的疑似残留 ID（安全，不做任何修改）
 codex-sessions audit-root --limit 50
+codex-sessions audit-root --status risky-global-state --source global-state-unknown --limit 50
 
 # 预览删除（安全，不做任何修改）
 codex-sessions delete <session-id>
@@ -121,7 +122,7 @@ codex-sessions doctor [--json]
 codex-sessions show <session-id>
 codex-sessions family <session-id> [--json]
 codex-sessions audit <session-id> [--json]
-codex-sessions audit-root [--json] [--limit 50] [--all]
+codex-sessions audit-root [--json] [--limit 50] [--status STATUS...] [--source SOURCE...] [--all]
 codex-sessions export <session-id> [--output ./backup.json]
 codex-sessions delete <session-id...> [--trash] [--yes]
 codex-sessions trash-list
@@ -137,6 +138,25 @@ codex-sessions verify <session-id...> [--json]
 官方 Codex UI 删除或归档后，如果想知道本机还剩什么，先用 `audit`。它只读，不会改文件。它会报告原始 rollout 文件、shell snapshot、`session_index`、`history`、SQLite 记录、已知 global-state 引用、未知 global-state 引用、`thread_spawn_edges` 是否还在，也会报告 family 归属和断裂 parent/child 关系。如果仍有残留，建议命令只会给不带 `--yes` 的删除预览；只有你自己加 `--yes` 才会真的删除。
 
 如果你还不知道 session ID，用 `audit-root`。它会扫描整个 Codex root，按风险列出疑似残留：断裂 parent/child 边、没有 rollout 文件但还有未知 global-state 引用、SQLite-only 记录、shell snapshot、index-only 记录，以及其他不完整残留。它只读，默认 `--limit 50`，不会打印聊天正文，每条只建议继续跑对应的单 session `audit` 命令。只有明确想把正常完整会话也列出来时，才加 `--all`。
+
+`audit-root` 支持只影响显示结果的筛选：
+
+- `--status risky-global-state`
+- `--status db-only`
+- `--status broken-family`
+- `--status partial-residue`
+- `--status global-state-unknown`
+- `--source global-state-unknown`
+- `--source global-state-known`
+- `--source sqlite`
+- `--source session-index`
+- `--source history`
+- `--source shell-snapshot`
+- `--source thread-spawn-edges`
+
+`--status` 和 `--source` 都可以写多次。同一类多个值是 OR；同时使用 status 和 source 时是 AND。这些筛选只缩小显示范围。命中的候选仍然需要逐个 `audit` 或先看 delete preview，不能因为出现在筛选结果里就直接认为应该删除。
+
+人类输出和 JSON 都会带摘要：`filters`、`totalCandidatesBeforeFilter`、`totalCandidatesAfterFilter`、`returnedCandidates`、`limit`、`byStatus`、`bySource`。`byStatus` 和 `bySource` 是“筛选后、limit 前”的统计。
 
 删除 parent 或 child 前先看 `family`。parent 和 child 是不同 session，各自有自己的 ID。删除 parent 不等于删除 child，删除 child 也不等于删除 parent。删除预览和 audit 会提示关系记录指向缺失 session，或相关 session 缺文件/索引。要一起处理多个相关 session，需要把每个 session ID 明确放进预览或删除命令。工具不会自动递归处理 parent 或 child。
 

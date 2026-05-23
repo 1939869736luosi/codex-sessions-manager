@@ -356,6 +356,16 @@ export type RootResidueCandidateStatus =
   | "missing-parent-edge"
   | "missing-child-edge";
 
+export type RootResidueCandidateSource =
+  | "rollout_files"
+  | "shell_snapshots"
+  | "session_index"
+  | "history"
+  | "sqlite"
+  | "global_state_known"
+  | "global_state_unknown"
+  | "thread_spawn_edges";
+
 export interface RootResidueSurfaceSummary {
   rolloutFiles: number;
   shellSnapshots: number;
@@ -380,18 +390,29 @@ export interface RootResidueFamilySummary {
 export interface RootResidueCandidate {
   sessionId: string;
   statuses: RootResidueCandidateStatus[];
-  sources: string[];
+  sources: RootResidueCandidateSource[];
   surfaces: RootResidueSurfaceSummary;
   family: RootResidueFamilySummary;
   warnings: string[];
   recommendedAuditCommand: string;
 }
 
+export interface RootResidueFilters {
+  statuses: RootResidueCandidateStatus[];
+  sources: RootResidueCandidateSource[];
+  includeAll: boolean;
+}
+
 export interface RootResidueAudit {
   rootPath: string;
+  filters: RootResidueFilters;
+  totalCandidatesBeforeFilter: number;
+  totalCandidatesAfterFilter: number;
   totalCandidates: number;
   returnedCandidates: number;
   limit: number;
+  byStatus: Record<string, number>;
+  bySource: Record<string, number>;
   candidates: RootResidueCandidate[];
   warnings: string[];
 }

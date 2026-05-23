@@ -350,9 +350,14 @@ describe("mcp server", () => {
 
       const audit = result.structuredContent as {
         rootPath: string;
+        filters: { statuses: string[]; sources: string[]; includeAll: boolean };
+        totalCandidatesBeforeFilter: number;
+        totalCandidatesAfterFilter: number;
         totalCandidates: number;
         returnedCandidates: number;
         limit: number;
+        byStatus: Record<string, number>;
+        bySource: Record<string, number>;
         candidates: Array<{
           sessionId: string;
           statuses: string[];
@@ -364,13 +369,52 @@ describe("mcp server", () => {
       };
 
       expect(audit.rootPath).toBe(fixture.rootDir);
+      expect(audit.filters).toEqual({ statuses: [], sources: [], includeAll: false });
+      expect(audit.totalCandidatesBeforeFilter).toBe(2);
+      expect(audit.totalCandidatesAfterFilter).toBe(2);
       expect(audit.totalCandidates).toBe(2);
       expect(audit.returnedCandidates).toBe(1);
       expect(audit.limit).toBe(1);
+      expect(audit.byStatus).toMatchObject({ partial: 2, "partial-residue": 2 });
+      expect(audit.bySource).toMatchObject({ session_index: 1, shell_snapshots: 1 });
       expect(audit.candidates[0].statuses.length).toBeGreaterThan(0);
       expect(audit.candidates[0].recommendedAuditCommand).toContain("codex-sessions audit");
       expect(audit.warnings).toEqual([]);
       await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("filters root residue audit through MCP status and source parameters", async () => {
+    const { client, server } = await createConnectedClient();
+
+    try {
+      const result = await client.callTool({
+        name: "audit_root",
+        arguments: {
+          root: fixture.rootDir,
+          status: ["index-only", "shell-snapshot-residue"],
+          source: ["session-index", "shell-snapshot"],
+          limit: 10,
+        },
+      });
+
+      const audit = result.structuredContent as {
+        filters: { statuses: string[]; sources: string[] };
+        totalCandidatesBeforeFilter: number;
+        totalCandidatesAfterFilter: number;
+        candidates: Array<{ sessionId: string }>;
+      };
+
+      expect(audit.filters.statuses).toEqual(["index-only", "shell-snapshot-residue"]);
+      expect(audit.filters.sources).toEqual(["session_index", "shell_snapshots"]);
+      expect(audit.totalCandidatesBeforeFilter).toBe(2);
+      expect(audit.totalCandidatesAfterFilter).toBe(2);
+      expect(audit.candidates.map((candidate) => candidate.sessionId).sort()).toEqual(
+        [FIXTURE_IDS.STALE_ID, FIXTURE_IDS.UNRELATED_ID].sort(),
+      );
     } finally {
       await client.close();
       await server.close();

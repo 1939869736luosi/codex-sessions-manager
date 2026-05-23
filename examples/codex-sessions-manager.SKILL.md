@@ -80,6 +80,8 @@ codex-sessions audit <session-id> --root <path-to-codex-root>
 codex-sessions audit <session-id> --root <path-to-codex-root> --json
 codex-sessions audit-root --root <path-to-codex-root>
 codex-sessions audit-root --root <path-to-codex-root> --json --limit 50
+codex-sessions audit-root --root <path-to-codex-root> --status risky-global-state --limit 50
+codex-sessions audit-root --root <path-to-codex-root> --source global-state-unknown --limit 50
 codex-sessions export <session-id> --root <path-to-codex-root> --output ./backup.json
 codex-sessions delete <session-id> --root <path-to-codex-root>
 codex-sessions delete <session-id> --root <path-to-codex-root> --trash
@@ -113,6 +115,8 @@ node dist/cli/index.js audit <session-id> --root <path-to-codex-root>
 node dist/cli/index.js audit <session-id> --root <path-to-codex-root> --json
 node dist/cli/index.js audit-root --root <path-to-codex-root>
 node dist/cli/index.js audit-root --root <path-to-codex-root> --json --limit 50
+node dist/cli/index.js audit-root --root <path-to-codex-root> --status risky-global-state --limit 50
+node dist/cli/index.js audit-root --root <path-to-codex-root> --source global-state-unknown --limit 50
 node dist/cli/index.js export <session-id> --root <path-to-codex-root> --output ./backup.json
 node dist/cli/index.js delete <session-id> --root <path-to-codex-root>
 node dist/cli/index.js delete <session-id> --root <path-to-codex-root> --trash
@@ -133,6 +137,7 @@ node dist/cli/index.js verify <session-id> --root <path-to-codex-root>
 - `get_session_family` and CLI `family` are read-only. They do not delete, export, restore, or select related sessions automatically.
 - `audit_session` and CLI `audit` are read-only. They report local residue after official UI delete/archive actions and must not rewrite files, SQLite, shell snapshots, or global state.
 - `audit_root` and CLI `audit-root` are read-only. They scan for likely residue candidates across a Codex root and must not delete, rewrite, or select parent/child sessions automatically.
+- `audit_root` / `audit-root` status and source filters only narrow displayed candidates. Multiple statuses or multiple sources use OR; combining status and source uses AND. A matching candidate still needs per-session audit or delete preview before any cleanup decision.
 - Delete previews warn when selected sessions have unselected parent, child, or family sessions, and when relationship edges point at missing sessions or missing file/index surfaces.
 - `delete` without `--yes` is preview-only.
 - Permanent delete remains available, but prefer recoverable deletion with `--trash --yes`.

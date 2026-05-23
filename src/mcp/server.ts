@@ -213,6 +213,8 @@ export function createServer(): McpServer {
       inputSchema: z.object({
         root: z.string().optional().describe("Optional explicit path to the .codex root."),
         limit: z.number().int().positive().optional().describe("Maximum candidates to return. Defaults to 50."),
+        status: z.union([z.string(), z.array(z.string())]).optional().describe("Filter by one or more audit-root statuses. Multiple values use OR."),
+        source: z.union([z.string(), z.array(z.string())]).optional().describe("Filter by one or more audit-root sources. Multiple values use OR."),
         all: z.boolean().optional().describe("Include complete non-residue sessions too. Defaults to false."),
       }),
       annotations: {
@@ -220,13 +222,18 @@ export function createServer(): McpServer {
         idempotentHint: true,
       },
     },
-    async ({ root, limit, all }) => {
+    async ({ root, limit, status, source, all }) => {
       const scan = await scanCodexRoot(root);
-      const audit = buildRootResidueAudit(scan, { limit, includeAll: all });
+      const audit = buildRootResidueAudit(scan, {
+        limit,
+        includeAll: all,
+        statuses: typeof status === "string" ? [status] : status,
+        sources: typeof source === "string" ? [source] : source,
+      });
       return textResult(
-        audit.totalCandidates === 0
+        audit.totalCandidatesAfterFilter === 0
           ? `No likely residue candidates found in ${audit.rootPath}.`
-          : `Found ${audit.totalCandidates} likely residue candidates in ${audit.rootPath}.`,
+          : `Found ${audit.totalCandidatesAfterFilter} likely residue candidates in ${audit.rootPath}.`,
         audit as unknown as Record<string, unknown>,
       );
     },

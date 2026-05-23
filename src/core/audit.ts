@@ -4,6 +4,7 @@ import { collectSqliteSessionIds, sumSqliteDeletionCounts } from "./sqlite.js";
 import type {
   RootResidueAudit,
   RootResidueCandidate,
+  RootResidueCandidateSource,
   RootResidueCandidateStatus,
   ScanResult,
   SessionEntry,
@@ -13,6 +14,43 @@ import type {
 } from "./types.js";
 
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ROOT_RESIDUE_STATUS_VALUES = new Set<RootResidueCandidateStatus>([
+  "absent",
+  "clean",
+  "present",
+  "partial",
+  "broken-family",
+  "risky-global-state",
+  "db-only",
+  "index-only",
+  "partial-residue",
+  "global-state-unknown",
+  "shell-snapshot-residue",
+  "index-residue",
+  "sqlite-residue",
+  "missing-parent-edge",
+  "missing-child-edge",
+]);
+const ROOT_RESIDUE_SOURCE_ALIASES: Record<string, RootResidueCandidateSource> = {
+  "rollout-files": "rollout_files",
+  rollout_files: "rollout_files",
+  "shell-snapshot": "shell_snapshots",
+  "shell-snapshots": "shell_snapshots",
+  shell_snapshot: "shell_snapshots",
+  shell_snapshots: "shell_snapshots",
+  "session-index": "session_index",
+  session_index: "session_index",
+  history: "history",
+  sqlite: "sqlite",
+  "global-state-known": "global_state_known",
+  global_state_known: "global_state_known",
+  "global-state-unknown": "global_state_unknown",
+  global_state_unknown: "global_state_unknown",
+  "thread-spawn-edge": "thread_spawn_edges",
+  "thread-spawn-edges": "thread_spawn_edges",
+  thread_spawn_edge: "thread_spawn_edges",
+  thread_spawn_edges: "thread_spawn_edges",
+};
 
 function isSessionId(value: string): boolean {
   return SESSION_ID_PATTERN.test(value);
@@ -374,8 +412,8 @@ function pushRootStatus(statuses: RootResidueCandidateStatus[], status: RootResi
   }
 }
 
-function collectSources(audit: SessionResidueAudit): string[] {
-  const sources: string[] = [];
+function collectSources(audit: SessionResidueAudit): RootResidueCandidateSource[] {
+  const sources: RootResidueCandidateSource[] = [];
 
   if (audit.counts.rawSessionFiles > 0) sources.push("rollout_files");
   if (audit.counts.shellSnapshotFiles > 0) sources.push("shell_snapshots");
@@ -517,29 +555,99 @@ function normalizeLimit(limit: number | undefined): number {
   return limit;
 }
 
+function normalizeStatusFilter(values: string[] | undefined): RootResidueCandidateStatus[] {
+  const statuses = uniqueSorted((values ?? []).map((value) => value.trim()).filter(Boolean));
+
+  for (const status of statuses) {
+    if (!ROOT_RESIDUE_STATUS_VALUES.has(status as RootResidueCandidateStatus)) {
+      throw new Error(`不支持的 audit-root status：${status}`);
+    }
+  }
+
+  return statuses as RootResidueCandidateStatus[];
+}
+
+function normalizeSourceFilter(values: string[] | undefined): RootResidueCandidateSource[] {
+  const sources: RootResidueCandidateSource[] = [];
+
+  for (const value of values ?? []) {
+    const normalized = ROOT_RESIDUE_SOURCE_ALIASES[value.trim()];
+    if (!normalized) {
+      throw new Error(`不支持的 audit-root source：${value}`);
+    }
+    sources.push(normalized);
+  }
+
+  return uniqueSorted(sources) as RootResidueCandidateSource[];
+}
+
+function matchesRootResidueFilters(
+  candidate: RootResidueCandidate,
+  filters: {
+    statuses: RootResidueCandidateStatus[];
+    sources: RootResidueCandidateSource[];
+  },
+): boolean {
+  const statusMatches =
+    filters.statuses.length === 0 ||
+    filters.statuses.some((status) => candidate.statuses.includes(status));
+  const sourceMatches =
+    filters.sources.length === 0 ||
+    filters.sources.some((source) => candidate.sources.includes(source));
+
+  return statusMatches && sourceMatches;
+}
+
+function countBy(values: Iterable<string>): Record<string, number> {
+  const counts = new Map<string, number>();
+  for (const value of values) {
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+
+  return Object.fromEntries(
+    [...counts.entries()].sort((left, right) => {
+      const countDiff = right[1] - left[1];
+      return countDiff || left[0].localeCompare(right[0]);
+    }),
+  );
+}
+
 export function buildRootResidueAudit(
   scan: ScanResult,
   options: {
     limit?: number;
     includeAll?: boolean;
+    statuses?: string[];
+    sources?: string[];
   } = {},
 ): RootResidueAudit {
   const limit = normalizeLimit(options.limit);
+  const filters = {
+    statuses: normalizeStatusFilter(options.statuses),
+    sources: normalizeSourceFilter(options.sources),
+    includeAll: options.includeAll ?? false,
+  };
   const collected = collectRootCandidateIds(scan);
-  const candidates = collected.ids
+  const candidatesBeforeFilter = collected.ids
     .map((id) => toRootResidueCandidate(scan, buildSessionResidueAudit(scan, id)))
-    .filter((candidate) => options.includeAll || isDefaultRootResidueCandidate(candidate))
+    .filter((candidate) => filters.includeAll || isDefaultRootResidueCandidate(candidate))
     .sort((left, right) => {
       const scoreDiff = riskScore(right) - riskScore(left);
       return scoreDiff || left.sessionId.localeCompare(right.sessionId);
     });
+  const candidates = candidatesBeforeFilter.filter((candidate) => matchesRootResidueFilters(candidate, filters));
   const returned = candidates.slice(0, limit);
 
   return {
     rootPath: scan.root.rootPath,
+    filters,
+    totalCandidatesBeforeFilter: candidatesBeforeFilter.length,
+    totalCandidatesAfterFilter: candidates.length,
     totalCandidates: candidates.length,
     returnedCandidates: returned.length,
     limit,
+    byStatus: countBy(candidates.flatMap((candidate) => candidate.statuses)),
+    bySource: countBy(candidates.flatMap((candidate) => candidate.sources)),
     candidates: returned,
     warnings: uniqueSorted([...scan.warnings, ...collected.warnings]),
   };

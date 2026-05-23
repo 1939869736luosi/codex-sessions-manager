@@ -86,7 +86,7 @@ Usage:
   codex-sessions show <session-id> [--root PATH] [--json]
   codex-sessions family <session-id> [--root PATH] [--json]
   codex-sessions audit <session-id> [--root PATH] [--json]
-  codex-sessions audit-root [--root PATH] [--json] [--limit N] [--all]
+  codex-sessions audit-root [--root PATH] [--json] [--limit N] [--status STATUS...] [--source SOURCE...] [--all]
   codex-sessions export <session-id> [--root PATH] [--output FILE] [--json]
   codex-sessions delete <session-id...> [--root PATH] [--json] [--yes] [--trash]
   codex-sessions trash-list [--root PATH] [--json]
@@ -102,6 +102,7 @@ Notes:
   - family 只读查看 parent / children / side / fork 关系，不会自动递归处理
   - audit 只读检查官方 UI 删除或归档后本地还剩哪些记录
   - audit-root 只读扫描整个 root 的疑似残留，默认 limit=50
+  - audit-root 多个 --status 或 --source 为 OR；同时使用 status 和 source 时为 AND
   - delete --trash --yes 会先写入回收站，再清理 live session
   - restore 和 purge 未带 --yes 时只展示匹配的回收站记录
   - cleanup-index 和 cleanup-stale 未带 --yes 时只展示预览，不改写 JSONL
@@ -127,7 +128,8 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
       all: { type: "boolean", default: false },
       query: { type: "string" },
       project: { type: "string" },
-      status: { type: "string" },
+      status: { type: "string", multiple: true },
+      source: { type: "string", multiple: true },
       limit: { type: "string" },
       output: { type: "string" },
       "group-by": { type: "string" },
@@ -147,6 +149,8 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
   const [command, ...rest] = positionals as [CommandName, ...string[]];
   const rootArg = values.root;
   const asJson = values.json;
+  const statusValues = Array.isArray(values.status) ? values.status : values.status ? [values.status] : [];
+  const sourceValues = Array.isArray(values.source) ? values.source : values.source ? [values.source] : [];
   if (command === "doctor") {
     const report = await inspectCodexRoot(rootArg);
     io.stdout(asJson ? JSON.stringify(report, null, 2) : formatDoctor(report));
@@ -161,7 +165,7 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
       const sessions = filterSessions(scan, {
         query: values.query,
         project: values.project,
-        status: (values.status as "all" | "active" | "archived" | "db-only" | "stale" | undefined) ?? "all",
+        status: (statusValues[0] as "all" | "active" | "archived" | "db-only" | "stale" | undefined) ?? "all",
         limit: values.limit ? Number(values.limit) : undefined,
         updatedAfter: values["updated-after"],
         updatedBefore: values["updated-before"],
@@ -171,6 +175,10 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
 
       if (values["group-by"] && values["group-by"] !== "project") {
         throw new Error(`不支持的 group-by：${values["group-by"]}`);
+      }
+
+      if (statusValues.length > 1) {
+        throw new Error("list 只支持一个 --status。");
       }
 
       if (asJson) {
@@ -238,6 +246,8 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
       const audit = buildRootResidueAudit(scan, {
         limit,
         includeAll: values.all,
+        statuses: statusValues,
+        sources: sourceValues,
       });
       io.stdout(asJson ? JSON.stringify(audit, null, 2) : formatRootResidueAudit(audit));
       return 0;

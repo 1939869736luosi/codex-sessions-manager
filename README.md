@@ -39,6 +39,7 @@ codex-sessions audit <session-id>
 
 # Scan the whole root for likely residue candidates (safe, no changes)
 codex-sessions audit-root --limit 50
+codex-sessions audit-root --status risky-global-state --source global-state-unknown --limit 50
 
 # Preview what deletion would do (safe, no changes)
 codex-sessions delete <session-id>
@@ -121,7 +122,7 @@ codex-sessions doctor [--json]
 codex-sessions show <session-id>
 codex-sessions family <session-id> [--json]
 codex-sessions audit <session-id> [--json]
-codex-sessions audit-root [--json] [--limit 50] [--all]
+codex-sessions audit-root [--json] [--limit 50] [--status STATUS...] [--source SOURCE...] [--all]
 codex-sessions export <session-id> [--output ./backup.json]
 codex-sessions delete <session-id...> [--trash] [--yes]
 codex-sessions trash-list
@@ -137,6 +138,25 @@ codex-sessions verify <session-id...> [--json]
 Use `audit` after the official Codex UI delete/archive flow when you need a clear local residue report. It is read-only. It reports whether the raw rollout file, shell snapshot, `session_index`, `history`, SQLite records, known global-state refs, unknown global-state refs, and `thread_spawn_edges` are still present. It also reports family membership and broken parent/child links. If anything remains, the suggested next command is a preview-only `delete` command; nothing is deleted unless you add `--yes`.
 
 Use `audit-root` when you do not already have the session ID. It scans the whole Codex root and lists likely residue candidates by risk: broken parent/child edges, missing rollout files with unknown global-state refs, SQLite-only rows, shell snapshots, index-only rows, and other partial leftovers. It is read-only, defaults to `--limit 50`, does not print transcript content, and recommends a per-session `audit` command for each candidate. Add `--all` only when you intentionally want complete non-residue sessions included too.
+
+`audit-root` supports display-only filters:
+
+- `--status risky-global-state`
+- `--status db-only`
+- `--status broken-family`
+- `--status partial-residue`
+- `--status global-state-unknown`
+- `--source global-state-unknown`
+- `--source global-state-known`
+- `--source sqlite`
+- `--source session-index`
+- `--source history`
+- `--source shell-snapshot`
+- `--source thread-spawn-edges`
+
+You can pass `--status` or `--source` more than once. Multiple values of the same kind use OR. Combining status and source uses AND. These filters only narrow what is shown. A matching candidate still needs per-session `audit` or delete preview before any cleanup decision, and it does not mean the candidate should be deleted.
+
+Human and JSON output include a summary: `filters`, `totalCandidatesBeforeFilter`, `totalCandidatesAfterFilter`, `returnedCandidates`, `limit`, `byStatus`, and `bySource`. The `byStatus` and `bySource` counts are computed after status/source filters and before `limit`.
 
 Use `family` before deleting a parent or child session. Parent and child sessions are independent sessions with their own IDs. Deleting a parent does not delete children, and deleting a child does not delete its parent. Delete previews and audits warn when relationship records point at missing sessions or missing file/index surfaces. To process multiple related sessions, put every intended session ID into the preview/delete command explicitly. The tool never recurses into parent or child sessions automatically.
 

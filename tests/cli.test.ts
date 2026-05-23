@@ -393,26 +393,76 @@ describe("cli", () => {
     const jsonExitCode = await runCli(["audit-root", "--root", fixture.rootDir, "--json", "--limit", "1"], json.io);
     const result = JSON.parse(json.stdout.join("\n")) as {
       rootPath: string;
+      filters: { statuses: string[]; sources: string[]; includeAll: boolean };
+      totalCandidatesBeforeFilter: number;
+      totalCandidatesAfterFilter: number;
       totalCandidates: number;
       returnedCandidates: number;
       limit: number;
+      byStatus: Record<string, number>;
+      bySource: Record<string, number>;
       candidates: Array<{ sessionId: string; statuses: string[]; recommendedAuditCommand: string }>;
       warnings: string[];
     };
 
     expect(humanExitCode).toBe(0);
     expect(humanOutput).toContain("疑似残留");
+    expect(humanOutput).toContain("筛选前候选");
+    expect(humanOutput).toContain("筛选: 无");
+    expect(humanOutput).toContain("按状态（筛选后，limit 前）");
+    expect(humanOutput).toContain("按来源（筛选后，limit 前）");
     expect(humanOutput).toContain(FIXTURE_IDS.STALE_ID);
     expect(humanOutput).toContain(FIXTURE_IDS.UNRELATED_ID);
     expect(humanOutput).toContain("codex-sessions audit");
     expect(humanOutput).not.toContain("active user input");
     expect(jsonExitCode).toBe(0);
     expect(result.rootPath).toBe(fixture.rootDir);
+    expect(result.filters).toEqual({ statuses: [], sources: [], includeAll: false });
+    expect(result.totalCandidatesBeforeFilter).toBe(2);
+    expect(result.totalCandidatesAfterFilter).toBe(2);
     expect(result.totalCandidates).toBe(2);
     expect(result.returnedCandidates).toBe(1);
     expect(result.limit).toBe(1);
+    expect(result.byStatus).toMatchObject({ partial: 2, "partial-residue": 2 });
+    expect(result.bySource).toMatchObject({ session_index: 1, shell_snapshots: 1 });
     expect(result.candidates[0].recommendedAuditCommand).toContain("codex-sessions audit");
     expect(result.warnings).toEqual([]);
+  });
+
+  it("filters root residue candidates from the cli with repeated status and source options", async () => {
+    const capture = createIo();
+    const exitCode = await runCli(
+      [
+        "audit-root",
+        "--root",
+        fixture.rootDir,
+        "--json",
+        "--status",
+        "index-only",
+        "--status",
+        "shell-snapshot-residue",
+        "--source",
+        "session-index",
+        "--source",
+        "shell-snapshot",
+      ],
+      capture.io,
+    );
+    const result = JSON.parse(capture.stdout.join("\n")) as {
+      filters: { statuses: string[]; sources: string[] };
+      totalCandidatesBeforeFilter: number;
+      totalCandidatesAfterFilter: number;
+      candidates: Array<{ sessionId: string }>;
+    };
+
+    expect(exitCode).toBe(0);
+    expect(result.filters.statuses).toEqual(["index-only", "shell-snapshot-residue"]);
+    expect(result.filters.sources).toEqual(["session_index", "shell_snapshots"]);
+    expect(result.totalCandidatesBeforeFilter).toBe(2);
+    expect(result.totalCandidatesAfterFilter).toBe(2);
+    expect(result.candidates.map((candidate) => candidate.sessionId).sort()).toEqual(
+      [FIXTURE_IDS.STALE_ID, FIXTURE_IDS.UNRELATED_ID].sort(),
+    );
   });
 
   it("previews trash delete without --yes", async () => {

@@ -140,6 +140,8 @@ codex-sessions audit <session-id> --root <path-to-codex-root>
 codex-sessions audit <session-id> --root <path-to-codex-root> --json
 codex-sessions audit-root --root <path-to-codex-root>
 codex-sessions audit-root --root <path-to-codex-root> --json --limit 50
+codex-sessions audit-root --root <path-to-codex-root> --status risky-global-state --limit 50
+codex-sessions audit-root --root <path-to-codex-root> --source global-state-unknown --limit 50
 codex-sessions export <session-id> --root <path-to-codex-root> --output ./backup.json
 codex-sessions delete <session-id...> --root <path-to-codex-root>
 codex-sessions delete <session-id...> --root <path-to-codex-root> --yes
@@ -180,6 +182,8 @@ node dist/cli/index.js audit <session-id> --root <path-to-codex-root>
 node dist/cli/index.js audit <session-id> --root <path-to-codex-root> --json
 node dist/cli/index.js audit-root --root <path-to-codex-root>
 node dist/cli/index.js audit-root --root <path-to-codex-root> --json --limit 50
+node dist/cli/index.js audit-root --root <path-to-codex-root> --status risky-global-state --limit 50
+node dist/cli/index.js audit-root --root <path-to-codex-root> --source global-state-unknown --limit 50
 node dist/cli/index.js export <session-id> --root <path-to-codex-root> --output ./backup.json
 node dist/cli/index.js delete <session-id...> --root <path-to-codex-root>
 node dist/cli/index.js delete <session-id...> --root <path-to-codex-root> --yes
@@ -205,6 +209,7 @@ node dist/cli/index.js verify <session-id...> --root <path-to-codex-root>
 - `get_session_family` and CLI `family` are read-only. They do not delete, export, restore, or select related sessions automatically.
 - `audit_session` and CLI `audit` are read-only. They report local residue after official UI delete/archive actions and must not rewrite files, SQLite, shell snapshots, or global state.
 - `audit_root` and CLI `audit-root` are read-only. They scan for likely residue candidates across a Codex root and must not delete, rewrite, or select parent/child sessions automatically.
+- `audit_root` / `audit-root` status and source filters only narrow displayed candidates. Multiple statuses or multiple sources use OR; combining status and source uses AND. A matching candidate still needs per-session audit or delete preview before any cleanup decision.
 - Delete previews warn when selected sessions have unselected parent, child, or family sessions, and when relationship edges point at missing sessions or missing file/index surfaces.
 - CLI `delete` without `--yes` is preview-only.
 - MCP `delete_sessions` without `confirm=true` is preview-only.
@@ -245,7 +250,7 @@ When a user asks about side conversations:
 - For family requests: distinguish current session, root, parent IDs, child IDs, relationship status, archived state, file existence, short `source` label, and source metadata. Human CLI output shows compact `source` labels; JSON/MCP output keeps the full raw `source` field. Report broken relationship warnings clearly. Say clearly that the action covers only explicitly selected session IDs.
 - For side-conversation requests: distinguish parent thread ID and child thread ID, and say whether the requested action covers one or both.
 - For audit requests: report the overall status, each residue surface count, family summary, warnings, and the preview-only next command. Say clearly that audit does not delete anything and that parent/child sessions are not handled recursively.
-- For root residue requests: use MCP `audit_root` or CLI `audit-root`. Report `totalCandidates`, `returnedCandidates`, limit, session IDs, status labels, residue source counts, family/broken-family state, and the recommended per-session audit command. Do not print chat content. Say clearly that root scans do not delete anything and do not recurse through parent/child sessions.
+- For root residue requests: use MCP `audit_root` or CLI `audit-root`. Report `filters`, `totalCandidatesBeforeFilter`, `totalCandidatesAfterFilter`, `returnedCandidates`, limit, `byStatus`, `bySource`, session IDs, status labels, residue source counts, family/broken-family state, and the recommended per-session audit command. Do not print chat content. Say clearly that root scans do not delete anything, filtered candidates are not automatically safe to delete, and parent/child sessions are not handled recursively.
 - For delete requests: explain whether this is preview-only, permanent delete, or recoverable trash delete.
 - For trash requests: distinguish moved to trash, restored, and purged.
 - For restore conflicts: explain that the live session already exists and identify conflicting surfaces when available.

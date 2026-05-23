@@ -415,7 +415,21 @@ describe("core integration", () => {
     expect(ids).not.toContain(FIXTURE_IDS.ACTIVE_ID);
     expect(ids).not.toContain(FIXTURE_IDS.ARCHIVED_ID);
     expect(audit.totalCandidates).toBe(2);
+    expect(audit.totalCandidatesBeforeFilter).toBe(2);
+    expect(audit.totalCandidatesAfterFilter).toBe(2);
     expect(audit.returnedCandidates).toBe(2);
+    expect(audit.byStatus).toMatchObject({
+      partial: 2,
+      "partial-residue": 2,
+      "index-only": 1,
+      "shell-snapshot-residue": 1,
+    });
+    expect(audit.bySource).toMatchObject({
+      session_index: 1,
+      history: 1,
+      shell_snapshots: 1,
+      global_state_known: 1,
+    });
     expect(limited.limit).toBe(1);
     expect(limited.returnedCandidates).toBe(1);
     expect(limited.totalCandidates).toBe(2);
@@ -461,6 +475,57 @@ describe("core integration", () => {
     expect(byId.get(missingParentId)?.recommendedAuditCommand).toBe(
       `codex-sessions audit ${missingParentId} --root ${fixture.rootDir}`,
     );
+  });
+
+  it("filters root residue candidates by status and source with summary counts", async () => {
+    const unknownGlobalId = "019d9999-aaaa-7bbb-8ccc-333333333333";
+    const dbOnlyId = "019daaaa-bbbb-7ccc-8ddd-444444444444";
+    const globalState = JSON.parse(await readFile(fixture.paths.globalState, "utf8")) as Record<string, unknown>;
+    globalState["deleted-session-marker"] = unknownGlobalId;
+    await writeFile(fixture.paths.globalState, `${JSON.stringify(globalState, null, 2)}\n`, "utf8");
+
+    const db = new Database(fixture.paths.sqlite);
+    db.prepare(
+      `insert into threads (
+         id, title, first_user_message, created_at, updated_at, archived, rollout_path, model, cwd
+       )
+       values (?, 'DB only residue', 'db only residue input', 1775119000, 1775119060, 0, null, 'gpt-5.4', '/workspace/db-only')`,
+    ).run(dbOnlyId);
+    db.close();
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const risky = buildRootResidueAudit(scan, { statuses: ["risky-global-state"] });
+    const dbOnly = buildRootResidueAudit(scan, { statuses: ["db-only"] });
+    const globalUnknown = buildRootResidueAudit(scan, { sources: ["global-state-unknown"] });
+    const sqlite = buildRootResidueAudit(scan, { sources: ["sqlite"] });
+    const multiStatus = buildRootResidueAudit(scan, { statuses: ["db-only", "index-only"] });
+    const multiSourceLimited = buildRootResidueAudit(scan, {
+      sources: ["sqlite", "global-state-unknown"],
+      limit: 1,
+    });
+
+    expect(risky.candidates.map((candidate) => candidate.sessionId)).toEqual([unknownGlobalId]);
+    expect(risky.filters.statuses).toEqual(["risky-global-state"]);
+    expect(risky.totalCandidatesBeforeFilter).toBe(4);
+    expect(risky.totalCandidatesAfterFilter).toBe(1);
+    expect(risky.byStatus).toMatchObject({
+      partial: 1,
+      "risky-global-state": 1,
+      "global-state-unknown": 1,
+      "partial-residue": 1,
+    });
+    expect(risky.bySource).toEqual({ global_state_unknown: 1 });
+
+    expect(dbOnly.candidates.map((candidate) => candidate.sessionId)).toEqual([dbOnlyId]);
+    expect(sqlite.candidates.map((candidate) => candidate.sessionId)).toEqual([dbOnlyId]);
+    expect(globalUnknown.candidates.map((candidate) => candidate.sessionId)).toEqual([unknownGlobalId]);
+    expect(multiStatus.candidates.map((candidate) => candidate.sessionId).sort()).toEqual(
+      [dbOnlyId, FIXTURE_IDS.STALE_ID].sort(),
+    );
+    expect(multiSourceLimited.totalCandidatesAfterFilter).toBe(2);
+    expect(multiSourceLimited.returnedCandidates).toBe(1);
+    expect(multiSourceLimited.candidates).toHaveLength(1);
+    expect(multiSourceLimited.filters.sources).toEqual(["global_state_unknown", "sqlite"]);
   });
 
   it("reports absent for a valid session id with no local record or residue", async () => {

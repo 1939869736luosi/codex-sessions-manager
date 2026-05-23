@@ -546,20 +546,54 @@ function formatRootResidueFamily(candidate: RootResidueAudit["candidates"][numbe
   ].join(", ");
 }
 
+function formatRootResidueFilters(audit: RootResidueAudit): string {
+  const parts = [
+    audit.filters.statuses.length ? `status=${audit.filters.statuses.join("|")}` : null,
+    audit.filters.sources.length ? `source=${audit.filters.sources.join("|")}` : null,
+    audit.filters.includeAll ? "all=true" : null,
+  ].filter((part): part is string => Boolean(part));
+
+  return parts.length ? parts.join(", ") : "无";
+}
+
+function formatCountLines(counts: Record<string, number>): string[] {
+  const entries = Object.entries(counts);
+  if (entries.length === 0) {
+    return ["- 无"];
+  }
+
+  return entries.map(([key, value]) => `- ${key}: ${value}`);
+}
+
+function formatRootResidueSummary(audit: RootResidueAudit): string[] {
+  return [
+    `Root: ${audit.rootPath}`,
+    `疑似残留: ${audit.returnedCandidates}/${audit.totalCandidatesAfterFilter}，limit=${audit.limit}`,
+    `筛选前候选: ${audit.totalCandidatesBeforeFilter}`,
+    `筛选: ${formatRootResidueFilters(audit)}`,
+    "",
+    "按状态（筛选后，limit 前）:",
+    ...formatCountLines(audit.byStatus),
+    "",
+    "按来源（筛选后，limit 前）:",
+    ...formatCountLines(audit.bySource),
+  ];
+}
+
 export function formatRootResidueAudit(audit: RootResidueAudit): string {
   const warningLines = audit.warnings.length ? ["", "警告:", ...audit.warnings.map((warning) => `- ${warning}`)] : [];
 
   if (audit.candidates.length === 0) {
     return [
-      `Root: ${audit.rootPath}`,
+      ...formatRootResidueSummary(audit),
+      "",
       "没有发现疑似残留。",
       ...warningLines,
     ].join("\n");
   }
 
   return [
-    `Root: ${audit.rootPath}`,
-    `疑似残留: ${audit.returnedCandidates}/${audit.totalCandidates}，limit=${audit.limit}`,
+    ...formatRootResidueSummary(audit),
     "",
     printTable([
       ["状态", "来源", "数量摘要", "family", "session id", "建议 audit 命令"],

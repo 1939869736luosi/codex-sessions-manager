@@ -13,6 +13,7 @@
 - Added read-only residue audit through CLI `audit` and MCP `audit_session`, covering raw rollout files, shell snapshots, session indexes, history, SQLite rows, global-state refs, thread edges, family membership, and broken parent/child relations.
 - Added structured audit status labels for `clean`, `present`, `partial`, `db-only`, `index-only`, `risky-global-state`, and `broken-family`.
 - Added read-only root residue scanning through CLI `audit-root` and MCP `audit_root`, including default risk filtering, `--json`, `--limit`, and per-candidate audit commands.
+- Added `audit-root` status/source filters plus structured summary fields: `filters`, `totalCandidatesBeforeFilter`, `totalCandidatesAfterFilter`, `byStatus`, and `bySource`.
 
 ### Changed
 
