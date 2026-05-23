@@ -336,6 +336,47 @@ describe("mcp server", () => {
     }
   });
 
+  it("returns structured root residue audit through MCP", async () => {
+    const { client, server } = await createConnectedClient();
+
+    try {
+      const result = await client.callTool({
+        name: "audit_root",
+        arguments: {
+          root: fixture.rootDir,
+          limit: 1,
+        },
+      });
+
+      const audit = result.structuredContent as {
+        rootPath: string;
+        totalCandidates: number;
+        returnedCandidates: number;
+        limit: number;
+        candidates: Array<{
+          sessionId: string;
+          statuses: string[];
+          surfaces: { shellSnapshots: number; sessionIndexRows: number };
+          family: { brokenFamily: boolean };
+          recommendedAuditCommand: string;
+        }>;
+        warnings: string[];
+      };
+
+      expect(audit.rootPath).toBe(fixture.rootDir);
+      expect(audit.totalCandidates).toBe(2);
+      expect(audit.returnedCandidates).toBe(1);
+      expect(audit.limit).toBe(1);
+      expect(audit.candidates[0].statuses.length).toBeGreaterThan(0);
+      expect(audit.candidates[0].recommendedAuditCommand).toContain("codex-sessions audit");
+      expect(audit.warnings).toEqual([]);
+      await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("deletes sessions when confirmation is explicit", async () => {
     const { client, server } = await createConnectedClient();
 

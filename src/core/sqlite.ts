@@ -2,6 +2,8 @@ import Database from "better-sqlite3";
 
 import type { SqliteDeletionCounts, SqliteTableInspection, ThreadRow, ThreadSpawnEdgeRow } from "./types.js";
 
+const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export const SQLITE_KEY_TABLES = [
   "threads",
   "logs",
@@ -191,6 +193,29 @@ function stringOrNull(value: unknown): string | null {
   return text ? text : null;
 }
 
+function addSessionId(value: unknown, ids: Set<string>): void {
+  const text = stringOrNull(value);
+  if (text && SESSION_ID_PATTERN.test(text)) {
+    ids.add(text);
+  }
+}
+
+function collectColumnSessionIds(
+  db: Database.Database,
+  ids: Set<string>,
+  tableName: string,
+  columnName: string,
+): void {
+  if (!columnExists(db, tableName, columnName)) {
+    return;
+  }
+
+  const rows = selectRows(db, `select ${quoteIdentifier(columnName)} as value from ${quoteIdentifier(tableName)}`);
+  for (const row of rows) {
+    addSessionId(row.value, ids);
+  }
+}
+
 function selectSessionLogs(db: Database.Database, sessionId: string): Record<string, unknown>[] {
   if (!hasSessionLogsTable(db)) {
     return [];
@@ -305,6 +330,31 @@ export function scanThreadSpawnEdges(sqlitePath: string | null): ThreadSpawnEdge
       ];
     });
   });
+}
+
+export function collectSqliteSessionIds(sqlitePath: string | null, logsSqlitePath: string | null = null): string[] {
+  const ids = new Set<string>();
+
+  if (sqlitePath) {
+    withDatabase(sqlitePath, true, (db) => {
+      collectColumnSessionIds(db, ids, "threads", "id");
+      collectColumnSessionIds(db, ids, "logs", "thread_id");
+      collectColumnSessionIds(db, ids, "thread_spawn_edges", "parent_thread_id");
+      collectColumnSessionIds(db, ids, "thread_spawn_edges", "child_thread_id");
+      collectColumnSessionIds(db, ids, "agent_job_items", "assigned_thread_id");
+      collectColumnSessionIds(db, ids, "thread_dynamic_tools", "thread_id");
+      collectColumnSessionIds(db, ids, "stage1_outputs", "thread_id");
+      collectColumnSessionIds(db, ids, "thread_goals", "thread_id");
+    });
+  }
+
+  if (logsSqlitePath && logsSqlitePath !== sqlitePath) {
+    withDatabase(logsSqlitePath, true, (db) => {
+      collectColumnSessionIds(db, ids, "logs", "thread_id");
+    });
+  }
+
+  return [...ids].sort();
 }
 
 function collectCountsForSession(db: Database.Database, sessionId: string): SqliteDeletionCounts {

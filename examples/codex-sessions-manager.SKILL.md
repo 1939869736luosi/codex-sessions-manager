@@ -46,6 +46,7 @@ Prefer MCP tools when the `codex-sessions` MCP server is available:
 - `get_session`
 - `get_session_family` (read-only session family inspection)
 - `audit_session` (read-only residue audit)
+- `audit_root` (read-only root residue scan)
 - `export_session_backup`
 - `preview_delete_sessions`
 - `delete_sessions`
@@ -77,6 +78,8 @@ codex-sessions family <session-id> --root <path-to-codex-root>
 codex-sessions family <session-id> --root <path-to-codex-root> --json
 codex-sessions audit <session-id> --root <path-to-codex-root>
 codex-sessions audit <session-id> --root <path-to-codex-root> --json
+codex-sessions audit-root --root <path-to-codex-root>
+codex-sessions audit-root --root <path-to-codex-root> --json --limit 50
 codex-sessions export <session-id> --root <path-to-codex-root> --output ./backup.json
 codex-sessions delete <session-id> --root <path-to-codex-root>
 codex-sessions delete <session-id> --root <path-to-codex-root> --trash
@@ -108,6 +111,8 @@ node dist/cli/index.js family <session-id> --root <path-to-codex-root>
 node dist/cli/index.js family <session-id> --root <path-to-codex-root> --json
 node dist/cli/index.js audit <session-id> --root <path-to-codex-root>
 node dist/cli/index.js audit <session-id> --root <path-to-codex-root> --json
+node dist/cli/index.js audit-root --root <path-to-codex-root>
+node dist/cli/index.js audit-root --root <path-to-codex-root> --json --limit 50
 node dist/cli/index.js export <session-id> --root <path-to-codex-root> --output ./backup.json
 node dist/cli/index.js delete <session-id> --root <path-to-codex-root>
 node dist/cli/index.js delete <session-id> --root <path-to-codex-root> --trash
@@ -127,6 +132,7 @@ node dist/cli/index.js verify <session-id> --root <path-to-codex-root>
 - Run `inspect_root` or CLI `doctor` before delete, restore, purge, or cleanup when Codex storage may have changed.
 - `get_session_family` and CLI `family` are read-only. They do not delete, export, restore, or select related sessions automatically.
 - `audit_session` and CLI `audit` are read-only. They report local residue after official UI delete/archive actions and must not rewrite files, SQLite, shell snapshots, or global state.
+- `audit_root` and CLI `audit-root` are read-only. They scan for likely residue candidates across a Codex root and must not delete, rewrite, or select parent/child sessions automatically.
 - Delete previews warn when selected sessions have unselected parent, child, or family sessions, and when relationship edges point at missing sessions or missing file/index surfaces.
 - `delete` without `--yes` is preview-only.
 - Permanent delete remains available, but prefer recoverable deletion with `--trash --yes`.
@@ -138,7 +144,7 @@ node dist/cli/index.js verify <session-id> --root <path-to-codex-root>
 - `cleanup-index` and `cleanup-stale` rewrite JSONL indexes. They do not delete raw files or SQLite rows, but they still require `--yes`.
 - MCP `cleanup_session_indexes` and `cleanup_stale_indexes` require `confirm=true` to rewrite indexes.
 - Unknown global-state references are warnings only. Do not edit unknown global-state keys automatically.
-- If `audit`, `verify`, `doctor`, or `inspect_root` reports warnings, tell the user. Do not claim the root is fully clean.
+- If `audit`, `audit-root`, `verify`, `doctor`, or `inspect_root` reports warnings, tell the user. Do not claim the root is fully clean.
 - Do not output chat content when reporting audit, doctor, verify, or global-state warnings.
 - `/side` conversations may be stored as separate child threads. Current CLI/MCP behavior does not automatically recurse from parent to side child threads.
 

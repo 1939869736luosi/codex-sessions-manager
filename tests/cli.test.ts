@@ -385,6 +385,36 @@ describe("cli", () => {
     expect(audit.recommendedNextCommandNote).toBe("不需要处理，当前没有发现这个 ID 的本地记录或残留。");
   });
 
+  it("lists root residue candidates in human and json modes", async () => {
+    const human = createIo();
+    const humanExitCode = await runCli(["audit-root", "--root", fixture.rootDir], human.io);
+    const humanOutput = human.stdout.join("\n");
+    const json = createIo();
+    const jsonExitCode = await runCli(["audit-root", "--root", fixture.rootDir, "--json", "--limit", "1"], json.io);
+    const result = JSON.parse(json.stdout.join("\n")) as {
+      rootPath: string;
+      totalCandidates: number;
+      returnedCandidates: number;
+      limit: number;
+      candidates: Array<{ sessionId: string; statuses: string[]; recommendedAuditCommand: string }>;
+      warnings: string[];
+    };
+
+    expect(humanExitCode).toBe(0);
+    expect(humanOutput).toContain("疑似残留");
+    expect(humanOutput).toContain(FIXTURE_IDS.STALE_ID);
+    expect(humanOutput).toContain(FIXTURE_IDS.UNRELATED_ID);
+    expect(humanOutput).toContain("codex-sessions audit");
+    expect(humanOutput).not.toContain("active user input");
+    expect(jsonExitCode).toBe(0);
+    expect(result.rootPath).toBe(fixture.rootDir);
+    expect(result.totalCandidates).toBe(2);
+    expect(result.returnedCandidates).toBe(1);
+    expect(result.limit).toBe(1);
+    expect(result.candidates[0].recommendedAuditCommand).toContain("codex-sessions audit");
+    expect(result.warnings).toEqual([]);
+  });
+
   it("previews trash delete without --yes", async () => {
     const capture = createIo();
     const exitCode = await runCli(["delete", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--trash"], capture.io);

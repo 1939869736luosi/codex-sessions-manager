@@ -6,10 +6,10 @@ import { runCli } from "./run.js";
 
 runCli(process.argv.slice(2)).then(
   (code) => {
-    process.exit(code);
+    process.exitCode = code;
   },
   (error) => {
     console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
+    process.exitCode = 1;
   },
 );

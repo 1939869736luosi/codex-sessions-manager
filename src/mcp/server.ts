@@ -7,7 +7,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-import { buildSessionResidueAudit } from "../core/audit.js";
+import { buildRootResidueAudit, buildSessionResidueAudit } from "../core/audit.js";
 import { exportSessionBackup } from "../core/backup.js";
 import { inspectCodexRoot } from "../core/doctor.js";
 import {
@@ -201,6 +201,34 @@ export function createServer(): McpServer {
       return textResult(`Audited session ${audit.sessionId}. Status: ${audit.overallStatus.join(", ")}.`, {
         audit,
       });
+    },
+  );
+
+  server.registerTool(
+    "audit_root",
+    {
+      description:
+        "Read-only scan of a Codex root for likely local residue candidates without requiring a session id.",
+      outputSchema: TOOL_OUTPUT_SCHEMA,
+      inputSchema: z.object({
+        root: z.string().optional().describe("Optional explicit path to the .codex root."),
+        limit: z.number().int().positive().optional().describe("Maximum candidates to return. Defaults to 50."),
+        all: z.boolean().optional().describe("Include complete non-residue sessions too. Defaults to false."),
+      }),
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({ root, limit, all }) => {
+      const scan = await scanCodexRoot(root);
+      const audit = buildRootResidueAudit(scan, { limit, includeAll: all });
+      return textResult(
+        audit.totalCandidates === 0
+          ? `No likely residue candidates found in ${audit.rootPath}.`
+          : `Found ${audit.totalCandidates} likely residue candidates in ${audit.rootPath}.`,
+        audit as unknown as Record<string, unknown>,
+      );
     },
   );
 

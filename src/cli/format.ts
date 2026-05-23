@@ -6,6 +6,7 @@ import type {
   DeleteValidationItem,
   DoctorReport,
   ProjectSummary,
+  RootResidueAudit,
   ScanResult,
   SessionEntry,
   SessionFamily,
@@ -521,6 +522,57 @@ export function formatAudit(audit: SessionResidueAudit): string {
     ...warningLines,
     "",
     ...nextStepLines,
+  ].join("\n");
+}
+
+function formatRootResidueCounts(candidate: RootResidueAudit["candidates"][number]): string {
+  return [
+    `rollout=${candidate.surfaces.rolloutFiles}`,
+    `shell=${candidate.surfaces.shellSnapshots}`,
+    `index=${candidate.surfaces.sessionIndexRows}`,
+    `history=${candidate.surfaces.historyRows}`,
+    `sqlite=${candidate.surfaces.sqliteRows}`,
+    `global_known=${candidate.surfaces.knownGlobalStateRefs}`,
+    `global_unknown=${candidate.surfaces.possibleUnknownGlobalStateRefs}`,
+    `edges=${candidate.surfaces.threadSpawnEdges}`,
+  ].join(", ");
+}
+
+function formatRootResidueFamily(candidate: RootResidueAudit["candidates"][number]): string {
+  return [
+    `family=${yesNo(candidate.family.isFamilyMember)}`,
+    `broken=${yesNo(candidate.family.brokenFamily)}`,
+    `members=${candidate.family.familyMemberCount}`,
+  ].join(", ");
+}
+
+export function formatRootResidueAudit(audit: RootResidueAudit): string {
+  const warningLines = audit.warnings.length ? ["", "警告:", ...audit.warnings.map((warning) => `- ${warning}`)] : [];
+
+  if (audit.candidates.length === 0) {
+    return [
+      `Root: ${audit.rootPath}`,
+      "没有发现疑似残留。",
+      ...warningLines,
+    ].join("\n");
+  }
+
+  return [
+    `Root: ${audit.rootPath}`,
+    `疑似残留: ${audit.returnedCandidates}/${audit.totalCandidates}，limit=${audit.limit}`,
+    "",
+    printTable([
+      ["状态", "来源", "数量摘要", "family", "session id", "建议 audit 命令"],
+      ...audit.candidates.map((candidate) => [
+        candidate.statuses.join(","),
+        candidate.sources.join(",") || "-",
+        formatRootResidueCounts(candidate),
+        formatRootResidueFamily(candidate),
+        candidate.sessionId,
+        candidate.recommendedAuditCommand,
+      ]),
+    ]),
+    ...warningLines,
   ].join("\n");
 }
 

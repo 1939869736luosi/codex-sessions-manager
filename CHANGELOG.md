@@ -12,15 +12,17 @@
 - Refined family output with compact `source` labels and broken relationship warnings for missing sessions or missing file/index surfaces.
 - Added read-only residue audit through CLI `audit` and MCP `audit_session`, covering raw rollout files, shell snapshots, session indexes, history, SQLite rows, global-state refs, thread edges, family membership, and broken parent/child relations.
 - Added structured audit status labels for `clean`, `present`, `partial`, `db-only`, `index-only`, `risky-global-state`, and `broken-family`.
+- Added read-only root residue scanning through CLI `audit-root` and MCP `audit_root`, including default risk filtering, `--json`, `--limit`, and per-candidate audit commands.
 
 ### Changed
 
 - Updated public positioning now that Codex Desktop includes archived-chat delete: the project is described as a local residue audit, verification, and cleanup tool rather than a replacement for a missing built-in delete button.
-- Synchronized README, README.zh-CN, Skill, example Skill, and the installed local Skill with the new family inspection and residue audit guidance.
+- Synchronized README, README.zh-CN, Skill, example Skill, and the installed local Skill with the new family inspection, session audit, and root residue scan guidance.
 
 ### Fixed
 
 - Clarified audit output for valid session IDs that have no local record or residue, reporting them as `absent` instead of `clean`.
+- Avoided truncating large CLI output by letting stdout flush before process exit.
 
 ## 0.3.2
 

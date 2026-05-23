@@ -2,7 +2,7 @@ import path from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 
-import { buildSessionResidueAudit } from "../core/audit.js";
+import { buildRootResidueAudit, buildSessionResidueAudit } from "../core/audit.js";
 import { exportSessionBackup } from "../core/backup.js";
 import { inspectCodexRoot } from "../core/doctor.js";
 import {
@@ -34,6 +34,7 @@ import {
   formatList,
   formatPreview,
   formatProjects,
+  formatRootResidueAudit,
   formatShow,
   formatTrashDeleteResult,
   formatTrashEntries,
@@ -50,6 +51,7 @@ type CommandName =
   | "show"
   | "family"
   | "audit"
+  | "audit-root"
   | "export"
   | "delete"
   | "trash-list"
@@ -84,6 +86,7 @@ Usage:
   codex-sessions show <session-id> [--root PATH] [--json]
   codex-sessions family <session-id> [--root PATH] [--json]
   codex-sessions audit <session-id> [--root PATH] [--json]
+  codex-sessions audit-root [--root PATH] [--json] [--limit N] [--all]
   codex-sessions export <session-id> [--root PATH] [--output FILE] [--json]
   codex-sessions delete <session-id...> [--root PATH] [--json] [--yes] [--trash]
   codex-sessions trash-list [--root PATH] [--json]
@@ -98,6 +101,7 @@ Notes:
   - delete 未带 --yes 时只展示预览，不执行删除
   - family 只读查看 parent / children / side / fork 关系，不会自动递归处理
   - audit 只读检查官方 UI 删除或归档后本地还剩哪些记录
+  - audit-root 只读扫描整个 root 的疑似残留，默认 limit=50
   - delete --trash --yes 会先写入回收站，再清理 live session
   - restore 和 purge 未带 --yes 时只展示匹配的回收站记录
   - cleanup-index 和 cleanup-stale 未带 --yes 时只展示预览，不改写 JSONL
@@ -120,6 +124,7 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
       json: { type: "boolean", default: false },
       yes: { type: "boolean", default: false },
       trash: { type: "boolean", default: false },
+      all: { type: "boolean", default: false },
       query: { type: "string" },
       project: { type: "string" },
       status: { type: "string" },
@@ -221,6 +226,20 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
 
       const audit = buildSessionResidueAudit(scan, rest[0]);
       io.stdout(asJson ? JSON.stringify(audit, null, 2) : formatAudit(audit));
+      return 0;
+    }
+
+    case "audit-root": {
+      if (rest.length !== 0) {
+        throw new Error("audit-root 不接收 session-id。");
+      }
+
+      const limit = values.limit ? Number(values.limit) : undefined;
+      const audit = buildRootResidueAudit(scan, {
+        limit,
+        includeAll: values.all,
+      });
+      io.stdout(asJson ? JSON.stringify(audit, null, 2) : formatRootResidueAudit(audit));
       return 0;
     }
 

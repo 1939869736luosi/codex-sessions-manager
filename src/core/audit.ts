@@ -1,7 +1,10 @@
 import { buildDeletePreview } from "./delete.js";
 import { buildSessionFamily } from "./family.js";
-import { sumSqliteDeletionCounts } from "./sqlite.js";
+import { collectSqliteSessionIds, sumSqliteDeletionCounts } from "./sqlite.js";
 import type {
+  RootResidueAudit,
+  RootResidueCandidate,
+  RootResidueCandidateStatus,
   ScanResult,
   SessionEntry,
   SessionResidueAudit,
@@ -71,9 +74,12 @@ function emptySessionEntry(id: string): SessionEntry {
 function collectKnownIds(scan: ScanResult): string[] {
   return uniqueSorted([
     ...scan.sessions.map((session) => session.id),
+    ...scan.sessionIndex.latestById.keys(),
+    ...scan.history.lineCountById.keys(),
     ...scan.shellSnapshots.filesById.keys(),
     ...scan.globalState.refsById.keys(),
     ...scan.globalState.possibleUnknownRefsById.keys(),
+    ...scan.sqlite.threadSpawnEdges.flatMap((edge) => [edge.parentThreadId, edge.childThreadId]),
   ]);
 }
 
@@ -340,5 +346,201 @@ export function buildSessionResidueAudit(scan: ScanResult, sessionId: string): S
     warnings,
     recommendedNextCommand,
     recommendedNextCommandNote,
+  };
+}
+
+function collectRootCandidateIds(scan: ScanResult): {
+  ids: string[];
+  warnings: string[];
+} {
+  const warnings: string[] = [];
+  let sqliteIds: string[] = [];
+
+  try {
+    sqliteIds = collectSqliteSessionIds(scan.root.sqlitePath, scan.root.logsSqlitePath);
+  } catch (error) {
+    warnings.push(`读取 SQLite session 引用失败：${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  return {
+    ids: uniqueSorted([...collectKnownIds(scan), ...sqliteIds]),
+    warnings,
+  };
+}
+
+function pushRootStatus(statuses: RootResidueCandidateStatus[], status: RootResidueCandidateStatus): void {
+  if (!statuses.includes(status)) {
+    statuses.push(status);
+  }
+}
+
+function collectSources(audit: SessionResidueAudit): string[] {
+  const sources: string[] = [];
+
+  if (audit.counts.rawSessionFiles > 0) sources.push("rollout_files");
+  if (audit.counts.shellSnapshotFiles > 0) sources.push("shell_snapshots");
+  if (audit.counts.sessionIndexRows > 0) sources.push("session_index");
+  if (audit.counts.historyRows > 0) sources.push("history");
+  if (audit.counts.sqliteRows > 0) sources.push("sqlite");
+  if (audit.counts.knownGlobalStateRefs > 0) sources.push("global_state_known");
+  if (audit.counts.possibleUnknownGlobalStateRefs > 0) sources.push("global_state_unknown");
+  if (audit.counts.threadSpawnEdges > 0) sources.push("thread_spawn_edges");
+
+  return sources;
+}
+
+function hasResidueWithoutRollout(audit: SessionResidueAudit): boolean {
+  return (
+    audit.counts.rawSessionFiles === 0 &&
+    audit.counts.shellSnapshotFiles +
+      audit.counts.sessionIndexRows +
+      audit.counts.historyRows +
+      audit.counts.sqliteRows +
+      audit.counts.knownGlobalStateRefs +
+      audit.counts.possibleUnknownGlobalStateRefs +
+      audit.counts.threadSpawnEdges >
+      0
+  );
+}
+
+function rootStatuses(audit: SessionResidueAudit): RootResidueCandidateStatus[] {
+  const statuses: RootResidueCandidateStatus[] = [...audit.overallStatus];
+  const noRollout = audit.counts.rawSessionFiles === 0;
+
+  if (hasResidueWithoutRollout(audit)) {
+    pushRootStatus(statuses, "partial-residue");
+  }
+
+  if (noRollout && audit.counts.possibleUnknownGlobalStateRefs > 0) {
+    pushRootStatus(statuses, "global-state-unknown");
+  }
+
+  if (noRollout && audit.counts.shellSnapshotFiles > 0) {
+    pushRootStatus(statuses, "shell-snapshot-residue");
+  }
+
+  if (noRollout && (audit.counts.sessionIndexRows > 0 || audit.counts.historyRows > 0)) {
+    pushRootStatus(statuses, "index-residue");
+  }
+
+  if (noRollout && audit.counts.sqliteRows > 0) {
+    pushRootStatus(statuses, "sqlite-residue");
+  }
+
+  if (audit.brokenRelations.some((relation) => relation.parentThreadId === audit.sessionId && relation.missingParentSession)) {
+    pushRootStatus(statuses, "missing-parent-edge");
+  }
+
+  if (audit.brokenRelations.some((relation) => relation.childThreadId === audit.sessionId && relation.missingChildSession)) {
+    pushRootStatus(statuses, "missing-child-edge");
+  }
+
+  return statuses;
+}
+
+function buildRecommendedAuditCommand(scan: ScanResult, sessionId: string): string {
+  return `codex-sessions audit ${quoteShellArg(sessionId)} --root ${quoteShellArg(scan.root.rootPath)}`;
+}
+
+function toRootResidueCandidate(scan: ScanResult, audit: SessionResidueAudit): RootResidueCandidate {
+  return {
+    sessionId: audit.sessionId,
+    statuses: rootStatuses(audit),
+    sources: collectSources(audit),
+    surfaces: {
+      rolloutFiles: audit.counts.rawSessionFiles,
+      shellSnapshots: audit.counts.shellSnapshotFiles,
+      sessionIndexRows: audit.counts.sessionIndexRows,
+      historyRows: audit.counts.historyRows,
+      sqliteRows: audit.counts.sqliteRows,
+      knownGlobalStateRefs: audit.counts.knownGlobalStateRefs,
+      possibleUnknownGlobalStateRefs: audit.counts.possibleUnknownGlobalStateRefs,
+      threadSpawnEdges: audit.counts.threadSpawnEdges,
+    },
+    family: {
+      isFamilyMember: audit.familySummary.isFamilyMember,
+      brokenFamily: audit.familySummary.brokenRelationCount > 0,
+      rootId: audit.familySummary.rootId,
+      parentIds: audit.familySummary.parentIds,
+      childIds: audit.familySummary.childIds,
+      familyMemberCount: audit.familySummary.familyMemberIds.length,
+      brokenRelationCount: audit.familySummary.brokenRelationCount,
+    },
+    warnings: audit.warnings,
+    recommendedAuditCommand: buildRecommendedAuditCommand(scan, audit.sessionId),
+  };
+}
+
+function isDefaultRootResidueCandidate(candidate: RootResidueCandidate): boolean {
+  return (
+    candidate.statuses.includes("partial-residue") ||
+    candidate.statuses.includes("broken-family") ||
+    candidate.statuses.includes("missing-parent-edge") ||
+    candidate.statuses.includes("missing-child-edge")
+  );
+}
+
+function riskScore(candidate: RootResidueCandidate): number {
+  let score = 0;
+  if (candidate.statuses.includes("missing-parent-edge") || candidate.statuses.includes("missing-child-edge")) score += 1000;
+  if (candidate.statuses.includes("broken-family")) score += 900;
+  if (candidate.statuses.includes("global-state-unknown")) score += 800;
+  if (candidate.statuses.includes("risky-global-state")) score += 700;
+  if (candidate.statuses.includes("db-only")) score += 600;
+  if (candidate.statuses.includes("sqlite-residue")) score += 500;
+  if (candidate.statuses.includes("shell-snapshot-residue")) score += 400;
+  if (candidate.statuses.includes("index-only")) score += 300;
+  if (candidate.statuses.includes("index-residue")) score += 250;
+  if (candidate.statuses.includes("partial-residue")) score += 100;
+
+  return (
+    score +
+    candidate.surfaces.sqliteRows +
+    candidate.surfaces.possibleUnknownGlobalStateRefs +
+    candidate.surfaces.knownGlobalStateRefs +
+    candidate.surfaces.shellSnapshots +
+    candidate.surfaces.sessionIndexRows +
+    candidate.surfaces.historyRows +
+    candidate.surfaces.threadSpawnEdges
+  );
+}
+
+function normalizeLimit(limit: number | undefined): number {
+  if (limit === undefined) {
+    return 50;
+  }
+
+  if (!Number.isInteger(limit) || limit <= 0) {
+    throw new Error("--limit 必须是正整数。");
+  }
+
+  return limit;
+}
+
+export function buildRootResidueAudit(
+  scan: ScanResult,
+  options: {
+    limit?: number;
+    includeAll?: boolean;
+  } = {},
+): RootResidueAudit {
+  const limit = normalizeLimit(options.limit);
+  const collected = collectRootCandidateIds(scan);
+  const candidates = collected.ids
+    .map((id) => toRootResidueCandidate(scan, buildSessionResidueAudit(scan, id)))
+    .filter((candidate) => options.includeAll || isDefaultRootResidueCandidate(candidate))
+    .sort((left, right) => {
+      const scoreDiff = riskScore(right) - riskScore(left);
+      return scoreDiff || left.sessionId.localeCompare(right.sessionId);
+    });
+  const returned = candidates.slice(0, limit);
+
+  return {
+    rootPath: scan.root.rootPath,
+    totalCandidates: candidates.length,
+    returnedCandidates: returned.length,
+    limit,
+    candidates: returned,
+    warnings: uniqueSorted([...scan.warnings, ...collected.warnings]),
   };
 }

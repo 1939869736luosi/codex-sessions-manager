@@ -346,6 +346,56 @@ export interface SessionResidueAudit {
   recommendedNextCommandNote: string | null;
 }
 
+export type RootResidueCandidateStatus =
+  | SessionResidueAuditStatus
+  | "partial-residue"
+  | "global-state-unknown"
+  | "shell-snapshot-residue"
+  | "index-residue"
+  | "sqlite-residue"
+  | "missing-parent-edge"
+  | "missing-child-edge";
+
+export interface RootResidueSurfaceSummary {
+  rolloutFiles: number;
+  shellSnapshots: number;
+  sessionIndexRows: number;
+  historyRows: number;
+  sqliteRows: number;
+  knownGlobalStateRefs: number;
+  possibleUnknownGlobalStateRefs: number;
+  threadSpawnEdges: number;
+}
+
+export interface RootResidueFamilySummary {
+  isFamilyMember: boolean;
+  brokenFamily: boolean;
+  rootId: string;
+  parentIds: string[];
+  childIds: string[];
+  familyMemberCount: number;
+  brokenRelationCount: number;
+}
+
+export interface RootResidueCandidate {
+  sessionId: string;
+  statuses: RootResidueCandidateStatus[];
+  sources: string[];
+  surfaces: RootResidueSurfaceSummary;
+  family: RootResidueFamilySummary;
+  warnings: string[];
+  recommendedAuditCommand: string;
+}
+
+export interface RootResidueAudit {
+  rootPath: string;
+  totalCandidates: number;
+  returnedCandidates: number;
+  limit: number;
+  candidates: RootResidueCandidate[];
+  warnings: string[];
+}
+
 export interface DeletePreviewItem {
   sessionId: string;
   title: string;
