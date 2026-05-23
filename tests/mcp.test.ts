@@ -8,7 +8,7 @@ import { createServer } from "../src/mcp/server.js";
 import { validateDeletion } from "../src/core/delete.js";
 import { resolveSessions } from "../src/core/query.js";
 import { scanCodexRoot } from "../src/core/scan.js";
-import { createFixture, FIXTURE_IDS, type Fixture } from "./helpers/fixture.js";
+import { createFixture, FIXTURE_IDS, writeExactGlobalStateFixture, type Fixture } from "./helpers/fixture.js";
 
 async function createConnectedClient() {
   const server = createServer();
@@ -428,6 +428,131 @@ describe("mcp server", () => {
       });
       expect(result.structuredContent).toHaveProperty("warnings");
       await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("uses the same exact-key global-state preview rules through MCP", async () => {
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+    const { client, server } = await createConnectedClient();
+
+    try {
+      const result = await client.callTool({
+        name: "preview_delete_sessions",
+        arguments: {
+          root: fixture.rootDir,
+          sessionIds: [FIXTURE_IDS.EXACT_GLOBAL_STATE_ID],
+        },
+      });
+
+      const preview = result.structuredContent?.preview as {
+        totals: { exactKeyGlobalStateRefs: number; possibleUnknownGlobalStateRefs: number };
+        items: Array<{
+          exactKeyGlobalStateRefsDetail: Array<{ ruleId: string; valueShape: string; value?: unknown }>;
+        }>;
+      };
+      expect(preview.totals.exactKeyGlobalStateRefs).toBe(2);
+      expect(preview.totals.possibleUnknownGlobalStateRefs).toBe(0);
+      expect(preview.items[0].exactKeyGlobalStateRefsDetail).toEqual([
+        expect.objectContaining({ ruleId: "electronPromptHistoryByThreadId", valueShape: "array(3)" }),
+        expect.objectContaining({ ruleId: "heartbeatThreadPermissionsById", valueShape: "object(3)" }),
+      ]);
+      expect(preview.items[0].exactKeyGlobalStateRefsDetail[0]).not.toHaveProperty("value");
+      expect(JSON.stringify(result.structuredContent)).not.toContain("secret prompt text");
+      expect(JSON.stringify(result.structuredContent)).not.toContain("workspace-write");
+      expect(JSON.stringify(result.structuredContent)).not.toContain(FIXTURE_IDS.PROMPT_HISTORY_VALUE_ID);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("removes exact-key global-state refs through confirmed MCP delete only", async () => {
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+    const { client, server } = await createConnectedClient();
+
+    try {
+      const preview = await client.callTool({
+        name: "delete_sessions",
+        arguments: {
+          root: fixture.rootDir,
+          sessionIds: [FIXTURE_IDS.EXACT_GLOBAL_STATE_ID],
+        },
+      });
+      expect(preview.structuredContent?.requiresConfirmation).toBe(true);
+      expect(await readFile(fixture.paths.globalState, "utf8")).toContain(FIXTURE_IDS.EXACT_GLOBAL_STATE_ID);
+
+      const deletion = await client.callTool({
+        name: "delete_sessions",
+        arguments: {
+          root: fixture.rootDir,
+          sessionIds: [FIXTURE_IDS.EXACT_GLOBAL_STATE_ID],
+          confirm: true,
+        },
+      });
+      const result = deletion.structuredContent?.result as {
+        validation: Array<{ exactKeyGlobalStateRefsRemaining: number }>;
+      };
+      const globalStateText = await readFile(fixture.paths.globalState, "utf8");
+
+      expect(result.validation[0].exactKeyGlobalStateRefsRemaining).toBe(0);
+      expect(globalStateText).not.toContain(`"019d9999-aaaa-7bbb-8ccc-ffffffffffff": [`);
+      expect(globalStateText).toContain(FIXTURE_IDS.EXACT_GLOBAL_STATE_SIBLING_ID);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("refuses non-exact unknown global-state cleanup through MCP", async () => {
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+    const { client, server } = await createConnectedClient();
+
+    try {
+      const result = await client.callTool({
+        name: "delete_sessions",
+        arguments: {
+          root: fixture.rootDir,
+          sessionIds: [FIXTURE_IDS.BAD_HEARTBEAT_GLOBAL_STATE_ID],
+          confirm: true,
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content[0]).toMatchObject({
+        type: "text",
+        text: expect.stringContaining("拒绝删除 unknown global-state"),
+      });
+      expect(await readFile(fixture.paths.globalState, "utf8")).toContain(FIXTURE_IDS.BAD_HEARTBEAT_GLOBAL_STATE_ID);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("refuses installation-id and prompt-history value refs through MCP", async () => {
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+    const { client, server } = await createConnectedClient();
+
+    try {
+      for (const sessionId of [FIXTURE_IDS.INSTALLATION_GLOBAL_STATE_ID, FIXTURE_IDS.PROMPT_HISTORY_VALUE_ID]) {
+        const result = await client.callTool({
+          name: "delete_sessions",
+          arguments: {
+            root: fixture.rootDir,
+            sessionIds: [sessionId],
+            confirm: true,
+          },
+        });
+        expect(result.isError).toBe(true);
+        expect(result.content[0]).toMatchObject({
+          type: "text",
+          text: expect.stringContaining("拒绝删除 unknown global-state"),
+        });
+      }
+      expect(await readFile(fixture.paths.globalState, "utf8")).toContain(FIXTURE_IDS.INSTALLATION_GLOBAL_STATE_ID);
+      expect(await readFile(fixture.paths.globalState, "utf8")).toContain(FIXTURE_IDS.PROMPT_HISTORY_VALUE_ID);
     } finally {
       await client.close();
       await server.close();

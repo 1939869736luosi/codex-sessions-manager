@@ -1,5 +1,6 @@
 import { buildDeletePreview } from "./delete.js";
 import { buildSessionFamily } from "./family.js";
+import { toExactKeyPreview } from "./global-state.js";
 import { collectSqliteDeletionTotals, collectSqliteSessionIds, sumSqliteDeletionCounts } from "./sqlite.js";
 import type {
   DeleteFamilyWarning,
@@ -32,6 +33,7 @@ const ROOT_RESIDUE_STATUS_VALUES = new Set<RootResidueCandidateStatus>([
   "db-only",
   "index-only",
   "partial-residue",
+  "global-state-exact-key",
   "global-state-unknown",
   "shell-snapshot-residue",
   "index-residue",
@@ -52,6 +54,8 @@ const ROOT_RESIDUE_SOURCE_ALIASES: Record<string, RootResidueCandidateSource> = 
   sqlite: "sqlite",
   "global-state-known": "global_state_known",
   global_state_known: "global_state_known",
+  "global-state-exact-key": "global_state_exact_key",
+  global_state_exact_key: "global_state_exact_key",
   "global-state-unknown": "global_state_unknown",
   global_state_unknown: "global_state_unknown",
   "thread-spawn-edge": "thread_spawn_edges",
@@ -126,6 +130,7 @@ function collectKnownIds(scan: ScanResult): string[] {
     ...scan.history.lineCountById.keys(),
     ...scan.shellSnapshots.filesById.keys(),
     ...scan.globalState.refsById.keys(),
+    ...scan.globalState.exactKeyRefsById.keys(),
     ...scan.globalState.possibleUnknownRefsById.keys(),
     ...scan.sqlite.threadSpawnEdges.flatMap((edge) => [edge.parentThreadId, edge.childThreadId]),
   ]);
@@ -267,6 +272,7 @@ export function buildSessionResidueAudit(scan: ScanResult, sessionId: string): S
   const family = buildSessionFamily(scan, session);
   const sqliteRows = sumSqliteDeletionCounts(item.sqlite);
   const knownGlobalStateRefs = scan.globalState.refsById.get(session.id) ?? [];
+  const exactKeyGlobalStateRefs = scan.globalState.exactKeyRefsById.get(session.id) ?? [];
   const unknownGlobalStateRefs = scan.globalState.possibleUnknownRefsById.get(session.id) ?? [];
   const threadSpawnEdges = scan.sqlite.threadSpawnEdges.filter(
     (edge) => edge.parentThreadId === session.id || edge.childThreadId === session.id,
@@ -282,6 +288,7 @@ export function buildSessionResidueAudit(scan: ScanResult, sessionId: string): S
       item.historyRows +
       sqliteRows +
       item.globalStateRefs +
+      item.exactKeyGlobalStateRefs +
       item.possibleUnknownGlobalStateRefs +
       threadSpawnEdges.length >
     0;
@@ -300,6 +307,9 @@ export function buildSessionResidueAudit(scan: ScanResult, sessionId: string): S
     ...family.warnings,
     ...(unknownGlobalStateRefs.length > 0
       ? [`global-state 有 ${unknownGlobalStateRefs.length} 个未知位置引用，工具不会自动修改。`]
+      : []),
+    ...(exactKeyGlobalStateRefs.length > 0
+      ? [`global-state 有 ${exactKeyGlobalStateRefs.length} 个 P11 exact-key 引用；只能在 delete 预览后显式确认删除。`]
       : []),
   ]);
   const recommendedNextCommand = hasAnyResidue
@@ -352,6 +362,12 @@ export function buildSessionResidueAudit(scan: ScanResult, sessionId: string): S
         count: item.globalStateRefs,
         paths: knownGlobalStateRefs.map((ref) => ref.path),
       },
+      globalStateExactKey: {
+        present: item.exactKeyGlobalStateRefs > 0,
+        count: item.exactKeyGlobalStateRefs,
+        paths: exactKeyGlobalStateRefs.map((ref) => ref.path),
+        refs: exactKeyGlobalStateRefs.map(toExactKeyPreview),
+      },
       globalStateUnknown: {
         present: item.possibleUnknownGlobalStateRefs > 0,
         count: item.possibleUnknownGlobalStateRefs,
@@ -376,6 +392,7 @@ export function buildSessionResidueAudit(scan: ScanResult, sessionId: string): S
       historyRows: item.historyRows,
       sqliteRows,
       knownGlobalStateRefs: item.globalStateRefs,
+      exactKeyGlobalStateRefs: item.exactKeyGlobalStateRefs,
       possibleUnknownGlobalStateRefs: item.possibleUnknownGlobalStateRefs,
       threadSpawnEdges: threadSpawnEdges.length,
       familyMembers: familyMemberIds.length,
@@ -431,6 +448,7 @@ function collectSources(audit: SessionResidueAudit): RootResidueCandidateSource[
   if (audit.counts.historyRows > 0) sources.push("history");
   if (audit.counts.sqliteRows > 0) sources.push("sqlite");
   if (audit.counts.knownGlobalStateRefs > 0) sources.push("global_state_known");
+  if (audit.counts.exactKeyGlobalStateRefs > 0) sources.push("global_state_exact_key");
   if (audit.counts.possibleUnknownGlobalStateRefs > 0) sources.push("global_state_unknown");
   if (audit.counts.threadSpawnEdges > 0) sources.push("thread_spawn_edges");
 
@@ -445,6 +463,7 @@ function hasResidueWithoutRollout(audit: SessionResidueAudit): boolean {
       audit.counts.historyRows +
       audit.counts.sqliteRows +
       audit.counts.knownGlobalStateRefs +
+      audit.counts.exactKeyGlobalStateRefs +
       audit.counts.possibleUnknownGlobalStateRefs +
       audit.counts.threadSpawnEdges >
       0
@@ -461,6 +480,10 @@ function rootStatuses(audit: SessionResidueAudit): RootResidueCandidateStatus[] 
 
   if (noRollout && audit.counts.possibleUnknownGlobalStateRefs > 0) {
     pushRootStatus(statuses, "global-state-unknown");
+  }
+
+  if (noRollout && audit.counts.exactKeyGlobalStateRefs > 0) {
+    pushRootStatus(statuses, "global-state-exact-key");
   }
 
   if (noRollout && audit.counts.shellSnapshotFiles > 0) {
@@ -506,6 +529,7 @@ function toRootResidueCandidate(scan: ScanResult, audit: SessionResidueAudit): R
       historyRows: audit.counts.historyRows,
       sqliteRows: audit.counts.sqliteRows,
       knownGlobalStateRefs: audit.counts.knownGlobalStateRefs,
+      exactKeyGlobalStateRefs: audit.counts.exactKeyGlobalStateRefs,
       possibleUnknownGlobalStateRefs: audit.counts.possibleUnknownGlobalStateRefs,
       threadSpawnEdges: audit.counts.threadSpawnEdges,
     },
@@ -531,6 +555,7 @@ function toPreviewCounts(item: DeletePreviewItem): RootDeletePreviewCounts {
     historyRows: item.historyRows,
     sqliteRows: sumSqliteDeletionCounts(item.sqlite),
     knownGlobalStateRefs: item.globalStateRefs,
+    exactKeyGlobalStateRefs: item.exactKeyGlobalStateRefs,
     possibleUnknownGlobalStateRefs: item.possibleUnknownGlobalStateRefs,
     threadSpawnEdges: item.sqlite.spawnEdgeRows,
   };
@@ -554,6 +579,7 @@ function aggregatePreviewCounts(
     historyRows: preview.totals.historyRows,
     sqliteRows: sumSqliteDeletionCounts(sqliteTotals),
     knownGlobalStateRefs: preview.totals.globalStateRefs,
+    exactKeyGlobalStateRefs: preview.totals.exactKeyGlobalStateRefs,
     possibleUnknownGlobalStateRefs: preview.totals.possibleUnknownGlobalStateRefs,
     threadSpawnEdges: sqliteTotals.spawnEdgeRows,
   };
@@ -598,6 +624,7 @@ function riskScore(candidate: RootResidueCandidate): number {
   if (candidate.statuses.includes("missing-parent-edge") || candidate.statuses.includes("missing-child-edge")) score += 1000;
   if (candidate.statuses.includes("broken-family")) score += 900;
   if (candidate.statuses.includes("global-state-unknown")) score += 800;
+  if (candidate.statuses.includes("global-state-exact-key")) score += 750;
   if (candidate.statuses.includes("risky-global-state")) score += 700;
   if (candidate.statuses.includes("db-only")) score += 600;
   if (candidate.statuses.includes("sqlite-residue")) score += 500;
@@ -610,6 +637,7 @@ function riskScore(candidate: RootResidueCandidate): number {
     score +
     candidate.surfaces.sqliteRows +
     candidate.surfaces.possibleUnknownGlobalStateRefs +
+    candidate.surfaces.exactKeyGlobalStateRefs +
     candidate.surfaces.knownGlobalStateRefs +
     candidate.surfaces.shellSnapshots +
     candidate.surfaces.sessionIndexRows +

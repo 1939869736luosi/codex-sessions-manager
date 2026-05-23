@@ -30,7 +30,10 @@ export async function exportSessionBackup(scan: ScanResult, session: SessionEntr
     sessionFiles,
     sessionIndexRecords: scan.sessionIndex.matchingRecordsById.get(session.id) ?? [],
     historyRecords: scan.history.matchingRecordsById.get(session.id) ?? [],
-    globalStateRefs: scan.globalState.refsById.get(session.id) ?? [],
+    globalStateRefs: [
+      ...(scan.globalState.refsById.get(session.id) ?? []),
+      ...(scan.globalState.exactKeyRefsById.get(session.id) ?? []),
+    ],
     shellSnapshots,
     sqlite: exportSqliteRecords(scan.root.sqlitePath, session.id, scan.root.logsSqlitePath),
   };

@@ -121,12 +121,30 @@ export interface GlobalStateReference {
   path: string;
   kind: "array-value" | "object-key" | "object-string-value";
   value: unknown;
+  ruleId?: GlobalStateExactKeyRuleId;
+  safetyClass?: "known" | "promoted-exact-key" | "unknown";
+  valueShape?: string;
+  byteEstimate?: number;
+  reason?: string;
+}
+
+export type GlobalStateExactKeyRuleId = "electronPromptHistoryByThreadId" | "heartbeatThreadPermissionsById";
+
+export interface GlobalStateExactKeyPreview {
+  sessionId: string;
+  path: string;
+  ruleId: GlobalStateExactKeyRuleId;
+  valueShape: string;
+  byteEstimate: number;
+  reason: string;
+  requiresConfirmation: true;
 }
 
 export interface GlobalStateScanData {
   path: string | null;
   text: string | null;
   refsById: Map<string, GlobalStateReference[]>;
+  exactKeyRefsById: Map<string, GlobalStateReference[]>;
   possibleUnknownRefsById: Map<string, GlobalStateReference[]>;
   warning: string | null;
 }
@@ -409,6 +427,7 @@ export interface SessionResidueAudit {
     history: SessionResidueSurface;
     sqlite: SessionResidueSqliteSurface;
     globalStateKnown: SessionResiduePathSurface;
+    globalStateExactKey: SessionResiduePathSurface & { refs: GlobalStateExactKeyPreview[] };
     globalStateUnknown: SessionResiduePathSurface;
     threadSpawnEdges: SessionResidueThreadSpawnSurface;
   };
@@ -419,6 +438,7 @@ export interface SessionResidueAudit {
     historyRows: number;
     sqliteRows: number;
     knownGlobalStateRefs: number;
+    exactKeyGlobalStateRefs: number;
     possibleUnknownGlobalStateRefs: number;
     threadSpawnEdges: number;
     familyMembers: number;
@@ -442,6 +462,7 @@ export interface SessionResidueAudit {
 export type RootResidueCandidateStatus =
   | SessionResidueAuditStatus
   | "partial-residue"
+  | "global-state-exact-key"
   | "global-state-unknown"
   | "shell-snapshot-residue"
   | "index-residue"
@@ -456,6 +477,7 @@ export type RootResidueCandidateSource =
   | "history"
   | "sqlite"
   | "global_state_known"
+  | "global_state_exact_key"
   | "global_state_unknown"
   | "thread_spawn_edges";
 
@@ -466,6 +488,7 @@ export interface RootResidueSurfaceSummary {
   historyRows: number;
   sqliteRows: number;
   knownGlobalStateRefs: number;
+  exactKeyGlobalStateRefs: number;
   possibleUnknownGlobalStateRefs: number;
   threadSpawnEdges: number;
 }
@@ -518,6 +541,7 @@ export interface RootDeletePreviewCounts {
   historyRows: number;
   sqliteRows: number;
   knownGlobalStateRefs: number;
+  exactKeyGlobalStateRefs: number;
   possibleUnknownGlobalStateRefs: number;
   threadSpawnEdges: number;
 }
@@ -567,8 +591,11 @@ export interface DeletePreviewItem {
   filePaths: string[];
   shellSnapshotFiles: string[];
   globalStateRefs: number;
+  exactKeyGlobalStateRefs: number;
   possibleUnknownGlobalStateRefs: number;
   possibleUnknownGlobalStateRefPaths: string[];
+  exactKeyGlobalStateRefPaths: string[];
+  exactKeyGlobalStateRefsDetail: GlobalStateExactKeyPreview[];
   sessionIndexRows: number;
   historyRows: number;
   sqlite: SqliteDeletionCounts;
@@ -581,6 +608,7 @@ export interface DeletePreview {
     sessionFiles: number;
     shellSnapshotFiles: number;
     globalStateRefs: number;
+    exactKeyGlobalStateRefs: number;
     possibleUnknownGlobalStateRefs: number;
     sessionIndexRows: number;
     historyRows: number;
@@ -594,6 +622,8 @@ export interface DeleteValidationItem {
   filePathsRemaining: string[];
   shellSnapshotFilesRemaining: string[];
   globalStateRefsRemaining: number;
+  exactKeyGlobalStateRefsRemaining: number;
+  exactKeyGlobalStateRefPaths: string[];
   possibleUnknownGlobalStateRefsRemaining: number;
   possibleUnknownGlobalStateRefPaths: string[];
   globalStateWarning: string | null;
@@ -606,6 +636,22 @@ export interface DeleteValidationItem {
 export interface DeleteExecutionResult {
   preview: DeletePreview;
   validation: DeleteValidationItem[];
+  confirmed: true;
+}
+
+export class DeleteSessionsError extends Error {
+  readonly liveDeleteStarted: boolean;
+  readonly liveDeleteRolledBack: boolean;
+
+  constructor(message: string, options: { liveDeleteStarted: boolean; liveDeleteRolledBack: boolean; cause?: unknown }) {
+    super(message);
+    this.name = "DeleteSessionsError";
+    this.liveDeleteStarted = options.liveDeleteStarted;
+    this.liveDeleteRolledBack = options.liveDeleteRolledBack;
+    if (options.cause !== undefined) {
+      this.cause = options.cause;
+    }
+  }
 }
 
 export interface BackupManifest {
@@ -793,6 +839,14 @@ export interface DoctorReport {
   };
   globalState: {
     knownRefs: Array<{ sessionId: string; path: string; kind: GlobalStateReference["kind"] }>;
+    exactKeyRefs: Array<{
+      sessionId: string;
+      path: string;
+      kind: GlobalStateReference["kind"];
+      ruleId: GlobalStateExactKeyRuleId;
+      valueShape: string;
+      byteEstimate: number;
+    }>;
     possibleUnknownRefs: Array<{ sessionId: string; path: string; kind: GlobalStateReference["kind"] }>;
     warnings: string[];
   };

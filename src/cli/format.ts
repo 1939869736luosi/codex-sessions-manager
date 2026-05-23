@@ -77,7 +77,15 @@ function sumSqlite(item: DeleteValidationItem["sqlite"]): number {
 }
 
 function formatGlobalStateRemaining(item: DeleteValidationItem): string {
-  return item.globalStateWarning ? "unknown" : String(item.globalStateRefsRemaining);
+  if (item.globalStateWarning) {
+    return "unknown";
+  }
+
+  return [
+    `known=${item.globalStateRefsRemaining}`,
+    `exact_key=${item.exactKeyGlobalStateRefsRemaining}`,
+    `unknown=${item.possibleUnknownGlobalStateRefsRemaining}`,
+  ].join(", ");
 }
 
 function printTable(rows: string[][]): string {
@@ -198,6 +206,7 @@ export function formatDoctor(report: DoctorReport): string {
     "",
     `sessions: ${report.scan.sessionCount ?? "unknown"}`,
     `known global state refs: ${report.globalState.knownRefs.length}`,
+    `exact-key global state refs: ${report.globalState.exactKeyRefs.length}`,
     `possible unknown global state refs: ${report.globalState.possibleUnknownRefs.length}`,
     report.warnings.length ? `\n警告:\n- ${report.warnings.join("\n- ")}` : "\n警告: 无",
   ].join("\n");
@@ -627,6 +636,7 @@ export function formatPreview(preview: DeletePreview): string {
     `- 原始文件: ${preview.totals.sessionFiles}`,
     `- shell snapshot 文件: ${preview.totals.shellSnapshotFiles}`,
     `- global state 引用: ${preview.totals.globalStateRefs}`,
+    `- global state exact-key 引用: ${preview.totals.exactKeyGlobalStateRefs}`,
     `- global state 未知位置引用: ${preview.totals.possibleUnknownGlobalStateRefs}`,
     `- session_index 记录: ${preview.totals.sessionIndexRows}`,
     `- history 记录: ${preview.totals.historyRows}`,
@@ -639,6 +649,11 @@ export function formatPreview(preview: DeletePreview): string {
       `  files: ${item.filePaths.length}`,
       `  shell_snapshots: ${item.shellSnapshotFiles.length}`,
       `  global_state_refs: ${item.globalStateRefs}`,
+      `  exact_key_global_state_refs: ${item.exactKeyGlobalStateRefs}`,
+      ...item.exactKeyGlobalStateRefsDetail.map(
+        (ref) =>
+          `    - ${ref.path} rule=${ref.ruleId} shape=${ref.valueShape} bytes=${ref.byteEstimate} confirm=${ref.requiresConfirmation ? "required" : "no"} reason=${ref.reason}`,
+      ),
       `  possible_unknown_global_state_refs: ${item.possibleUnknownGlobalStateRefs}`,
       `  session_index: ${item.sessionIndexRows}`,
       `  history: ${item.historyRows}`,
@@ -662,6 +677,7 @@ export function formatDeleteResult(result: DeleteExecutionResult): string {
         item.shellSnapshotFilesRemaining.length === 0 &&
         !item.globalStateWarning &&
         item.globalStateRefsRemaining === 0 &&
+        item.exactKeyGlobalStateRefsRemaining === 0 &&
         item.possibleUnknownGlobalStateRefsRemaining === 0 &&
         item.sessionIndexRowsRemaining === 0 &&
         item.historyRowsRemaining === 0 &&
@@ -682,6 +698,7 @@ export function formatVerifyResult(items: DeleteValidationItem[]): string {
         item.shellSnapshotFilesRemaining.length === 0 &&
         !item.globalStateWarning &&
         item.globalStateRefsRemaining === 0 &&
+        item.exactKeyGlobalStateRefsRemaining === 0 &&
         item.possibleUnknownGlobalStateRefsRemaining === 0 &&
         item.sessionIndexRowsRemaining === 0 &&
         item.historyRowsRemaining === 0 &&
@@ -732,6 +749,12 @@ function formatSurfaceRows(audit: SessionResidueAudit): string {
       yesNo(audit.surfaces.globalStateKnown.present),
       String(audit.surfaces.globalStateKnown.count),
       audit.surfaces.globalStateKnown.paths.join(", ") || "-",
+    ],
+    [
+      "global-state exact-key 引用",
+      yesNo(audit.surfaces.globalStateExactKey.present),
+      String(audit.surfaces.globalStateExactKey.count),
+      audit.surfaces.globalStateExactKey.paths.join(", ") || "-",
     ],
     [
       "global-state 未知位置引用",
@@ -807,6 +830,7 @@ function formatRootResidueCounts(candidate: RootResidueAudit["candidates"][numbe
     `history=${candidate.surfaces.historyRows}`,
     `sqlite=${candidate.surfaces.sqliteRows}`,
     `global_known=${candidate.surfaces.knownGlobalStateRefs}`,
+    `global_exact_key=${candidate.surfaces.exactKeyGlobalStateRefs}`,
     `global_unknown=${candidate.surfaces.possibleUnknownGlobalStateRefs}`,
     `edges=${candidate.surfaces.threadSpawnEdges}`,
   ].join(", ");
@@ -820,6 +844,7 @@ function formatRootPreviewCounts(counts: RootDeletePreviewCounts): string {
     `history=${counts.historyRows}`,
     `sqlite=${counts.sqliteRows}`,
     `global_known=${counts.knownGlobalStateRefs}`,
+    `global_exact_key=${counts.exactKeyGlobalStateRefs}`,
     `global_unknown=${counts.possibleUnknownGlobalStateRefs}`,
     `edges=${counts.threadSpawnEdges}`,
   ].join(", ");
@@ -839,6 +864,8 @@ function formatRootSourceLabel(source: string): string {
       return "SQLite";
     case "global_state_known":
       return "已知 global-state";
+    case "global_state_exact_key":
+      return "exact-key global-state";
     case "global_state_unknown":
       return "未知 global-state";
     case "thread_spawn_edges":
@@ -998,6 +1025,7 @@ export function formatRootDeletePreview(preview: RootDeletePreview): string {
     `- history: ${preview.aggregatePreview.historyRows}`,
     `- SQLite: ${preview.aggregatePreview.sqliteRows}`,
     `- known global-state: ${preview.aggregatePreview.knownGlobalStateRefs}`,
+    `- exact-key global-state: ${preview.aggregatePreview.exactKeyGlobalStateRefs}`,
     `- unknown global-state: ${preview.aggregatePreview.possibleUnknownGlobalStateRefs}`,
     `- thread_spawn_edges（parent/child 关系边）: ${preview.aggregatePreview.threadSpawnEdges}`,
     "",
@@ -1053,6 +1081,7 @@ export function formatBackup(bundle: BackupBundle, outputPath: string): string {
     `- history 记录: ${bundle.historyRecords.length}`,
     `- SQLite 线程: ${bundle.sqlite.threads.length}`,
     `- SQLite 目标: ${bundle.sqlite.threadGoals.length}`,
+    "- 注意: 备份用于恢复，可能包含完整 global-state exact-key value，包括 prompt-history 内容。",
   ].join("\n");
 }
 

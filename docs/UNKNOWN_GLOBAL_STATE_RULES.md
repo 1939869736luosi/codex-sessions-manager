@@ -1,8 +1,8 @@
 # Unknown Global-State Cleanup Rules
 
-This document defines the P11 design rules for `.codex-global-state.json` references that are currently reported as unknown global-state refs.
+This document records the P11 rule boundary and the P12 implementation for `.codex-global-state.json` references.
 
-P11 is design only. It does not make unknown global-state refs deletable. P12 may promote a narrow set of exact-key patterns only after preview, confirmation, snapshot, restore, and tests exist.
+P12 promotes only two exact-key patterns after preview and explicit confirmation. All other unknown global-state refs remain warnings and are not deletable by the tool.
 
 ## Current Behavior
 
@@ -36,9 +36,9 @@ A read-only check of the current local `/Users/luosi/.codex/.codex-global-state.
 
 The root scan also showed `audit-root --status global-state-unknown --source global-state-unknown` returning 57 candidates, and `preview-root --source global-state-unknown` returning 72 matching candidates before the display limit. These are candidates for review, not deletion lists.
 
-## Safe Exact-Key Candidates
+## Promoted Exact-Key Candidates
 
-Only these two current unknown patterns may be promoted in P12:
+Only these two formerly unknown patterns are promoted by P12:
 
 1. `$.electron-persisted-atom-state.prompt-history.<session-id>`
 2. `$.electron-persisted-atom-state.heartbeat-thread-permissions-by-id.<session-id>`
@@ -90,8 +90,8 @@ P12 must refuse to write when any of these are true:
 - the write target is not one of the two exact-key candidate paths;
 - the path matches only by prefix or substring;
 - the target session id is not the entire final object key;
-- the global-state file is missing when the preview claimed it existed;
-- the global-state file changed between preview and write;
+- the global-state file is missing when the confirmed delete command scanned it;
+- the global-state file changes between the confirmed delete command's scan and write;
 - the global-state file is unreadable or unparsable;
 - snapshot creation fails;
 - the session still has live rollout files unless the same confirmed delete operation is removing that session;
@@ -144,47 +144,47 @@ Files that need P12 wording updates:
 - CLI formatters in `src/cli/format.ts`
 - MCP tool descriptions in `src/mcp/server.ts`
 
-## P12 Implementation Plan
+## P12 Implementation Checklist
 
-P12 should be split into focused changes:
+P12 is implemented through these focused changes:
 
-1. Add global-state rule classification in `src/core/global-state.ts`.
+1. Global-state rule classification in `src/core/global-state.ts`.
    - Preserve the existing known refs.
    - Add rule metadata for exact-key candidates.
    - Add ignored/noise classification for UUID-shaped string values that are not safe keys.
 
-2. Extend types in `src/core/types.ts`.
+2. Type extensions in `src/core/types.ts`.
    - Keep existing `possibleUnknown...` fields for compatibility.
    - Add rule id, safety class, value shape, and byte estimate where needed.
 
-3. Update scan, audit, doctor, preview, and verify outputs.
+3. Scan, audit, doctor, preview, and verify output updates.
    - Show exact-key candidates separately from unknown warnings.
    - Keep `audit-root` and `preview-root` read-only.
    - Keep `risky-global-state` meaningful and documented.
 
-4. Implement confirmed exact-key deletion.
+4. Confirmed exact-key deletion.
    - Only exact property deletion.
    - Preview-first behavior unchanged.
    - Snapshot before write.
    - Refuse on changed, unreadable, or unparsable global-state.
 
-5. Update trash and restore.
+5. Trash and restore.
    - Store removed exact-key refs in trash bundles.
    - Restore only if the exact key is absent.
    - Roll back on failure.
 
-6. Update CLI, MCP, Skill, README, and safety docs.
+6. CLI, MCP, Skill, README, and safety docs.
    - Keep wording consistent across entry points.
    - Do not present root scans as cleanup approval.
 
-7. Add focused tests.
+7. Focused tests.
    - Known refs remain known.
    - Exact-key candidates are classified correctly.
    - UUID values inside prompt history remain unknown/noise.
    - UUID-shaped installation id remains unknown/noise.
    - Preview includes path, rule id, shape, and counts without values.
    - Delete removes only exact-key candidates after confirmation.
-   - Delete refuses if global-state changed after preview.
+   - Delete refuses if global-state changes between the confirmed command scan and write.
    - Trash restore round-trips exact-key refs.
    - Restore refuses exact-key conflicts.
    - `audit-root` and `preview-root` stay read-only and reject write flags.

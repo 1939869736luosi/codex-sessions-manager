@@ -2,7 +2,11 @@ import path from "node:path";
 import { readFile, readdir, stat } from "node:fs/promises";
 
 import { safeJsonParse, splitJsonLines } from "./jsonl.js";
-import { collectGlobalStateReferences, collectPossibleUnknownGlobalStateReferences } from "./global-state.js";
+import {
+  collectExactKeyGlobalStateReferences,
+  collectGlobalStateReferences,
+  collectPossibleUnknownGlobalStateReferences,
+} from "./global-state.js";
 import { deriveProjectIdentity } from "./project.js";
 import { resolveCodexRoot } from "./root.js";
 import { scanShellSnapshots } from "./shell-snapshots.js";
@@ -318,10 +322,12 @@ export async function scanCodexRoot(rootArg?: string): Promise<ScanResult> {
   const history = parseHistory(historyText);
   let globalStateWarning: string | null = null;
   let globalStateRefsById = new Map<string, GlobalStateReference[]>();
+  let exactKeyGlobalStateRefsById = new Map<string, GlobalStateReference[]>();
   let possibleUnknownGlobalStateRefsById = new Map<string, GlobalStateReference[]>();
 
   try {
     globalStateRefsById = collectGlobalStateReferences(globalStateText);
+    exactKeyGlobalStateRefsById = collectExactKeyGlobalStateReferences(globalStateText);
     possibleUnknownGlobalStateRefsById = collectPossibleUnknownGlobalStateReferences(globalStateText);
   } catch (error) {
     const globalStateName = root.globalStatePath ? path.basename(root.globalStatePath) : ".codex-global-state.json";
@@ -379,6 +385,7 @@ export async function scanCodexRoot(rootArg?: string): Promise<ScanResult> {
       path: root.globalStatePath,
       text: globalStateText,
       refsById: globalStateRefsById,
+      exactKeyRefsById: exactKeyGlobalStateRefsById,
       possibleUnknownRefsById: possibleUnknownGlobalStateRefsById,
       warning: globalStateWarning,
     },

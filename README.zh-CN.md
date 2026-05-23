@@ -55,6 +55,9 @@ codex-sessions preview-root --source global-state-unknown --limit 20
 # 预览删除（安全，不做任何修改）
 codex-sessions delete <session-id>
 
+# 预览 P11 exact-key global-state 清理（安全，不做任何修改）
+codex-sessions delete <session-id> --root <path-to-codex-root>
+
 # 预览确认后，删除到回收站（推荐）
 codex-sessions delete <session-id> --trash --yes
 
@@ -75,7 +78,7 @@ codex-sessions verify <session-id>
 1. 快照所有文件（万一要回滚）
 2. 改写 session_index.jsonl（移除匹配行）
 3. 改写 history.jsonl（移除匹配行）
-4. 清理 `.codex-global-state.json` 引用
+4. 只清理已知 `.codex-global-state.json` 引用和两个 P11 exact-key 候选
 5. 删除原始 session 文件
 6. 删除 shell snapshot 文件
 7. 删除 SQLite 记录（threads、logs、spawn edges、agent jobs、dynamic tools、stage1、thread goals）
@@ -153,18 +156,22 @@ codex-sessions verify <session-id...> [--json]
 
 **安全第一**：所有破坏性命令需要 `--yes` 才执行，不加只看预览。真正删除前，先对明确的 session ID 单独预览；`family`、`impact`、`audit-root` 和 `preview-root` 都不能替代删除确认。
 
-官方 Codex UI 删除或归档后，如果想知道本机还剩什么，先用 `audit`。它只读，不会改文件。它会报告原始 rollout 文件、shell snapshot、`session_index`、`history`、SQLite 记录、已知 global-state 引用、未知 global-state 引用、`thread_spawn_edges` 是否还在，也会报告 family 归属和断裂 parent/child 关系。如果仍有残留，建议命令只会给不带 `--yes` 的删除预览；只有你自己加 `--yes` 才会真的删除。
+`export` 和 trash bundle 是恢复数据，不是预览。它们可能包含完整 global-state exact-key value，包括 prompt-history 内容。人工 delete 预览只显示 path、rule、shape 和 byte count。
+
+官方 Codex UI 删除或归档后，如果想知道本机还剩什么，先用 `audit`。它只读，不会改文件。它会报告原始 rollout 文件、shell snapshot、`session_index`、`history`、SQLite 记录、已知 global-state 引用、P11 exact-key global-state 引用、未知 global-state 引用、`thread_spawn_edges` 是否还在，也会报告 family 归属和断裂 parent/child 关系。如果仍有残留，建议命令只会给不带 `--yes` 的删除预览；只有你自己加 `--yes` 才会真的删除。
 
 如果你还不知道 session ID，用 `audit-root`。它会扫描整个 Codex root，按风险列出疑似残留：断裂 parent/child 边、没有 rollout 文件但还有未知 global-state 引用、SQLite-only 记录、shell snapshot、index-only 记录，以及其他不完整残留。它只读，默认 `--limit 50`，不会打印聊天正文，每条只建议继续跑对应的单 session `audit` 命令。只有明确想把正常完整会话也列出来时，才加 `--all`。
 
 `audit-root` 支持只影响显示结果的筛选：
 
 - `--status risky-global-state`
+- `--status global-state-exact-key`
 - `--status db-only`
 - `--status broken-family`
 - `--status partial-residue`
 - `--status global-state-unknown`
 - `--source global-state-unknown`
+- `--source global-state-exact-key`
 - `--source global-state-known`
 - `--source sqlite`
 - `--source session-index`
@@ -187,7 +194,28 @@ codex-sessions verify <session-id...> [--json]
 - `source=mcp` 表示这个 thread 的来源是 mcp，不是每一次 MCP 工具调用日志。
 - `model_provider` 这里只做显示和筛选，不修复 provider 身份，也不改写历史。
 
-如果想对 `audit-root` 选出的候选做批量删除预览，用 `preview-root`。它复用同一套 `status/source` 筛选和保守默认 `--limit 50`，汇总展示只读预览会碰到哪些位置：rollout 文件、shell snapshots、`session_index`、`history`、SQLite、已知 global-state 引用、未知 global-state 引用和 `thread_spawn_edges`。它只读，不删除，不改写 JSONL、SQLite、shell snapshot 或 global-state，不接受 `--yes`，也不会自动递归加入 parent、child 或 family session。`preview-root` 的结果不等于“这些都该删”，也不会建议删除任何 session；它只说明如果之后你明确运行 delete，会碰到什么。真正删除仍然必须先跑单独的明确 ID `delete` 预览，再单独运行 `delete ... --yes`。
+如果想对 `audit-root` 选出的候选做批量删除预览，用 `preview-root`。它复用同一套 `status/source` 筛选和保守默认 `--limit 50`，汇总展示只读预览会碰到哪些位置：rollout 文件、shell snapshots、`session_index`、`history`、SQLite、已知 global-state 引用、P11 exact-key global-state 引用、未知 global-state 引用和 `thread_spawn_edges`。它只读，不删除，不改写 JSONL、SQLite、shell snapshot 或 global-state，不接受 `--yes`，也不会自动递归加入 parent、child 或 family session。`preview-root` 的结果不等于“这些都该删”，也不会建议删除任何 session；它只说明如果之后你明确运行 delete，会碰到什么。真正删除仍然必须先跑单独的明确 ID `delete` 预览，再单独运行 `delete ... --yes`。
+
+### P11 exact-key global-state 清理
+
+只有两个原本属于 unknown 的 `.codex-global-state.json` 路径可以在确认删除时一起清理：
+
+- `$.electron-persisted-atom-state.prompt-history.<session-id>`
+- `$.electron-persisted-atom-state.heartbeat-thread-permissions-by-id.<session-id>`
+
+前提是 session id 必须是完整对象键，value 形状也必须符合规则。预览会显示 exact path、rule id、value shape、估算字节数、相关残留面、family 提醒，以及是否需要确认。它不会打印 prompt 内容，也不会打印完整 global-state value。
+
+其它 unknown global-state 引用仍然只是警告。UUID 字符串、数组里的 UUID、部分路径命中、heartbeat 异常形状、installation id、root 扫描候选，都不会自动删除。一个 ID 如果只命中这些不合规则的 unknown 引用，确认删除也会拒绝。
+
+使用现有明确 ID 删除流程：
+
+```bash
+codex-sessions delete <session-id> --root <path-to-codex-root>
+codex-sessions delete <session-id> --root <path-to-codex-root> --yes
+codex-sessions delete <session-id> --root <path-to-codex-root> --trash --yes
+```
+
+MCP 规则相同：先调用 `preview_delete_sessions`，确认 exact path 后，再调用 `delete_sessions` 并设置 `confirm=true`。确认命令会重新扫描 root；如果 global-state 文件在这次确认命令内部、写入前又发生变化，或文件无法解析、没有可回滚保护，写操作会拒绝。
 
 删除 parent 或 child 前先看 `family`。parent 和 child 是不同 session，各自有自己的 ID。删除 parent 不等于删除 child，删除 child 也不等于删除 parent。删除预览和 audit 会提示关系记录指向缺失 session，或相关 session 缺文件/索引。要一起处理多个相关 session，需要把每个 session ID 明确放进预览或删除命令。工具不会自动递归处理 parent 或 child。
 

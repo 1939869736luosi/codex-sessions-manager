@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { appendFile, readFile, writeFile } from "node:fs/promises";
 import Database from "better-sqlite3";
 
-import { runCli } from "../src/cli/run.js";
-import { createFixture, FIXTURE_IDS, type Fixture } from "./helpers/fixture.js";
+import { getHelpText, runCli } from "../src/cli/run.js";
+import { createFixture, FIXTURE_IDS, writeExactGlobalStateFixture, type Fixture } from "./helpers/fixture.js";
 
 function createIo() {
   const stdout: string[] = [];
@@ -506,6 +506,121 @@ describe("cli", () => {
     expect(await readFile(fixture.paths.globalState, "utf8")).toContain(FIXTURE_IDS.ACTIVE_ID);
   });
 
+  it("returns stable json for exact-key global-state preview", async () => {
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+
+    const capture = createIo();
+    const exitCode = await runCli(["delete", FIXTURE_IDS.EXACT_GLOBAL_STATE_ID, "--root", fixture.rootDir, "--json"], capture.io);
+    const output = JSON.parse(capture.stdout.join("\n")) as {
+      action: string;
+      requiresConfirmation: boolean;
+      preview: {
+        totals: { exactKeyGlobalStateRefs: number; possibleUnknownGlobalStateRefs: number };
+        items: Array<{
+          sessionId: string;
+          exactKeyGlobalStateRefs: number;
+          exactKeyGlobalStateRefsDetail: Array<{
+            path: string;
+            ruleId: string;
+            valueShape: string;
+            byteEstimate: number;
+            requiresConfirmation: boolean;
+            value?: unknown;
+          }>;
+        }>;
+      };
+    };
+
+    expect(exitCode).toBe(0);
+    expect(output.action).toBe("delete");
+    expect(output.requiresConfirmation).toBe(true);
+    expect(output.preview.totals.exactKeyGlobalStateRefs).toBe(2);
+    expect(output.preview.totals.possibleUnknownGlobalStateRefs).toBe(0);
+    expect(output.preview.items[0].sessionId).toBe(FIXTURE_IDS.EXACT_GLOBAL_STATE_ID);
+    expect(output.preview.items[0].exactKeyGlobalStateRefs).toBe(2);
+    expect(output.preview.items[0].exactKeyGlobalStateRefsDetail[0]).toMatchObject({
+      ruleId: "electronPromptHistoryByThreadId",
+      valueShape: "array(3)",
+      requiresConfirmation: true,
+    });
+    expect(output.preview.items[0].exactKeyGlobalStateRefsDetail[0]).not.toHaveProperty("value");
+    expect(capture.stdout.join("\n")).not.toContain("secret prompt text");
+  });
+
+  it("keeps exact-key values out of human delete previews", async () => {
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+
+    const capture = createIo();
+    const exitCode = await runCli(["delete", FIXTURE_IDS.EXACT_GLOBAL_STATE_ID, "--root", fixture.rootDir], capture.io);
+    const output = capture.stdout.join("\n");
+
+    expect(exitCode).toBe(0);
+    expect(output).toContain(`$.electron-persisted-atom-state.prompt-history.${FIXTURE_IDS.EXACT_GLOBAL_STATE_ID}`);
+    expect(output).toContain("shape=array(3)");
+    expect(output).not.toContain("secret prompt text");
+    expect(output).not.toContain("second prompt");
+    expect(output).not.toContain(FIXTURE_IDS.PROMPT_HISTORY_VALUE_ID);
+    expect(output).not.toContain("workspace-write");
+  });
+
+  it("deletes exact-key global-state refs through CLI --yes without touching siblings", async () => {
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+
+    const capture = createIo();
+    const exitCode = await runCli(["delete", FIXTURE_IDS.EXACT_GLOBAL_STATE_ID, "--root", fixture.rootDir, "--yes"], capture.io);
+    const globalState = JSON.parse(await readFile(fixture.paths.globalState, "utf8")) as {
+      "electron-persisted-atom-state": {
+        "prompt-history": Record<string, unknown>;
+        "heartbeat-thread-permissions-by-id": Record<string, unknown>;
+      };
+      "electron-local-remote-control-installation-id": string;
+    };
+    const atomState = globalState["electron-persisted-atom-state"];
+
+    expect(exitCode).toBe(0);
+    expect(capture.stdout.join("\n")).toContain("exact_key=0");
+    expect(atomState["prompt-history"]).not.toHaveProperty(FIXTURE_IDS.EXACT_GLOBAL_STATE_ID);
+    expect(atomState["heartbeat-thread-permissions-by-id"]).not.toHaveProperty(FIXTURE_IDS.EXACT_GLOBAL_STATE_ID);
+    expect(atomState["prompt-history"]).toHaveProperty(FIXTURE_IDS.EXACT_GLOBAL_STATE_SIBLING_ID);
+    expect(atomState["heartbeat-thread-permissions-by-id"]).toHaveProperty(FIXTURE_IDS.EXACT_GLOBAL_STATE_SIBLING_ID);
+    expect(atomState["prompt-history"]).toHaveProperty(FIXTURE_IDS.BAD_HEARTBEAT_GLOBAL_STATE_ID);
+    expect(atomState["heartbeat-thread-permissions-by-id"]).toHaveProperty(FIXTURE_IDS.BAD_HEARTBEAT_GLOBAL_STATE_ID);
+    expect(globalState["electron-local-remote-control-installation-id"]).toBe(FIXTURE_IDS.INSTALLATION_GLOBAL_STATE_ID);
+  });
+
+  it("refuses unknown-only global-state cleanup from the cli", async () => {
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+
+    const capture = createIo();
+
+    await expect(runCli(["delete", FIXTURE_IDS.BAD_HEARTBEAT_GLOBAL_STATE_ID, "--root", fixture.rootDir, "--yes"], capture.io)).rejects.toThrow(
+      "拒绝删除 unknown global-state",
+    );
+    expect(await readFile(fixture.paths.globalState, "utf8")).toContain(FIXTURE_IDS.BAD_HEARTBEAT_GLOBAL_STATE_ID);
+  });
+
+  it("refuses installation-id global-state cleanup from the cli", async () => {
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+
+    const capture = createIo();
+
+    await expect(runCli(["delete", FIXTURE_IDS.INSTALLATION_GLOBAL_STATE_ID, "--root", fixture.rootDir, "--yes"], capture.io)).rejects.toThrow(
+      "拒绝删除 unknown global-state",
+    );
+    expect(await readFile(fixture.paths.globalState, "utf8")).toContain(FIXTURE_IDS.INSTALLATION_GLOBAL_STATE_ID);
+  });
+
+  it("keeps exact-key documentation commands aligned with real cli help", async () => {
+    const readme = await readFile("README.md", "utf8");
+    const safety = await readFile("docs/SAFETY.md", "utf8");
+    const help = getHelpText();
+
+    expect(help).toContain("codex-sessions delete <session-id...>");
+    expect(readme).toContain("codex-sessions delete <session-id>");
+    expect(safety).toContain("codex-sessions delete <session-id> --root <path-to-codex-root>");
+    expect(`${readme}\n${safety}`).not.toContain("cleanup-global-state");
+  });
+
   it("deletes sessions when --yes is passed", async () => {
     const capture = createIo();
     const exitCode = await runCli(["delete", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--yes"], capture.io);
@@ -783,6 +898,21 @@ describe("cli", () => {
     await expect(readFile(fixture.paths.sessionIndex, "utf8")).resolves.toBe(beforeSessionIndex);
     await expect(readFile(fixture.paths.history, "utf8")).resolves.toBe(beforeHistory);
     await expect(readFile(fixture.paths.globalState, "utf8")).resolves.toBe(beforeGlobalState);
+  });
+
+  it("refuses write-like flags on root audit and root preview commands", async () => {
+    await expect(runCli(["audit-root", "--root", fixture.rootDir, "--yes"], createIo().io)).rejects.toThrow(
+      "audit-root 不支持 --yes",
+    );
+    await expect(runCli(["audit-root", "--root", fixture.rootDir, "--trash"], createIo().io)).rejects.toThrow(
+      "audit-root 不支持 --trash",
+    );
+    await expect(runCli(["preview-root", "--root", fixture.rootDir, "--yes"], createIo().io)).rejects.toThrow(
+      "preview-root 不支持 --yes",
+    );
+    await expect(runCli(["preview-root", "--root", fixture.rootDir, "--trash"], createIo().io)).rejects.toThrow(
+      "preview-root 不支持 --trash",
+    );
   });
 
   it("filters preview-root candidates with repeated status and source options", async () => {

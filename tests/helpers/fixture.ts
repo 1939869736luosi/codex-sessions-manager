@@ -9,8 +9,14 @@ const ARCHIVED_ID = "019d2222-3333-7444-8555-bbbbbbbbbbbb";
 const STALE_ID = "019d3333-4444-7555-8666-cccccccccccc";
 const UNRELATED_ID = "019d4444-5555-7666-8777-dddddddddddd";
 const CHILD_ID = "019d5555-6666-7777-8888-eeeeeeeeeeee";
+const EXACT_GLOBAL_STATE_ID = "019d9999-aaaa-7bbb-8ccc-ffffffffffff";
+const EXACT_GLOBAL_STATE_SIBLING_ID = "019d9999-aaaa-7bbb-8ccc-eeeeeeeeeeee";
+const BAD_HEARTBEAT_GLOBAL_STATE_ID = "019d9999-aaaa-7bbb-8ccc-dddddddddddd";
+const INSTALLATION_GLOBAL_STATE_ID = "019d9999-aaaa-7bbb-8ccc-cccccccccccc";
+const PROMPT_HISTORY_VALUE_ID = "019d9999-aaaa-7bbb-8ccc-bbbbbbbbbbbb";
 const ACTIVE_CWD = "/workspace/demo";
 const ARCHIVED_CWD = "/workspace/archive-demo";
+const ELECTRON_STATE_FIXTURE_KEY = "electron-persisted-atom-state";
 
 export interface Fixture {
   rootDir: string;
@@ -372,6 +378,49 @@ export const FIXTURE_IDS = {
   STALE_ID,
   UNRELATED_ID,
   CHILD_ID,
+  EXACT_GLOBAL_STATE_ID,
+  EXACT_GLOBAL_STATE_SIBLING_ID,
+  BAD_HEARTBEAT_GLOBAL_STATE_ID,
+  INSTALLATION_GLOBAL_STATE_ID,
+  PROMPT_HISTORY_VALUE_ID,
   ACTIVE_CWD,
   ARCHIVED_CWD,
 };
+
+export async function writeExactGlobalStateFixture(globalStatePath: string): Promise<void> {
+  await writeFile(
+    globalStatePath,
+    `${JSON.stringify(
+      {
+        "pinned-thread-ids": [UNRELATED_ID],
+        [ELECTRON_STATE_FIXTURE_KEY]: {
+          "prompt-history": {
+            [EXACT_GLOBAL_STATE_ID]: ["secret prompt text must not be printed", "second prompt", PROMPT_HISTORY_VALUE_ID],
+            [EXACT_GLOBAL_STATE_SIBLING_ID]: ["sibling prompt must stay"],
+            [BAD_HEARTBEAT_GLOBAL_STATE_ID]: "not an array",
+          },
+          "heartbeat-thread-permissions-by-id": {
+            [EXACT_GLOBAL_STATE_ID]: {
+              approvalPolicy: "on-request",
+              approvalsReviewer: "auto_review",
+              sandboxPolicy: "workspace-write",
+            },
+            [EXACT_GLOBAL_STATE_SIBLING_ID]: {
+              approvalPolicy: "never",
+              approvalsReviewer: "auto_review",
+              sandboxPolicy: "read-only",
+            },
+            [BAD_HEARTBEAT_GLOBAL_STATE_ID]: {
+              approvalPolicy: "on-request",
+              unexpected: true,
+            },
+          },
+        },
+        "electron-local-remote-control-installation-id": INSTALLATION_GLOBAL_STATE_ID,
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+}

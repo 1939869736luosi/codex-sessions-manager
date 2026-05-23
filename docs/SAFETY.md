@@ -153,7 +153,25 @@ node dist/cli/index.js cleanup-stale --yes
 
 Known global-state cleanup is limited to structured keys that the tool understands.
 
-Unknown global-state references are warnings only. The tool reports them but does not modify unknown keys automatically.
+P11 exact-key cleanup is limited to these promoted paths:
+
+- `$.electron-persisted-atom-state.prompt-history.<session-id>`
+- `$.electron-persisted-atom-state.heartbeat-thread-permissions-by-id.<session-id>`
+
+They are allowed only when the session id is the complete object key and the value shape matches the P11 rule. Preview must show the exact path, rule id, value shape, byte estimate, affected surfaces, family warnings, and that confirmation is required. It must not print prompt contents or full global-state values.
+
+Use the normal explicit-session delete preview. There is no separate broad cleanup command:
+
+```bash
+codex-sessions delete <session-id> --root <path-to-codex-root>
+codex-sessions delete <session-id> --root <path-to-codex-root> --yes
+```
+
+For MCP, use `preview_delete_sessions` first, then `delete_sessions` with `confirm=true` only after reviewing the exact paths. Use `trash=true` when recoverability is needed.
+
+Before any confirmed write, the tool must have a snapshot or equivalent rollback path. The confirmed command rescans the root and refuses if `.codex-global-state.json` changes again before the write, cannot be parsed, cannot be read, or cannot be rolled back.
+
+Unknown global-state references outside those exact-key rules are warnings only. The tool reports them but does not modify unknown keys automatically. `audit-root` and `preview-root` remain read-only and are not deletion approval.
 
 ## Testing Safety
 

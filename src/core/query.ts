@@ -251,6 +251,7 @@ export function resolveSessions(scan: ScanResult, sessionIds: string[]): Session
     const residualIds = new Set([
       ...scan.shellSnapshots.filesById.keys(),
       ...scan.globalState.refsById.keys(),
+      ...scan.globalState.exactKeyRefsById.keys(),
       ...scan.globalState.possibleUnknownRefsById.keys(),
     ]);
     const residualExact = residualIds.has(sessionId) ? sessionId : null;

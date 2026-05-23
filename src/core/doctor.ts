@@ -4,6 +4,7 @@ import { access, readdir, readFile } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 
 import {
+  collectExactKeyGlobalStateReferences,
   collectGlobalStateReferences,
   collectPossibleUnknownGlobalStateReferences,
 } from "./global-state.js";
@@ -69,6 +70,25 @@ function flattenRefs(refsById: Map<string, GlobalStateReference[]>): DoctorRepor
     }));
 }
 
+function flattenExactKeyRefs(refsById: Map<string, GlobalStateReference[]>): DoctorReport["globalState"]["exactKeyRefs"] {
+  return [...refsById.values()]
+    .flat()
+    .flatMap((ref) => {
+      if (!ref.ruleId) {
+        return [];
+      }
+
+      return [{
+        sessionId: ref.sessionId,
+        path: ref.path,
+        kind: ref.kind,
+        ruleId: ref.ruleId,
+        valueShape: ref.valueShape ?? "unknown",
+        byteEstimate: ref.byteEstimate ?? 0,
+      }];
+    });
+}
+
 export async function inspectCodexRoot(rootArg?: string): Promise<DoctorReport> {
   const rootPath = path.resolve(expandHome(rootArg ?? "~/.codex"));
   const sessionsDir = path.join(rootPath, "sessions");
@@ -109,14 +129,19 @@ export async function inspectCodexRoot(rootArg?: string): Promise<DoctorReport> 
   let globalStateParseable: boolean | null = null;
   const globalStateWarnings: string[] = [];
   let knownRefs = new Map<string, GlobalStateReference[]>();
+  let exactKeyRefs = new Map<string, GlobalStateReference[]>();
   let possibleUnknownRefs = new Map<string, GlobalStateReference[]>();
 
   if (globalStateBaseStatus.exists && globalStateBaseStatus.readable) {
     try {
       const text = await readFile(globalStatePath, "utf8");
       knownRefs = collectGlobalStateReferences(text);
+      exactKeyRefs = collectExactKeyGlobalStateReferences(text);
       possibleUnknownRefs = collectPossibleUnknownGlobalStateReferences(text);
       globalStateParseable = true;
+      if (exactKeyRefs.size > 0) {
+        globalStateWarnings.push("global state 存在 P11 认可的 exact-key 引用；只允许预览后显式确认删除。");
+      }
       if (possibleUnknownRefs.size > 0) {
         globalStateWarnings.push("global state 存在未知位置的 session/thread 引用，工具只报警，不自动修改。");
       }
@@ -194,6 +219,7 @@ export async function inspectCodexRoot(rootArg?: string): Promise<DoctorReport> 
     },
     globalState: {
       knownRefs: flattenRefs(knownRefs),
+      exactKeyRefs: flattenExactKeyRefs(exactKeyRefs),
       possibleUnknownRefs: flattenRefs(possibleUnknownRefs),
       warnings: globalStateWarnings,
     },

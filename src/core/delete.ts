@@ -1,9 +1,11 @@
 import { readFile, rm, writeFile } from "node:fs/promises";
 
 import {
+  collectExactKeyGlobalStateReferences,
   collectGlobalStateReferences,
   collectPossibleUnknownGlobalStateReferences,
   removeGlobalStateReferences,
+  toExactKeyPreview,
 } from "./global-state.js";
 import { buildDeleteFamilyWarnings } from "./family.js";
 import { filterJsonLines, safeJsonParse, splitJsonLines } from "./jsonl.js";
@@ -14,6 +16,7 @@ import {
   deleteSessionsFromSqlite,
   validateSqliteDeletion,
 } from "./sqlite.js";
+import { DeleteSessionsError } from "./types.js";
 import type {
   CleanupResult,
   DeleteExecutionResult,
@@ -58,6 +61,10 @@ function isMissingFileError(error: unknown): boolean {
   return (error as NodeJS.ErrnoException)?.code === "ENOENT";
 }
 
+function formatDeleteError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function readOptionalText(filePath: string | null): Promise<string | null> {
   if (!filePath) {
     return null;
@@ -90,6 +97,9 @@ export function buildDeletePreview(scan: ScanResult, sessions: SessionEntry[]): 
     filePaths: session.fileTargets.map((target) => target.relativePath),
     shellSnapshotFiles: (scan.shellSnapshots.filesById.get(session.id) ?? []).map((target) => target.relativePath),
     globalStateRefs: scan.globalState.refsById.get(session.id)?.length ?? 0,
+    exactKeyGlobalStateRefs: scan.globalState.exactKeyRefsById.get(session.id)?.length ?? 0,
+    exactKeyGlobalStateRefPaths: (scan.globalState.exactKeyRefsById.get(session.id) ?? []).map((ref) => ref.path),
+    exactKeyGlobalStateRefsDetail: (scan.globalState.exactKeyRefsById.get(session.id) ?? []).map(toExactKeyPreview),
     possibleUnknownGlobalStateRefs: scan.globalState.possibleUnknownRefsById.get(session.id)?.length ?? 0,
     possibleUnknownGlobalStateRefPaths: (scan.globalState.possibleUnknownRefsById.get(session.id) ?? []).map((ref) => ref.path),
     sessionIndexRows: session.sessionIndexCount,
@@ -104,6 +114,7 @@ export function buildDeletePreview(scan: ScanResult, sessions: SessionEntry[]): 
       sessionFiles: items.reduce((sum, item) => sum + item.filePaths.length, 0),
       shellSnapshotFiles: items.reduce((sum, item) => sum + item.shellSnapshotFiles.length, 0),
       globalStateRefs: items.reduce((sum, item) => sum + item.globalStateRefs, 0),
+      exactKeyGlobalStateRefs: items.reduce((sum, item) => sum + item.exactKeyGlobalStateRefs, 0),
       possibleUnknownGlobalStateRefs: items.reduce((sum, item) => sum + item.possibleUnknownGlobalStateRefs, 0),
       sessionIndexRows: items.reduce((sum, item) => sum + item.sessionIndexRows, 0),
       historyRows: items.reduce((sum, item) => sum + item.historyRows, 0),
@@ -130,18 +141,21 @@ function countHistoryRows(text: string | null, sessionId: string): number {
 
 function collectGlobalStateReferencesForValidation(text: string | null): {
   refsById: ReturnType<typeof collectGlobalStateReferences>;
+  exactKeyRefsById: ReturnType<typeof collectExactKeyGlobalStateReferences>;
   possibleUnknownRefsById: ReturnType<typeof collectGlobalStateReferences>;
   warning: string | null;
 } {
   try {
     return {
       refsById: collectGlobalStateReferences(text),
+      exactKeyRefsById: collectExactKeyGlobalStateReferences(text),
       possibleUnknownRefsById: collectPossibleUnknownGlobalStateReferences(text),
       warning: null,
     };
   } catch (error) {
     return {
       refsById: new Map(),
+      exactKeyRefsById: new Map(),
       possibleUnknownRefsById: new Map(),
       warning: `global state 无法解析：${error instanceof Error ? error.message : String(error)}`,
     };
@@ -157,6 +171,33 @@ async function restoreDeletedFiles(
   for (const fileSnapshot of deletedFiles) {
     await writeFile(fileSnapshot.target.absolutePath, fileSnapshot.bytes);
   }
+}
+
+function hasOnlyIneligibleUnknownGlobalState(item: DeletePreviewItem): boolean {
+  return (
+    item.possibleUnknownGlobalStateRefs > 0 &&
+    item.filePaths.length === 0 &&
+    item.shellSnapshotFiles.length === 0 &&
+    item.globalStateRefs === 0 &&
+    item.exactKeyGlobalStateRefs === 0 &&
+    item.sessionIndexRows === 0 &&
+    item.historyRows === 0 &&
+    sumSqliteCounts(item.sqlite) === 0
+  );
+}
+
+function assertNoUnknownOnlyCleanup(preview: DeletePreview): void {
+  const refused = preview.items.filter(hasOnlyIneligibleUnknownGlobalState);
+  if (refused.length === 0) {
+    return;
+  }
+
+  const details = refused
+    .map((item) => `${item.sessionId}: ${item.possibleUnknownGlobalStateRefPaths.join(", ")}`)
+    .join("; ");
+  throw new Error(
+    `拒绝删除 unknown global-state：这些引用不符合 P11 exact-key 规则，只能报告不能删除。先运行 audit 查看路径，再只处理 P11 认可的 exact-key：${details}`,
+  );
 }
 
 export async function validateDeletion(
@@ -188,10 +229,14 @@ export async function validateDeletion(
           }
         }),
       );
-      const possibleUnknownRefs = globalStateRefs.refsById.get(session.id) ?? [];
+      const knownRefs = globalStateRefs.refsById.get(session.id) ?? [];
+      const exactKeyRefs = globalStateRefs.exactKeyRefsById.get(session.id) ?? [];
       const possibleUnknownGlobalStateRefs = globalStateRefs.possibleUnknownRefsById.get(session.id) ?? [];
       const warnings = [
         ...(globalStateRefs.warning ? [globalStateRefs.warning] : []),
+        ...(exactKeyRefs.length > 0
+          ? [`global state 仍有 ${exactKeyRefs.length} 个 P11 exact-key 引用，需先预览并显式确认。`]
+          : []),
         ...(possibleUnknownGlobalStateRefs.length > 0
           ? [`global state 存在 ${possibleUnknownGlobalStateRefs.length} 个未知位置引用，工具不会自动修改。`]
           : []),
@@ -202,7 +247,9 @@ export async function validateDeletion(
         title: session.title,
         filePathsRemaining: fileChecks.filter((value): value is string => Boolean(value)),
         shellSnapshotFilesRemaining: (shellSnapshotFiles.get(session.id) ?? []).map((target) => target.relativePath),
-        globalStateRefsRemaining: globalStateRefs.warning ? -1 : possibleUnknownRefs.length,
+        globalStateRefsRemaining: globalStateRefs.warning ? -1 : knownRefs.length,
+        exactKeyGlobalStateRefsRemaining: globalStateRefs.warning ? -1 : exactKeyRefs.length,
+        exactKeyGlobalStateRefPaths: exactKeyRefs.map((ref) => ref.path),
         possibleUnknownGlobalStateRefsRemaining: globalStateRefs.warning ? -1 : possibleUnknownGlobalStateRefs.length,
         possibleUnknownGlobalStateRefPaths: possibleUnknownGlobalStateRefs.map((ref) => ref.path),
         globalStateWarning: globalStateRefs.warning,
@@ -221,9 +268,47 @@ export async function deleteSessions(
 ): Promise<DeleteExecutionResult> {
   const targetIds = new Set(sessions.map((session) => session.id));
   const preview = buildDeletePreview(scan, sessions);
-  const fileSnapshots = await Promise.all(
-    sessions.flatMap((session) =>
-      session.fileTargets.map(async (target) => ({
+  try {
+    assertNoUnknownOnlyCleanup(preview);
+  } catch (error) {
+    throw new DeleteSessionsError(formatDeleteError(error), {
+      liveDeleteStarted: false,
+      liveDeleteRolledBack: false,
+      cause: error,
+    });
+  }
+
+  let liveDeleteStarted = false;
+  let fileSnapshots: Array<{ target: SessionFileTarget; bytes: Uint8Array | null }>;
+  let shellSnapshotSnapshots: Array<{ target: ShellSnapshotFile; bytes: Uint8Array | null }>;
+  let originalSessionIndexText: string | null;
+  let originalHistoryText: string | null;
+  const originalGlobalStateText = scan.globalState.text;
+  let sessionIndexResult: ReturnType<typeof filterJsonLines<SessionIndexRecord>>;
+  let historyResult: ReturnType<typeof filterJsonLines<HistoryRecord>>;
+
+  try {
+    fileSnapshots = await Promise.all(
+      sessions.flatMap((session) =>
+        session.fileTargets.map(async (target) => ({
+          target,
+          bytes: await (async () => {
+            try {
+              return new Uint8Array(await readFile(target.absolutePath));
+            } catch (error) {
+              if (isMissingFileError(error)) {
+                return null;
+              }
+
+              throw error;
+            }
+          })(),
+        })),
+      ),
+    );
+    const shellSnapshotTargets = sessions.flatMap((session) => scan.shellSnapshots.filesById.get(session.id) ?? []);
+    shellSnapshotSnapshots = await Promise.all(
+      shellSnapshotTargets.map(async (target) => ({
         target,
         bytes: await (async () => {
           try {
@@ -237,37 +322,25 @@ export async function deleteSessions(
           }
         })(),
       })),
-    ),
-  );
-  const shellSnapshotTargets = sessions.flatMap((session) => scan.shellSnapshots.filesById.get(session.id) ?? []);
-  const shellSnapshotSnapshots = await Promise.all(
-    shellSnapshotTargets.map(async (target) => ({
-      target,
-      bytes: await (async () => {
-        try {
-          return new Uint8Array(await readFile(target.absolutePath));
-        } catch (error) {
-          if (isMissingFileError(error)) {
-            return null;
-          }
+    );
+    originalSessionIndexText = await readOptionalText(scan.root.sessionIndexPath);
+    originalHistoryText = await readOptionalText(scan.root.historyPath);
 
-          throw error;
-        }
-      })(),
-    })),
-  );
-  const originalSessionIndexText = await readOptionalText(scan.root.sessionIndexPath);
-  const originalHistoryText = await readOptionalText(scan.root.historyPath);
-  const originalGlobalStateText = await readOptionalText(scan.root.globalStatePath);
-
-  const sessionIndexResult = filterJsonLines<SessionIndexRecord>(
-    originalSessionIndexText,
-    (record) => !record?.id || !targetIds.has(record.id),
-  );
-  const historyResult = filterJsonLines<HistoryRecord>(
-    originalHistoryText,
-    (record) => !record?.session_id || !targetIds.has(record.session_id),
-  );
+    sessionIndexResult = filterJsonLines<SessionIndexRecord>(
+      originalSessionIndexText,
+      (record) => !record?.id || !targetIds.has(record.id),
+    );
+    historyResult = filterJsonLines<HistoryRecord>(
+      originalHistoryText,
+      (record) => !record?.session_id || !targetIds.has(record.session_id),
+    );
+  } catch (error) {
+    throw new DeleteSessionsError(formatDeleteError(error), {
+      liveDeleteStarted: false,
+      liveDeleteRolledBack: false,
+      cause: error,
+    });
+  }
 
   let sessionIndexWritten = false;
   let historyWritten = false;
@@ -275,18 +348,21 @@ export async function deleteSessions(
   const deletedFiles: Array<{ target: Pick<SessionFileTarget | ShellSnapshotFile, "absolutePath">; bytes: Uint8Array }> = [];
 
   try {
-    if (scan.root.sessionIndexPath && originalSessionIndexText !== null) {
+    liveDeleteStarted = true;
+    if (scan.root.sessionIndexPath && originalSessionIndexText !== null && sessionIndexResult.removedCount > 0) {
       await writeFile(scan.root.sessionIndexPath, sessionIndexResult.text, "utf8");
       sessionIndexWritten = true;
     }
 
-    if (scan.root.historyPath && originalHistoryText !== null) {
+    if (scan.root.historyPath && originalHistoryText !== null && historyResult.removedCount > 0) {
       await writeFile(scan.root.historyPath, historyResult.text, "utf8");
       historyWritten = true;
     }
 
     if (scan.root.globalStatePath && originalGlobalStateText !== null) {
-      const globalStateResult = await removeGlobalStateReferences(scan.root.globalStatePath, targetIds);
+      const globalStateResult = await removeGlobalStateReferences(scan.root.globalStatePath, targetIds, {
+        expectedText: originalGlobalStateText,
+      });
       globalStateWritten = globalStateResult.removedCount > 0;
     }
 
@@ -348,12 +424,17 @@ export async function deleteSessions(
       await restoreDeletedFiles(deletedFiles);
     }
 
-    throw new Error(`删除失败，已尝试回滚：${error instanceof Error ? error.message : String(error)}`);
+    throw new DeleteSessionsError(`删除失败，已尝试回滚：${formatDeleteError(error)}`, {
+      liveDeleteStarted,
+      liveDeleteRolledBack: true,
+      cause: error,
+    });
   }
 
   return {
     preview,
     validation: await validateDeletion(scan, sessions),
+    confirmed: true,
   };
 }
 

@@ -125,6 +125,11 @@ Notes:
   - audit-root 只读扫描整个 root 的疑似残留，默认 limit=50
   - audit-root 多个 --status 或 --source 为 OR；同时使用 status 和 source 时为 AND
   - preview-root 只读批量预览 audit-root 筛出的候选，不删除、不递归处理 family
+  - global-state exact-key 只支持 P11 两个路径；delete 预览只显示 path/rule/shape/bytes，不打印 prompt 或完整 value
+  - 删除 exact-key 必须先看 delete 预览，再加 --yes；audit-root / preview-root 不能当作删除确认
+  - 其它 unknown global-state 只报警，不会因为路径相似、全文命中或 root 扫描候选而删除
+  - audit-root/preview-root --status 可选: absent | clean | present | partial | broken-family | risky-global-state | db-only | index-only | partial-residue | global-state-exact-key | global-state-unknown | shell-snapshot-residue | index-residue | sqlite-residue | missing-parent-edge | missing-child-edge
+  - audit-root/preview-root --source 可选: rollout-files | shell-snapshots | session-index | history | sqlite | global-state-known | global-state-exact-key | global-state-unknown | thread-spawn-edges
   - delete --trash --yes 会先写入回收站，再清理 live session
   - restore 和 purge 未带 --yes 时只展示匹配的回收站记录
   - cleanup-index 和 cleanup-stale 未带 --yes 时只展示预览，不改写 JSONL
@@ -319,6 +324,12 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
     case "audit-root": {
       if (rest.length !== 0) {
         throw new Error("audit-root 不接收 session-id。");
+      }
+      if (values.yes) {
+        throw new Error("audit-root 不支持 --yes；它始终只读，不执行删除。");
+      }
+      if (values.trash) {
+        throw new Error("audit-root 不支持 --trash；它始终只读，不执行删除。");
       }
 
       const limit = values.limit ? Number(values.limit) : undefined;

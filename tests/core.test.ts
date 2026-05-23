@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import Database from "better-sqlite3";
@@ -23,7 +23,7 @@ import { scanCodexRoot } from "../src/core/scan.js";
 import { summarizeSources } from "../src/core/sources.js";
 import { readSessionTimeline } from "../src/core/timeline.js";
 import { listTrashEntries, moveSessionsToTrash, purgeTrashEntry, restoreTrashEntry } from "../src/core/trash.js";
-import { createFixture, FIXTURE_IDS, type Fixture } from "./helpers/fixture.js";
+import { createFixture, FIXTURE_IDS, writeExactGlobalStateFixture, type Fixture } from "./helpers/fixture.js";
 
 describe("core integration", () => {
   let fixture: Fixture;
@@ -991,6 +991,356 @@ describe("core integration", () => {
     expect(globalState.diffViewThreadSettings).not.toHaveProperty(FIXTURE_IDS.UNRELATED_ID);
   });
 
+  it("previews P11 exact-key global-state candidates without exposing values", async () => {
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const sessions = resolveSessions(scan, [FIXTURE_IDS.EXACT_GLOBAL_STATE_ID]);
+    const preview = buildDeletePreview(scan, sessions);
+    const item = preview.items[0];
+
+    expect(sessions[0].kind).toBe("stale");
+    expect(preview.totals.exactKeyGlobalStateRefs).toBe(2);
+    expect(preview.totals.possibleUnknownGlobalStateRefs).toBe(0);
+    expect(item.exactKeyGlobalStateRefPaths).toEqual([
+      `$.electron-persisted-atom-state.prompt-history.${FIXTURE_IDS.EXACT_GLOBAL_STATE_ID}`,
+      `$.electron-persisted-atom-state.heartbeat-thread-permissions-by-id.${FIXTURE_IDS.EXACT_GLOBAL_STATE_ID}`,
+    ]);
+    expect(item.exactKeyGlobalStateRefsDetail).toEqual([
+      expect.objectContaining({
+        ruleId: "electronPromptHistoryByThreadId",
+        valueShape: "array(3)",
+        requiresConfirmation: true,
+      }),
+      expect.objectContaining({
+        ruleId: "heartbeatThreadPermissionsById",
+        valueShape: "object(3)",
+        requiresConfirmation: true,
+      }),
+    ]);
+    expect(JSON.stringify(preview)).not.toContain("secret prompt text");
+  });
+
+  it("confirmed delete removes only the exact P11 global-state key paths", async () => {
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const sessions = resolveSessions(scan, [FIXTURE_IDS.EXACT_GLOBAL_STATE_ID]);
+    const result = await deleteSessions(scan, sessions);
+    const globalState = JSON.parse(await readFile(fixture.paths.globalState, "utf8")) as {
+      "electron-persisted-atom-state": {
+        "prompt-history": Record<string, unknown>;
+        "heartbeat-thread-permissions-by-id": Record<string, unknown>;
+      };
+      "electron-local-remote-control-installation-id": string;
+    };
+    const atomState = globalState["electron-persisted-atom-state"];
+
+    expect(result.confirmed).toBe(true);
+    expect(result.validation[0].exactKeyGlobalStateRefsRemaining).toBe(0);
+    expect(atomState["prompt-history"]).not.toHaveProperty(FIXTURE_IDS.EXACT_GLOBAL_STATE_ID);
+    expect(atomState["heartbeat-thread-permissions-by-id"]).not.toHaveProperty(FIXTURE_IDS.EXACT_GLOBAL_STATE_ID);
+    expect(atomState["prompt-history"]).toHaveProperty(FIXTURE_IDS.EXACT_GLOBAL_STATE_SIBLING_ID);
+    expect(atomState["heartbeat-thread-permissions-by-id"]).toHaveProperty(FIXTURE_IDS.EXACT_GLOBAL_STATE_SIBLING_ID);
+    expect(atomState["prompt-history"]).toHaveProperty(FIXTURE_IDS.BAD_HEARTBEAT_GLOBAL_STATE_ID);
+    expect(atomState["heartbeat-thread-permissions-by-id"]).toHaveProperty(FIXTURE_IDS.BAD_HEARTBEAT_GLOBAL_STATE_ID);
+    expect(globalState["electron-local-remote-control-installation-id"]).toBe(FIXTURE_IDS.INSTALLATION_GLOBAL_STATE_ID);
+  });
+
+  it("rolls back exact-key global-state cleanup when a later delete step fails", async () => {
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const [session] = resolveSessions(scan, [FIXTURE_IDS.EXACT_GLOBAL_STATE_ID]);
+    const protectedDir = path.join(fixture.rootDir, "protected");
+    const protectedFile = path.join(protectedDir, "session.jsonl");
+    await mkdir(protectedDir);
+    await writeFile(protectedFile, "protected session file\n", "utf8");
+    const originalGlobalState = await readFile(fixture.paths.globalState, "utf8");
+    await chmod(protectedDir, 0o555);
+
+    try {
+      await expect(deleteSessions(scan, [
+        {
+          ...session,
+          fileTargets: [
+            {
+              id: session.id,
+              bucket: "sessions",
+              absolutePath: protectedFile,
+              relativePath: "protected/session.jsonl",
+              fileName: "session.jsonl",
+              size: 23,
+              lastModified: null,
+            },
+          ],
+        },
+      ])).rejects.toThrow("删除失败");
+      await expect(readFile(fixture.paths.globalState, "utf8")).resolves.toBe(originalGlobalState);
+    } finally {
+      await chmod(protectedDir, 0o755);
+    }
+  });
+
+  it("trash delete and restore round-trip exact-key global-state refs", async () => {
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const sessions = resolveSessions(scan, [FIXTURE_IDS.EXACT_GLOBAL_STATE_ID]);
+    const trashResult = await moveSessionsToTrash(scan, sessions);
+    const manifestPath = path.join(fixture.rootDir, ".codex-sessions-trash", trashResult.trashEntry.trashId, "manifest.json");
+    const trashBundle = JSON.parse(await readFile(manifestPath, "utf8")) as {
+      globalStateRefs: Array<{ sessionId: string; path: string; ruleId?: string; safetyClass?: string; value: unknown }>;
+    };
+    const exactRefs = trashBundle.globalStateRefs.filter((ref) => ref.safetyClass === "promoted-exact-key");
+    const deletedState = JSON.parse(await readFile(fixture.paths.globalState, "utf8")) as {
+      "electron-persisted-atom-state": {
+        "prompt-history": Record<string, unknown>;
+        "heartbeat-thread-permissions-by-id": Record<string, unknown>;
+      };
+    };
+
+    expect(exactRefs).toEqual([
+      expect.objectContaining({
+        sessionId: FIXTURE_IDS.EXACT_GLOBAL_STATE_ID,
+        path: `$.electron-persisted-atom-state.prompt-history.${FIXTURE_IDS.EXACT_GLOBAL_STATE_ID}`,
+        ruleId: "electronPromptHistoryByThreadId",
+        value: ["secret prompt text must not be printed", "second prompt", FIXTURE_IDS.PROMPT_HISTORY_VALUE_ID],
+      }),
+      expect.objectContaining({
+        sessionId: FIXTURE_IDS.EXACT_GLOBAL_STATE_ID,
+        path: `$.electron-persisted-atom-state.heartbeat-thread-permissions-by-id.${FIXTURE_IDS.EXACT_GLOBAL_STATE_ID}`,
+        ruleId: "heartbeatThreadPermissionsById",
+        value: {
+          approvalPolicy: "on-request",
+          approvalsReviewer: "auto_review",
+          sandboxPolicy: "workspace-write",
+        },
+      }),
+    ]);
+    expect(trashResult.deletion.validation[0].exactKeyGlobalStateRefsRemaining).toBe(0);
+    expect(deletedState["electron-persisted-atom-state"]["prompt-history"]).not.toHaveProperty(FIXTURE_IDS.EXACT_GLOBAL_STATE_ID);
+    const restoreResult = await restoreTrashEntry(fixture.rootDir, trashResult.trashEntry.trashId);
+    const restoredState = JSON.parse(await readFile(fixture.paths.globalState, "utf8")) as {
+      "electron-persisted-atom-state": {
+        "prompt-history": Record<string, unknown>;
+        "heartbeat-thread-permissions-by-id": Record<string, unknown>;
+      };
+    };
+
+    expect(restoreResult.restoredGlobalStateRefs).toBe(2);
+    expect(restoredState["electron-persisted-atom-state"]["prompt-history"][FIXTURE_IDS.EXACT_GLOBAL_STATE_ID]).toEqual([
+      "secret prompt text must not be printed",
+      "second prompt",
+      FIXTURE_IDS.PROMPT_HISTORY_VALUE_ID,
+    ]);
+    expect(restoredState["electron-persisted-atom-state"]["heartbeat-thread-permissions-by-id"][
+      FIXTURE_IDS.EXACT_GLOBAL_STATE_ID
+    ]).toEqual({
+      approvalPolicy: "on-request",
+      approvalsReviewer: "auto_review",
+      sandboxPolicy: "workspace-write",
+    });
+  });
+
+  it("cleans a committed trash entry when live delete rolls back before removing anything", async () => {
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const sessions = resolveSessions(scan, [FIXTURE_IDS.EXACT_GLOBAL_STATE_ID]);
+    await writeFile(
+      fixture.paths.globalState,
+      `${JSON.stringify({ changed: true, [FIXTURE_IDS.EXACT_GLOBAL_STATE_ID]: "not an exact path" }, null, 2)}\n`,
+      "utf8",
+    );
+
+    await expect(moveSessionsToTrash(scan, sessions)).rejects.toThrow("回收站记录已清理");
+    await expect(listTrashEntries(fixture.rootDir)).resolves.toEqual([]);
+    await expect(readFile(fixture.paths.globalState, "utf8")).resolves.toContain("not an exact path");
+  });
+
+  it("refuses trash bundles with duplicate exact-key refs before restore writes", async () => {
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const sessions = resolveSessions(scan, [FIXTURE_IDS.EXACT_GLOBAL_STATE_ID]);
+    const trashResult = await moveSessionsToTrash(scan, sessions);
+    const manifestPath = path.join(fixture.rootDir, ".codex-sessions-trash", trashResult.trashEntry.trashId, "manifest.json");
+    const trashBundle = JSON.parse(await readFile(manifestPath, "utf8")) as {
+      globalStateRefs: Array<Record<string, unknown>>;
+    };
+    const exactRef = trashBundle.globalStateRefs.find((ref) => ref.safetyClass === "promoted-exact-key");
+    expect(exactRef).toBeDefined();
+    trashBundle.globalStateRefs.push({ ...(exactRef as Record<string, unknown>) });
+    await writeFile(manifestPath, `${JSON.stringify(trashBundle, null, 2)}\n`, "utf8");
+
+    await expect(restoreTrashEntry(fixture.rootDir, trashResult.trashEntry.trashId)).rejects.toThrow("重复 exact-key");
+    const globalState = JSON.parse(await readFile(fixture.paths.globalState, "utf8")) as {
+      "electron-persisted-atom-state": {
+        "prompt-history": Record<string, unknown>;
+        "heartbeat-thread-permissions-by-id": Record<string, unknown>;
+      };
+    };
+    expect(globalState["electron-persisted-atom-state"]["prompt-history"]).not.toHaveProperty(FIXTURE_IDS.EXACT_GLOBAL_STATE_ID);
+    expect(globalState["electron-persisted-atom-state"]["heartbeat-thread-permissions-by-id"]).not.toHaveProperty(
+      FIXTURE_IDS.EXACT_GLOBAL_STATE_ID,
+    );
+  });
+
+  it("refuses trash bundles with extra unpreviewed exact-key refs", async () => {
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const sessions = resolveSessions(scan, [FIXTURE_IDS.EXACT_GLOBAL_STATE_ID]);
+    const trashResult = await moveSessionsToTrash(scan, sessions);
+    const manifestPath = path.join(fixture.rootDir, ".codex-sessions-trash", trashResult.trashEntry.trashId, "manifest.json");
+    const trashBundle = JSON.parse(await readFile(manifestPath, "utf8")) as {
+      globalStateRefs: Array<Record<string, unknown>>;
+    };
+    trashBundle.globalStateRefs.push({
+      sessionId: FIXTURE_IDS.EXACT_GLOBAL_STATE_SIBLING_ID,
+      path: `$.electron-persisted-atom-state.prompt-history.${FIXTURE_IDS.EXACT_GLOBAL_STATE_SIBLING_ID}`,
+      kind: "object-key",
+      value: ["unpreviewed sibling prompt"],
+      ruleId: "electronPromptHistoryByThreadId",
+      safetyClass: "promoted-exact-key",
+      valueShape: "array(1)",
+      byteEstimate: 29,
+      reason: "bad manifest should not restore this value",
+    });
+    await writeFile(manifestPath, `${JSON.stringify(trashBundle, null, 2)}\n`, "utf8");
+
+    await expect(restoreTrashEntry(fixture.rootDir, trashResult.trashEntry.trashId)).rejects.toThrow("未预览的 exact-key");
+    const globalState = JSON.parse(await readFile(fixture.paths.globalState, "utf8")) as {
+      "electron-persisted-atom-state": {
+        "prompt-history": Record<string, unknown>;
+      };
+    };
+    expect(globalState["electron-persisted-atom-state"]["prompt-history"]).not.toHaveProperty(FIXTURE_IDS.EXACT_GLOBAL_STATE_ID);
+    expect(globalState["electron-persisted-atom-state"]["prompt-history"][FIXTURE_IDS.EXACT_GLOBAL_STATE_SIBLING_ID]).toEqual([
+      "sibling prompt must stay",
+    ]);
+  });
+
+  it("refuses restore when an exact-key parent container has the wrong shape", async () => {
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const sessions = resolveSessions(scan, [FIXTURE_IDS.EXACT_GLOBAL_STATE_ID]);
+    const trashResult = await moveSessionsToTrash(scan, sessions);
+    await writeFile(
+      fixture.paths.globalState,
+      `${JSON.stringify(
+        {
+          "electron-persisted-atom-state": {
+            "prompt-history": "bad container",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    await expect(restoreTrashEntry(fixture.rootDir, trashResult.trashEntry.trashId)).rejects.toThrow("需要对象容器");
+    const globalState = JSON.parse(await readFile(fixture.paths.globalState, "utf8")) as {
+      "electron-persisted-atom-state": {
+        "prompt-history": string;
+      };
+    };
+    expect(globalState["electron-persisted-atom-state"]["prompt-history"]).toBe("bad container");
+  });
+
+  it("restore refuses exact-key conflicts before writing", async () => {
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const sessions = resolveSessions(scan, [FIXTURE_IDS.EXACT_GLOBAL_STATE_ID]);
+    const trashResult = await moveSessionsToTrash(scan, sessions);
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+
+    await expect(restoreTrashEntry(fixture.rootDir, trashResult.trashEntry.trashId)).rejects.toThrow("global state exact-key");
+  });
+
+  it("refuses unknown global-state refs that do not match exact-key rules", async () => {
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const sessions = resolveSessions(scan, [FIXTURE_IDS.BAD_HEARTBEAT_GLOBAL_STATE_ID]);
+
+    expect(buildDeletePreview(scan, sessions).totals.exactKeyGlobalStateRefs).toBe(0);
+    expect(buildDeletePreview(scan, sessions).totals.possibleUnknownGlobalStateRefs).toBe(2);
+    await expect(deleteSessions(scan, sessions)).rejects.toThrow("拒绝删除 unknown global-state");
+    const after = await readFile(fixture.paths.globalState, "utf8");
+    expect(after).toContain(FIXTURE_IDS.BAD_HEARTBEAT_GLOBAL_STATE_ID);
+  });
+
+  it("cleans the committed trash entry when trash delete refuses unknown-only global-state refs", async () => {
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const sessions = resolveSessions(scan, [FIXTURE_IDS.BAD_HEARTBEAT_GLOBAL_STATE_ID]);
+
+    await expect(moveSessionsToTrash(scan, sessions)).rejects.toThrow("回收站记录已清理");
+    await expect(listTrashEntries(fixture.rootDir)).resolves.toEqual([]);
+    await expect(readFile(fixture.paths.globalState, "utf8")).resolves.toContain(FIXTURE_IDS.BAD_HEARTBEAT_GLOBAL_STATE_ID);
+  });
+
+  it("keeps UUID-shaped prompt-history array values as unknown-only refs", async () => {
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const sessions = resolveSessions(scan, [FIXTURE_IDS.PROMPT_HISTORY_VALUE_ID]);
+    const preview = buildDeletePreview(scan, sessions);
+
+    expect(buildDeletePreview(scan, sessions).totals.exactKeyGlobalStateRefs).toBe(0);
+    expect(preview.totals.possibleUnknownGlobalStateRefs).toBe(1);
+    expect(preview.items[0].possibleUnknownGlobalStateRefPaths).toEqual([
+      `$.electron-persisted-atom-state.prompt-history.${FIXTURE_IDS.EXACT_GLOBAL_STATE_ID}[2]`,
+    ]);
+    await expect(deleteSessions(scan, sessions)).rejects.toThrow("拒绝删除 unknown global-state");
+    await expect(readFile(fixture.paths.globalState, "utf8")).resolves.toContain(FIXTURE_IDS.PROMPT_HISTORY_VALUE_ID);
+  });
+
+  it("refuses installation-id global-state cleanup as unknown-only", async () => {
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const sessions = resolveSessions(scan, [FIXTURE_IDS.INSTALLATION_GLOBAL_STATE_ID]);
+    const preview = buildDeletePreview(scan, sessions);
+
+    expect(preview.totals.exactKeyGlobalStateRefs).toBe(0);
+    expect(preview.totals.possibleUnknownGlobalStateRefs).toBe(1);
+    expect(preview.items[0].possibleUnknownGlobalStateRefPaths).toEqual(["$.electron-local-remote-control-installation-id"]);
+    await expect(deleteSessions(scan, sessions)).rejects.toThrow("拒绝删除 unknown global-state");
+    await expect(readFile(fixture.paths.globalState, "utf8")).resolves.toContain(FIXTURE_IDS.INSTALLATION_GLOBAL_STATE_ID);
+  });
+
+  it("refuses fuzzy deletes when multiple exact-key candidates match the same prefix", async () => {
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+
+    expect(() => resolveSessions(scan, ["019d9999-aaaa-7bbb-8ccc"])).toThrow("会话 ID 前缀不唯一");
+  });
+
+  it("refuses exact-key cleanup when global state changed after preview and preserves files", async () => {
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const sessions = resolveSessions(scan, [FIXTURE_IDS.EXACT_GLOBAL_STATE_ID]);
+    await writeFile(
+      fixture.paths.globalState,
+      JSON.stringify({ changed: true, [FIXTURE_IDS.EXACT_GLOBAL_STATE_ID]: "not an exact path" }, null, 2),
+      "utf8",
+    );
+
+    await expect(deleteSessions(scan, sessions)).rejects.toThrow("预览后发生变化");
+    const after = await readFile(fixture.paths.globalState, "utf8");
+    expect(after).toContain("not an exact path");
+    expect(after).toContain(FIXTURE_IDS.EXACT_GLOBAL_STATE_ID);
+  });
+
   it("fails safely and rolls back when global state is invalid json", async () => {
     await writeFile(fixture.paths.globalState, "{ invalid json\n", "utf8");
 
@@ -1261,17 +1611,16 @@ describe("core integration", () => {
     expect(conflictValidation[0].sqlite.logRows).toBe(1);
   });
 
-  it("keeps the committed trash entry when live deletion fails", async () => {
+  it("cleans the committed trash entry when live deletion rolls back", async () => {
     await writeFile(fixture.paths.globalState, "{ invalid json\n", "utf8");
 
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID]);
-    await expect(moveSessionsToTrash(scan, sessions)).rejects.toThrow("回收站记录已保留");
+    await expect(moveSessionsToTrash(scan, sessions)).rejects.toThrow("回收站记录已清理");
 
     const validation = await validateDeletion(await scanCodexRoot(fixture.rootDir), sessions);
     const trashEntries = await listTrashEntries(fixture.rootDir);
-    expect(trashEntries).toHaveLength(1);
-    expect(trashEntries[0].sessionIds).toContain(FIXTURE_IDS.ACTIVE_ID);
+    expect(trashEntries).toHaveLength(0);
     await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
     await expect(readFile(fixture.paths.activeShellSnapshot, "utf8")).resolves.toContain(FIXTURE_IDS.ACTIVE_ID);
     expect(validation[0].sessionIndexRowsRemaining).toBe(1);

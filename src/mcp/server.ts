@@ -252,7 +252,7 @@ export function createServer(): McpServer {
     "audit_session",
     {
       description:
-        "Audit local Codex residue for one session after official UI archive/delete actions, without modifying anything.",
+        "Audit local Codex residue for one session after official UI archive/delete actions, without modifying anything. Reports known, P11 exact-key, and unknown global-state refs separately.",
       outputSchema: TOOL_OUTPUT_SCHEMA,
       inputSchema: z.object({
         sessionId: z.string().describe("Exact session id or unique prefix."),
@@ -276,7 +276,7 @@ export function createServer(): McpServer {
     "audit_root",
     {
       description:
-        "Read-only scan of a Codex root for likely local residue candidates without requiring a session id. Candidates are not deletion recommendations.",
+        "Read-only scan of a Codex root for likely local residue candidates without requiring a session id. Candidates are not deletion recommendations. P11 exact-key global-state candidates are reported separately from unknown refs.",
       outputSchema: TOOL_OUTPUT_SCHEMA,
       inputSchema: z.object({
         root: z.string().optional().describe("Optional explicit path to the .codex root."),
@@ -311,7 +311,7 @@ export function createServer(): McpServer {
     "preview_root_delete",
     {
       description:
-        "Read-only batch delete preview for candidates selected by audit_root filters. It never deletes, never recommends deletion, and never recursively selects parent/child/family sessions.",
+        "Read-only batch delete preview for candidates selected by audit_root filters. It never deletes, never recommends deletion, and never recursively selects parent/child/family sessions. It is not approval to delete unknown global-state refs.",
       outputSchema: TOOL_OUTPUT_SCHEMA,
       inputSchema: z.object({
         root: z.string().optional().describe("Optional explicit path to the .codex root."),
@@ -343,7 +343,8 @@ export function createServer(): McpServer {
   server.registerTool(
     "export_session_backup",
     {
-      description: "Export a full backup bundle for a single Codex session.",
+      description:
+        "Export a full backup bundle for a single Codex session. This is recovery data, not a preview: globalStateRefs may include full exact-key values such as prompt-history content.",
       outputSchema: TOOL_OUTPUT_SCHEMA,
       inputSchema: z.object({
         sessionId: z.string(),
@@ -365,7 +366,8 @@ export function createServer(): McpServer {
   server.registerTool(
     "preview_delete_sessions",
     {
-      description: "Read-only preview of what would be removed by deleting one or more explicit Codex sessions. This is the single-session or explicit-ID preview to inspect before any confirmed delete.",
+      description:
+        "Read-only preview of what would be removed by deleting one or more explicit Codex sessions. This is the single-session or explicit-ID preview to inspect before any confirmed delete. P11 exact-key global-state refs show path, rule id, shape, byte estimate, and confirmation requirement without printing values.",
       outputSchema: TOOL_OUTPUT_SCHEMA,
       inputSchema: z.object({
         sessionIds: z.array(z.string()).min(1),
@@ -387,7 +389,8 @@ export function createServer(): McpServer {
   server.registerTool(
     "delete_sessions",
     {
-      description: "Delete explicit Codex sessions across files, JSONL indexes, and SQLite. Pass trash=true to move them to recoverable trash. Requires confirm=true after a separate preview; otherwise returns a preview only. This tool never recursively adds parent, child, or family sessions.",
+      description:
+        "Delete explicit Codex sessions across files, JSONL indexes, SQLite, known global-state refs, and the two P11 exact-key global-state refs only. Pass trash=true to move them to recoverable trash. Requires confirm=true after a separate preview; otherwise returns a preview only. Unknown global-state refs outside the exact-key rules remain warnings, and unknown-only cleanup is refused. This tool never recursively adds parent, child, or family sessions.",
       outputSchema: TOOL_OUTPUT_SCHEMA,
       inputSchema: z.object({
         sessionIds: z.array(z.string()).min(1),
@@ -587,7 +590,8 @@ export function createServer(): McpServer {
   server.registerTool(
     "verify_sessions",
     {
-      description: "Verify whether sessions still have remaining files, JSONL index rows, or SQLite rows.",
+      description:
+        "Verify whether sessions still have remaining files, JSONL index rows, SQLite rows, known global-state refs, P11 exact-key global-state refs, unknown global-state refs, or warnings.",
       outputSchema: TOOL_OUTPUT_SCHEMA,
       inputSchema: z.object({
         sessionIds: z.array(z.string()).min(1),

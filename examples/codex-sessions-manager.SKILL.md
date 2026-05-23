@@ -50,7 +50,7 @@ Prefer MCP tools when the `codex-sessions` MCP server is available:
 - `preview_root_delete` (read-only root delete preview; never deletes and never recommends deletion)
 - `export_session_backup`
 - `preview_delete_sessions`
-- `delete_sessions` (requires a separate preview, then `confirm=true`; pass `trash=true` for recoverable deletion)
+- `delete_sessions` (requires a separate preview, then `confirm=true`; pass `trash=true` for recoverable deletion; P11 exact-key global-state refs use the same preview/confirm rule)
 - `list_trash`
 - `restore_sessions` (requires `confirm=true`)
 - `purge_trash` (requires `confirm=true`)
@@ -87,11 +87,15 @@ codex-sessions audit <session-id> --root <path-to-codex-root> --json
 codex-sessions audit-root --root <path-to-codex-root>
 codex-sessions audit-root --root <path-to-codex-root> --json --limit 50
 codex-sessions audit-root --root <path-to-codex-root> --status risky-global-state --limit 50
+codex-sessions audit-root --root <path-to-codex-root> --status global-state-exact-key --limit 50
 codex-sessions audit-root --root <path-to-codex-root> --source global-state-unknown --limit 50
+codex-sessions audit-root --root <path-to-codex-root> --source global-state-exact-key --limit 50
 codex-sessions preview-root --root <path-to-codex-root>
 codex-sessions preview-root --root <path-to-codex-root> --json --limit 50
 codex-sessions preview-root --root <path-to-codex-root> --status db-only --limit 20
+codex-sessions preview-root --root <path-to-codex-root> --status global-state-exact-key --limit 20
 codex-sessions preview-root --root <path-to-codex-root> --source global-state-unknown --limit 20
+codex-sessions preview-root --root <path-to-codex-root> --source global-state-exact-key --limit 20
 codex-sessions export <session-id> --root <path-to-codex-root> --output ./backup.json
 codex-sessions delete <session-id> --root <path-to-codex-root>
 codex-sessions delete <session-id> --root <path-to-codex-root> --trash
@@ -133,11 +137,15 @@ node dist/cli/index.js audit <session-id> --root <path-to-codex-root> --json
 node dist/cli/index.js audit-root --root <path-to-codex-root>
 node dist/cli/index.js audit-root --root <path-to-codex-root> --json --limit 50
 node dist/cli/index.js audit-root --root <path-to-codex-root> --status risky-global-state --limit 50
+node dist/cli/index.js audit-root --root <path-to-codex-root> --status global-state-exact-key --limit 50
 node dist/cli/index.js audit-root --root <path-to-codex-root> --source global-state-unknown --limit 50
+node dist/cli/index.js audit-root --root <path-to-codex-root> --source global-state-exact-key --limit 50
 node dist/cli/index.js preview-root --root <path-to-codex-root>
 node dist/cli/index.js preview-root --root <path-to-codex-root> --json --limit 50
 node dist/cli/index.js preview-root --root <path-to-codex-root> --status db-only --limit 20
+node dist/cli/index.js preview-root --root <path-to-codex-root> --status global-state-exact-key --limit 20
 node dist/cli/index.js preview-root --root <path-to-codex-root> --source global-state-unknown --limit 20
+node dist/cli/index.js preview-root --root <path-to-codex-root> --source global-state-exact-key --limit 20
 node dist/cli/index.js export <session-id> --root <path-to-codex-root> --output ./backup.json
 node dist/cli/index.js delete <session-id> --root <path-to-codex-root>
 node dist/cli/index.js delete <session-id> --root <path-to-codex-root> --trash
@@ -183,7 +191,11 @@ The `--yes` examples above are execution examples, not first-step recommendation
 - `purge` removes only the trash entry and must not touch live sessions.
 - `cleanup-index` and `cleanup-stale` rewrite JSONL indexes. They do not delete raw files or SQLite rows, but they still require `--yes`.
 - MCP `cleanup_session_indexes` and `cleanup_stale_indexes` require `confirm=true` to rewrite indexes.
-- Unknown global-state references are warnings only. Do not edit unknown global-state keys automatically.
+- P11 exact-key global-state refs are limited to `$.electron-persisted-atom-state.prompt-history.<session-id>` and `$.electron-persisted-atom-state.heartbeat-thread-permissions-by-id.<session-id>`. Use explicit-ID delete preview first, then `--yes` or MCP `confirm=true`.
+- Exact-key preview may show path, rule id, shape, byte estimate, affected surfaces, family warnings, and confirmation requirement. Do not print prompt contents or full global-state values.
+- `export_session_backup`, CLI `export`, and trash bundles are recovery data, not previews. They may include full exact-key global-state values, including prompt-history content, so do not print them back to the user unless explicitly requested for recovery.
+- Unknown global-state references outside those exact-key rules are warnings only. Do not edit unknown global-state keys automatically. Refuse cleanup when an ID matches only ineligible unknown refs.
+- The confirmed delete command rescans the root. If global-state changes again inside that confirmed command before the write, cannot be parsed, or lacks snapshot/rollback protection, refuse the write and rerun preview.
 - If `audit`, `audit-root`, `preview-root`, `verify`, `doctor`, or `inspect_root` reports warnings, tell the user. Do not claim the root is fully clean.
 - Do not output chat content when reporting audit, doctor, verify, or global-state warnings.
 - `/side` conversations may be stored as separate child threads. Current CLI/MCP behavior does not automatically recurse from parent to side child threads.

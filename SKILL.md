@@ -103,7 +103,7 @@ If the `codex-sessions` MCP server is available in the current agent session, us
 - `preview_root_delete` (read-only root delete preview; never deletes and never recommends deletion)
 - `export_session_backup`
 - `preview_delete_sessions`
-- `delete_sessions` (requires a separate preview, then `confirm=true` to execute; pass `trash=true` for recoverable deletion)
+- `delete_sessions` (requires a separate preview, then `confirm=true` to execute; pass `trash=true` for recoverable deletion; P11 exact-key global-state refs follow the same preview/confirm rule)
 - `list_trash`
 - `restore_sessions` (requires `confirm=true`)
 - `purge_trash` (requires `confirm=true`)
@@ -158,11 +158,15 @@ codex-sessions audit <session-id> --root <path-to-codex-root> --json
 codex-sessions audit-root --root <path-to-codex-root>
 codex-sessions audit-root --root <path-to-codex-root> --json --limit 50
 codex-sessions audit-root --root <path-to-codex-root> --status risky-global-state --limit 50
+codex-sessions audit-root --root <path-to-codex-root> --status global-state-exact-key --limit 50
 codex-sessions audit-root --root <path-to-codex-root> --source global-state-unknown --limit 50
+codex-sessions audit-root --root <path-to-codex-root> --source global-state-exact-key --limit 50
 codex-sessions preview-root --root <path-to-codex-root>
 codex-sessions preview-root --root <path-to-codex-root> --json --limit 50
 codex-sessions preview-root --root <path-to-codex-root> --status db-only --limit 20
+codex-sessions preview-root --root <path-to-codex-root> --status global-state-exact-key --limit 20
 codex-sessions preview-root --root <path-to-codex-root> --source global-state-unknown --limit 20
+codex-sessions preview-root --root <path-to-codex-root> --source global-state-exact-key --limit 20
 codex-sessions export <session-id> --root <path-to-codex-root> --output ./backup.json
 codex-sessions delete <session-id...> --root <path-to-codex-root>
 codex-sessions delete <session-id...> --root <path-to-codex-root> --yes
@@ -216,11 +220,15 @@ node dist/cli/index.js audit <session-id> --root <path-to-codex-root> --json
 node dist/cli/index.js audit-root --root <path-to-codex-root>
 node dist/cli/index.js audit-root --root <path-to-codex-root> --json --limit 50
 node dist/cli/index.js audit-root --root <path-to-codex-root> --status risky-global-state --limit 50
+node dist/cli/index.js audit-root --root <path-to-codex-root> --status global-state-exact-key --limit 50
 node dist/cli/index.js audit-root --root <path-to-codex-root> --source global-state-unknown --limit 50
+node dist/cli/index.js audit-root --root <path-to-codex-root> --source global-state-exact-key --limit 50
 node dist/cli/index.js preview-root --root <path-to-codex-root>
 node dist/cli/index.js preview-root --root <path-to-codex-root> --json --limit 50
 node dist/cli/index.js preview-root --root <path-to-codex-root> --status db-only --limit 20
+node dist/cli/index.js preview-root --root <path-to-codex-root> --status global-state-exact-key --limit 20
 node dist/cli/index.js preview-root --root <path-to-codex-root> --source global-state-unknown --limit 20
+node dist/cli/index.js preview-root --root <path-to-codex-root> --source global-state-exact-key --limit 20
 node dist/cli/index.js export <session-id> --root <path-to-codex-root> --output ./backup.json
 node dist/cli/index.js delete <session-id...> --root <path-to-codex-root>
 node dist/cli/index.js delete <session-id...> --root <path-to-codex-root> --yes
@@ -279,8 +287,11 @@ The `--yes` examples above are execution examples, not first-step recommendation
 - `purge` removes only the trash entry and must not touch live sessions.
 - `cleanup-index` and `cleanup-stale` rewrite `session_index.jsonl` and `history.jsonl`. They do not delete raw files or SQLite rows, but they still require `--yes`.
 - MCP `cleanup_session_indexes` and `cleanup_stale_indexes` require `confirm=true` to rewrite JSONL indexes.
-- Global-state cleanup is limited to known structured keys.
-- Unknown global-state references are warnings only. Do not edit or delete unknown keys automatically.
+- Global-state cleanup is limited to known structured keys plus the two P11 exact-key paths: `$.electron-persisted-atom-state.prompt-history.<session-id>` and `$.electron-persisted-atom-state.heartbeat-thread-permissions-by-id.<session-id>`.
+- P11 exact-key refs are removable only through explicit-ID delete preview followed by `--yes` or MCP `confirm=true`. Preview must show path, rule id, shape, byte estimate, affected surfaces, family warnings, and confirmation requirement. Do not print prompt contents or full global-state values.
+- `export_session_backup`, CLI `export`, and trash bundles are recovery data, not previews. They may include full exact-key global-state values, including prompt-history content, so do not print them back to the user unless explicitly requested for recovery.
+- Unknown global-state references outside those exact-key rules are warnings only. Do not edit or delete unknown keys automatically. Refuse cleanup when an ID matches only ineligible unknown global-state refs.
+- The confirmed delete command rescans the root. If global-state changes again inside that confirmed command before the write, cannot be parsed, or lacks snapshot/rollback protection, refuse the write and tell the user to rerun preview.
 - If `audit`, `audit-root`, `preview-root`, `verify`, `doctor`, or `inspect_root` reports warnings, tell the user. Do not claim the root is fully clean.
 - Do not output chat content when reporting audit, doctor, verify, or global-state warnings.
 
@@ -320,8 +331,9 @@ When a user asks about side conversations:
 - For delete requests: explain whether this is preview-only, permanent delete, or recoverable trash delete. Do not run confirmed deletion unless a separate preview has been reviewed and the user explicitly confirmed execution.
 - For trash requests: distinguish moved to trash, restored, and purged.
 - For restore conflicts: explain that the live session already exists and identify conflicting surfaces when available.
-- For verify requests: report whether files, JSONL rows, SQLite rows, shell snapshots, global-state refs, or warnings remain.
+- For verify requests: report whether files, JSONL rows, SQLite rows, shell snapshots, known global-state refs, exact-key global-state refs, unknown global-state refs, or warnings remain.
 - For doctor / inspect requests: report OK, missing, and warning states without printing chat content.
+- For exact-key global-state refs: report path, rule id, value shape, byte estimate, and confirmation requirement; do not print values.
 - For unknown global-state refs: report key path and count, not full global state content.
 
 ## Non-Goals

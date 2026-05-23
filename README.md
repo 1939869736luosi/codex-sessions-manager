@@ -55,6 +55,9 @@ codex-sessions preview-root --source global-state-unknown --limit 20
 # Preview what deletion would do (safe, no changes)
 codex-sessions delete <session-id>
 
+# Preview P11 exact-key global-state cleanup for one explicit session (safe, no changes)
+codex-sessions delete <session-id> --root <path-to-codex-root>
+
 # After preview, delete with recoverable trash (recommended)
 codex-sessions delete <session-id> --trash --yes
 
@@ -76,7 +79,7 @@ This tool:
 1. Snapshot all files (in case we need to roll back)
 2. Rewrite session_index.jsonl (remove matching rows)
 3. Rewrite history.jsonl (remove matching rows)
-4. Clean `.codex-global-state.json` references
+4. Clean known `.codex-global-state.json` references and the two P11 exact-key candidates only
 5. Delete raw session files
 6. Delete shell snapshot files
 7. Delete SQLite rows (threads, logs, spawn_edges, agent jobs, dynamic tools, stage1, thread goals)
@@ -154,20 +157,24 @@ codex-sessions verify <session-id...> [--json]
 
 **Safety first**: All destructive commands require `--yes`. Without it, you only get a preview. Run a separate preview for the exact session IDs first; `family`, `impact`, `audit-root`, and `preview-root` never count as permission to delete.
 
+`export` and trash bundles are recovery data, not previews. They may include full global-state exact-key values such as prompt-history content. Human delete previews show only path, rule, shape, and byte counts.
+
 **Duplicate trash entries**: `restore` does not delete the trash entry. If a restored session is moved to trash again, `trash-list` can show multiple recoverable copies for the same session ID. This is normal trash state, not live residue. A newer copy does not replace an older one. When one session ID has multiple trash entries, confirmed `restore` and `purge` refuse the session ID and require the exact `trashId`. Do not auto-purge duplicates. `purge` permanently removes only the selected trash entry and never touches the live session.
 
-Use `audit` after the official Codex UI delete/archive flow when you need a clear local residue report. It is read-only. It reports whether the raw rollout file, shell snapshot, `session_index`, `history`, SQLite records, known global-state refs, unknown global-state refs, and `thread_spawn_edges` are still present. It also reports family membership and broken parent/child links. If anything remains, the suggested next command is a preview-only `delete` command; nothing is deleted unless you add `--yes`.
+Use `audit` after the official Codex UI delete/archive flow when you need a clear local residue report. It is read-only. It reports whether the raw rollout file, shell snapshot, `session_index`, `history`, SQLite records, known global-state refs, P11 exact-key global-state refs, unknown global-state refs, and `thread_spawn_edges` are still present. It also reports family membership and broken parent/child links. If anything remains, the suggested next command is a preview-only `delete` command; nothing is deleted unless you add `--yes`.
 
 Use `audit-root` when you do not already have the session ID. It scans the whole Codex root and lists likely residue candidates by risk: broken parent/child edges, missing rollout files with unknown global-state refs, SQLite-only rows, shell snapshots, index-only rows, and other partial leftovers. It is read-only, defaults to `--limit 50`, does not print transcript content, and recommends a per-session `audit` command for each candidate. Add `--all` only when you intentionally want complete non-residue sessions included too.
 
 `audit-root` supports display-only filters. Matching candidates are not a deletion list or a deletion recommendation; audit them one by one or inspect a read-only preview before choosing any cleanup:
 
 - `--status risky-global-state`
+- `--status global-state-exact-key`
 - `--status db-only`
 - `--status broken-family`
 - `--status partial-residue`
 - `--status global-state-unknown`
 - `--source global-state-unknown`
+- `--source global-state-exact-key`
 - `--source global-state-known`
 - `--source sqlite`
 - `--source session-index`
@@ -190,7 +197,28 @@ Important source limits:
 - `source=mcp` means the thread was recorded with that source. It is not a log of every MCP tool call inside the conversation.
 - `model_provider` is only displayed and filtered here. This tool does not repair provider identity or rewrite provider history.
 
-Use `preview-root` when you want a read-only batch delete preview for the same candidates `audit-root` would select. It reuses the same status/source filters and conservative default `--limit 50`, then summarizes what a read-only preview would touch across rollout files, shell snapshots, `session_index`, `history`, SQLite, known global-state refs, unknown global-state refs, and `thread_spawn_edges`. It does not delete, does not rewrite JSONL, SQLite, shell snapshots, or global-state, does not accept `--yes`, does not recommend deleting any session, and does not recursively add parent, child, or family sessions. A `preview-root` result is not a deletion recommendation; it only shows what would be touched if you later choose explicit `delete` commands. Actual deletion still requires a separate explicit-ID `delete` preview and then a separate `delete ... --yes` command.
+Use `preview-root` when you want a read-only batch delete preview for the same candidates `audit-root` would select. It reuses the same status/source filters and conservative default `--limit 50`, then summarizes what a read-only preview would touch across rollout files, shell snapshots, `session_index`, `history`, SQLite, known global-state refs, P11 exact-key global-state refs, unknown global-state refs, and `thread_spawn_edges`. It does not delete, does not rewrite JSONL, SQLite, shell snapshots, or global-state, does not accept `--yes`, does not recommend deleting any session, and does not recursively add parent, child, or family sessions. A `preview-root` result is not a deletion recommendation; it only shows what would be touched if you later choose explicit `delete` commands. Actual deletion still requires a separate explicit-ID `delete` preview and then a separate `delete ... --yes` command.
+
+### P11 exact-key global-state cleanup
+
+Only two formerly unknown `.codex-global-state.json` paths can be removed by confirmed delete:
+
+- `$.electron-persisted-atom-state.prompt-history.<session-id>`
+- `$.electron-persisted-atom-state.heartbeat-thread-permissions-by-id.<session-id>`
+
+They are removable only when the session id is the whole object key and the value shape matches the rule. Preview shows the exact path, rule id, value shape, byte estimate, affected surfaces, family warnings, and that confirmation is required. It never prints prompt text or full global-state values.
+
+All other unknown global-state refs remain warnings. UUID-shaped string values, UUIDs inside arrays, partial path matches, unexpected heartbeat shapes, installation ids, and root-scan candidates are not deleted. Confirmed delete refuses an ID that matches only ineligible unknown global-state refs.
+
+Use the existing explicit-session delete flow:
+
+```bash
+codex-sessions delete <session-id> --root <path-to-codex-root>
+codex-sessions delete <session-id> --root <path-to-codex-root> --yes
+codex-sessions delete <session-id> --root <path-to-codex-root> --trash --yes
+```
+
+MCP follows the same rule: call `preview_delete_sessions`, inspect the exact paths, then call `delete_sessions` with `confirm=true` only when the preview matches. The confirmed command rescans the root and refuses if the global-state file changes again before its write, cannot be parsed, or cannot be protected by rollback.
 
 Use `family` before deleting a parent or child session. Parent and child sessions are independent sessions with their own IDs. Deleting a parent does not delete children, and deleting a child does not delete its parent. Delete previews and audits warn when relationship records point at missing sessions or missing file/index surfaces. To process multiple related sessions, put every intended session ID into the preview/delete command explicitly. The tool never recurses into parent or child sessions automatically.
 

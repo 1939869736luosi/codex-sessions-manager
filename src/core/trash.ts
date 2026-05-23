@@ -4,7 +4,7 @@ import { access, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs
 import { constants as fsConstants } from "node:fs";
 
 import { deleteSessions, buildDeletePreview } from "./delete.js";
-import { restoreGlobalStateReferences } from "./global-state.js";
+import { findExistingExactKeyGlobalStatePaths, restoreGlobalStateReferences } from "./global-state.js";
 import { buildJsonl, safeJsonParse, splitJsonLines } from "./jsonl.js";
 import { resolveSessions } from "./query.js";
 import { scanCodexRoot } from "./scan.js";
@@ -15,7 +15,9 @@ import {
   restoreSqliteRecords,
   sumSqliteDeletionCounts,
 } from "./sqlite.js";
+import { DeleteSessionsError } from "./types.js";
 import type {
+  GlobalStateReference,
   HistoryRecord,
   ScanResult,
   SessionEntry,
@@ -194,6 +196,50 @@ function validateTrashBundle(bundle: TrashBundle): void {
         throw new Error(`回收站 manifest 缺少 shell snapshot 数据：${relativePath}`);
       }
     }
+  }
+
+  assertExactKeyRefsCoveredByBundle(bundle);
+}
+
+function isPromotedExactKeyRef(ref: GlobalStateReference): boolean {
+  return Boolean(ref.ruleId && ref.safetyClass === "promoted-exact-key");
+}
+
+function assertExactKeyRefsCoveredByBundle(bundle: TrashBundle): void {
+  const sessionIds = new Set(bundle.manifest.sessionIds);
+  const expectedKeys = new Set<string>();
+  const refsByKey = new Set(
+    bundle.globalStateRefs
+      .filter(isPromotedExactKeyRef)
+      .map((ref) => `${ref.sessionId}\0${ref.path}\0${ref.ruleId}`),
+  );
+
+  for (const item of bundle.manifest.preview.items) {
+    const details = item.exactKeyGlobalStateRefsDetail ?? [];
+    if (item.exactKeyGlobalStateRefs !== details.length) {
+      throw new Error(`回收站 manifest 缺少 exact-key preview 明细：${item.sessionId}`);
+    }
+
+    for (const detail of details) {
+      const key = `${detail.sessionId}\0${detail.path}\0${detail.ruleId}`;
+      expectedKeys.add(key);
+      if (!refsByKey.has(key)) {
+        throw new Error(`回收站 manifest 缺少 exact-key global-state 数据：${detail.path}`);
+      }
+    }
+  }
+
+  const seenRefs = new Set<string>();
+  for (const ref of bundle.globalStateRefs.filter(isPromotedExactKeyRef)) {
+    const key = `${ref.sessionId}\0${ref.path}\0${ref.ruleId}`;
+    if (!sessionIds.has(ref.sessionId) || !expectedKeys.has(key)) {
+      throw new Error(`回收站 manifest 包含未预览的 exact-key global-state 数据：${ref.path}`);
+    }
+
+    if (seenRefs.has(key)) {
+      throw new Error(`回收站 manifest 包含重复 exact-key global-state 数据：${ref.path}`);
+    }
+    seenRefs.add(key);
   }
 }
 
@@ -490,7 +536,10 @@ async function buildTrashBundle(scan: ScanResult, sessions: SessionEntry[], tras
     ).flat(),
     sessionIndexRecords: sessions.flatMap((session) => scan.sessionIndex.matchingRecordsById.get(session.id) ?? []),
     historyRecords: sessions.flatMap((session) => scan.history.matchingRecordsById.get(session.id) ?? []),
-    globalStateRefs: sessions.flatMap((session) => scan.globalState.refsById.get(session.id) ?? []),
+    globalStateRefs: sessions.flatMap((session) => [
+      ...(scan.globalState.refsById.get(session.id) ?? []),
+      ...(scan.globalState.exactKeyRefsById.get(session.id) ?? []),
+    ]),
     sqlite: {
       state: {
         threads: sqlite.flatMap((bundle) => bundle.state.threads),
@@ -522,6 +571,7 @@ function addConflict(
 
 async function assertNoRestoreConflicts(scan: ScanResult, bundle: TrashBundle): Promise<void> {
   const conflictsBySession = new Map<string, Set<string>>();
+  const exactKeyRefs = bundle.globalStateRefs.filter(isPromotedExactKeyRef);
 
   for (const file of bundle.sessionFiles) {
     if (await pathExists(safeRootPath(scan.root.rootPath, file.path))) {
@@ -547,11 +597,21 @@ async function assertNoRestoreConflicts(scan: ScanResult, bundle: TrashBundle): 
     if ((scan.globalState.refsById.get(sessionId)?.length ?? 0) > 0) {
       addConflict(conflictsBySession, sessionId, "global state");
     }
+
+    if ((scan.globalState.exactKeyRefsById.get(sessionId)?.length ?? 0) > 0) {
+      addConflict(conflictsBySession, sessionId, "global state exact-key");
+    }
   }
 
   if (scan.globalState.warning && bundle.globalStateRefs.length > 0) {
     for (const sessionId of bundle.manifest.sessionIds) {
       addConflict(conflictsBySession, sessionId, "global state unreadable");
+    }
+  }
+
+  if (!scan.globalState.warning && scan.globalState.text && exactKeyRefs.length > 0) {
+    for (const ref of findExistingExactKeyGlobalStatePaths(scan.globalState.text, exactKeyRefs)) {
+      addConflict(conflictsBySession, ref.sessionId, "global state exact-key");
     }
   }
 
@@ -635,8 +695,21 @@ export async function moveSessionsToTrash(scan: ScanResult, sessions: SessionEnt
     deletion = await deleteSessions(scan, sessions);
   } catch (error) {
     if (trashEntryCommitted) {
+      const errorMessage = formatError(error);
+      if (error instanceof DeleteSessionsError && (!error.liveDeleteStarted || error.liveDeleteRolledBack)) {
+        try {
+          await rm(trashDir, { recursive: true, force: true });
+        } catch (cleanupError) {
+          throw new Error(
+            `移入回收站失败：live 删除已回滚，但回收站记录清理失败：${trashId}。清理错误：${formatError(cleanupError)}。原始错误：${errorMessage}`,
+          );
+        }
+
+        throw new Error(`移入回收站失败：live 删除已回滚，回收站记录已清理：${trashId}。原始错误：${errorMessage}`);
+      }
+
       throw new Error(
-        `移入回收站失败：live 删除失败，但回收站记录已保留：${trashId}。原始错误：${formatError(error)}`,
+        `移入回收站失败：live 删除失败，但回收站记录已保留：${trashId}。原始错误：${errorMessage}`,
       );
     }
 
