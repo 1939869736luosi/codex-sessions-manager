@@ -50,19 +50,19 @@ Prefer MCP tools when the `codex-sessions` MCP server is available:
 - `preview_root_delete` (read-only root delete preview; never deletes and never recommends deletion)
 - `export_session_backup`
 - `preview_delete_sessions`
-- `delete_sessions`
+- `delete_sessions` (requires a separate preview, then `confirm=true`; pass `trash=true` for recoverable deletion)
 - `list_trash`
-- `restore_sessions`
-- `purge_trash`
-- `cleanup_session_indexes`
-- `cleanup_stale_indexes`
+- `restore_sessions` (requires `confirm=true`)
+- `purge_trash` (requires `confirm=true`)
+- `cleanup_session_indexes` (requires `confirm=true` to rewrite indexes)
+- `cleanup_stale_indexes` (requires `confirm=true` to rewrite indexes)
 - `verify_sessions`
 
 Use CLI only when MCP is unavailable or blocked.
 
 For Codex `/side` conversations, treat the parent thread and side child thread as separate sessions. Do not assume parent operations include side child transcripts. If the user wants both handled, identify the child session IDs first and include them in the preview or confirmed operation. If family output reports a broken relationship warning, tell the user the relationship record exists but the related session may be missing files, index rows, or full session records.
 
-Use `get_session_family` first when the request mentions parent, child, `/side`, `/fork`, subagent, or family impact. It is read-only and does not select related sessions for write operations. It supports `mode: full | children | parents | subagents | impact` and optional `sourceKind`. Human CLI output uses short `source` labels unless `--full` is used; use JSON/MCP output when the full raw `source` field is needed.
+Use `get_session_family` first when the request mentions parent, child, `/side`, `/fork`, subagent, or family impact. It is read-only and does not select related sessions for write operations. It supports `mode: full | children | parents | subagents | impact` and optional `sourceKind`. `impact` is not deletion advice and not a delete preview. Human CLI output is compact by default; use `--full`, JSON, or MCP output when the full raw `source` field is needed.
 
 For session titles, treat `displayTitle` as the default user-facing title. It prefers `session_index.jsonl.thread_name`, which is usually closest to Codex UI search. When showing one session in detail, include `indexTitle`, `sqliteTitle`, `firstUserMessage`, `titleSource`, `titleMismatch`, and `titleCandidates` if the tool returns them. Human-readable CLI output may shorten long title fields and timeline previews; use JSON/MCP output for full values.
 
@@ -105,6 +105,8 @@ codex-sessions cleanup-stale --root <path-to-codex-root>
 codex-sessions cleanup-stale --root <path-to-codex-root> --yes
 codex-sessions verify <session-id> --root <path-to-codex-root>
 ```
+
+Use `--yes` examples only after a separate preview or match listing has been inspected and the user has explicitly confirmed the write.
 
 When working from a cloned repository instead, run commands from:
 
@@ -150,24 +152,26 @@ node dist/cli/index.js cleanup-stale --root <path-to-codex-root> --yes
 node dist/cli/index.js verify <session-id> --root <path-to-codex-root>
 ```
 
+The `--yes` examples above are execution examples, not first-step recommendations. Run the preview-only form first for delete and cleanup, then confirm only after reviewing the result.
+
 ## Safety Rules
 
 - Run `inspect_root` or CLI `doctor` before delete, restore, purge, or cleanup when Codex storage may have changed.
 - `get_session_family` and CLI `family` are read-only. They do not delete, export, restore, or select related sessions automatically.
 - `get_session_family` modes `full`, `children`, `parents`, `subagents`, and `impact` are read-only. CLI `family --children`, `--parents`, `--subagents`, `--impact`, and `--full` are also read-only.
-- `family --impact` and MCP `mode=impact` show relationship impact only. Do not present them as deletion advice, do not generate `--yes`, and do not change delete behavior.
+- `family --impact` and MCP `mode=impact` show relationship impact only. Do not present them as deletion advice or a delete preview, do not generate `--yes`, and do not change delete behavior.
 - `thread_spawn_edges` is a generic parent/child edge table, not a subagent-only table. `/side`, `/fork`, subagent, MCP, exec, VS Code, CLI, and unknown sessions may all appear as child threads.
-- Classify child type from the child session's own `sourceKind`, raw `source`, `thread_source`, `agent_role`, `agent_nickname`, and `agent_path`.
+- Classify child type from the child session's own `sourceKind`, raw `source`, `thread_source`, `agent_role`, `agent_nickname`, and `agent_path`. A child can have multiple labels, such as both `subagent` and `side/fork`; use `childTypeLabels` and `relationshipLabels` when available.
 - Parent deletion does not automatically process children. Child deletion does not automatically process parents. Real deletion still requires a separate preview and explicit confirmation.
 - `audit_session` and CLI `audit` are read-only. They report local residue after official UI delete/archive actions and must not rewrite files, SQLite, shell snapshots, or global state.
 - `audit_root` and CLI `audit-root` are read-only. They scan for likely residue candidates across a Codex root and must not delete, rewrite, or select parent/child sessions automatically.
 - `audit_root` / `audit-root` status and source filters only narrow displayed candidates. Multiple statuses or multiple sources use OR; combining status and source uses AND. A matching candidate is not a deletion list entry or deletion recommendation; it still needs per-session audit or read-only preview before any cleanup decision.
 - `preview_root_delete` and CLI `preview-root` are read-only. They reuse `audit-root` filters to build a batch delete preview, but do not delete, do not rewrite JSONL, SQLite, shell snapshots, or global state, do not accept `--yes`, do not recommend deleting any session, and do not recursively select parent, child, or family sessions.
-- A `preview-root` result is not a deletion recommendation. Actual deletion requires the user to run `delete ... --yes` explicitly.
+- A `preview-root` result is not a deletion recommendation. Actual deletion requires a separate explicit-ID delete preview and then user-confirmed `delete ... --yes`.
 - Delete previews warn when selected sessions have unselected parent, child, or family sessions, and when relationship edges point at missing sessions or missing file/index surfaces.
 - `delete` without `--yes` is preview-only.
 - Permanent delete remains available, but prefer recoverable deletion with `--trash --yes`.
-- MCP `delete_sessions` requires `confirm=true` to execute. Use `trash=true` for recoverable deletion.
+- MCP `delete_sessions` requires a separate preview, then `confirm=true` to execute. Use `trash=true` for recoverable deletion.
 - `restore` and `purge` require `--yes` in CLI mode.
 - MCP `restore_sessions` and `purge_trash` require `confirm=true`.
 - Restore refuses live session conflicts and SQLite key conflicts. There is no force overwrite mode.

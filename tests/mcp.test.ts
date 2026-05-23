@@ -210,6 +210,9 @@ describe("mcp server", () => {
           threadSource: string;
           agentRole: string;
           agentNickname: string;
+          childType: string;
+          childTypeLabels: string[];
+          relationshipLabels: string[];
           fileExists: boolean;
         }>;
         familyMembers: Array<{ sessionId: string }>;
@@ -229,6 +232,9 @@ describe("mcp server", () => {
         threadSource: "side",
         agentRole: "subagent",
         agentNickname: "helper",
+        childType: "subagent",
+        childTypeLabels: ["subagent", "side/fork"],
+        relationshipLabels: ["child", "child:subagent", "child:side/fork"],
         fileExists: true,
       });
       expect(family.familyMembers.map((node) => node.sessionId).sort()).toEqual(
@@ -273,6 +279,8 @@ describe("mcp server", () => {
           threadSource: string;
           agentRole: string;
           agentNickname: string;
+          childTypeLabels: string[];
+          relationshipLabels: string[];
           hasSessionIndex: boolean;
           hasThread: boolean;
           fileExists: boolean;
@@ -290,6 +298,8 @@ describe("mcp server", () => {
           threadSource: "side",
           agentRole: "subagent",
           agentNickname: "helper",
+          childTypeLabels: ["subagent", "side/fork"],
+          relationshipLabels: ["child", "child:subagent", "child:side/fork"],
           hasSessionIndex: true,
           hasThread: true,
           fileExists: true,
@@ -324,6 +334,8 @@ describe("mcp server", () => {
           unselectedChildIds: string[];
           missingParentIds: string[];
           missingChildIds: string[];
+          missingRelations: { missingParents: unknown[]; missingChildren: unknown[] };
+          missingSurfaces: { missingFileSessionIds: string[]; missingSessionIndexIds: string[]; missingThreadIds: string[] };
         };
       };
       expect(impactContent.mode).toBe("impact");
@@ -333,6 +345,8 @@ describe("mcp server", () => {
         unselectedChildIds: [FIXTURE_IDS.ARCHIVED_ID],
         missingParentIds: [],
         missingChildIds: [],
+        missingRelations: { missingParents: [], missingChildren: [] },
+        missingSurfaces: { missingFileSessionIds: [], missingSessionIndexIds: [], missingThreadIds: [] },
       });
     } finally {
       await client.close();

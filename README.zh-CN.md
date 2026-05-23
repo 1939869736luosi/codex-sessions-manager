@@ -55,7 +55,7 @@ codex-sessions preview-root --source global-state-unknown --limit 20
 # 预览删除（安全，不做任何修改）
 codex-sessions delete <session-id>
 
-# 删除到回收站（推荐）
+# 预览确认后，删除到回收站（推荐）
 codex-sessions delete <session-id> --trash --yes
 
 # 后悔了？恢复
@@ -122,7 +122,7 @@ codex-sessions verify <session-id>
 
 暴露 18 个工具：`inspect_root`、`list_sessions`、`summarize_sources`、`list_projects`、`get_session`、`get_session_family`、`audit_session`、`audit_root`、`preview_root_delete`、`export_session_backup`、`preview_delete_sessions`、`delete_sessions`、`list_trash`、`restore_sessions`、`purge_trash`、`cleanup_session_indexes`、`cleanup_stale_indexes`、`verify_sessions`。
 
-`summarize_sources`、`get_session_family`、`audit_session`、`audit_root` 和 `preview_root_delete` 是只读工具，不需要确认。`get_session_family` 支持 `mode: full | children | parents | subagents | impact`，也支持可选 `sourceKind`。所有破坏性操作需要 `confirm: true`，否则只返回预览。
+`summarize_sources`、`get_session_family`、`audit_session`、`audit_root` 和 `preview_root_delete` 是只读工具，不需要确认。`get_session_family` 支持 `mode: full | children | parents | subagents | impact`，也支持可选 `sourceKind`；`impact` 只是关系上下文，不是删除建议，也不是 delete preview。所有破坏性操作需要先单独 preview，再传 `confirm: true`；不确认时，delete 和 cleanup 工具只返回预览。
 
 ## CLI 命令
 
@@ -151,7 +151,7 @@ codex-sessions cleanup-index <session-id...> [--yes]
 codex-sessions verify <session-id...> [--json]
 ```
 
-**安全第一**：所有破坏性命令需要 `--yes` 才执行，不加只看预览。
+**安全第一**：所有破坏性命令需要 `--yes` 才执行，不加只看预览。真正删除前，先对明确的 session ID 单独预览；`family`、`impact`、`audit-root` 和 `preview-root` 都不能替代删除确认。
 
 官方 Codex UI 删除或归档后，如果想知道本机还剩什么，先用 `audit`。它只读，不会改文件。它会报告原始 rollout 文件、shell snapshot、`session_index`、`history`、SQLite 记录、已知 global-state 引用、未知 global-state 引用、`thread_spawn_edges` 是否还在，也会报告 family 归属和断裂 parent/child 关系。如果仍有残留，建议命令只会给不带 `--yes` 的删除预览；只有你自己加 `--yes` 才会真的删除。
 
@@ -187,21 +187,21 @@ codex-sessions verify <session-id...> [--json]
 - `source=mcp` 表示这个 thread 的来源是 mcp，不是每一次 MCP 工具调用日志。
 - `model_provider` 这里只做显示和筛选，不修复 provider 身份，也不改写历史。
 
-如果想对 `audit-root` 选出的候选做批量删除预览，用 `preview-root`。它复用同一套 `status/source` 筛选和保守默认 `--limit 50`，汇总展示只读预览会碰到哪些位置：rollout 文件、shell snapshots、`session_index`、`history`、SQLite、已知 global-state 引用、未知 global-state 引用和 `thread_spawn_edges`。它只读，不删除，不改写 JSONL、SQLite、shell snapshot 或 global-state，不接受 `--yes`，也不会自动递归加入 parent、child 或 family session。`preview-root` 的结果不等于“这些都该删”，也不会建议删除任何 session；它只说明如果之后你明确运行 delete，会碰到什么。真正删除仍然必须单独运行 `delete ... --yes`。
+如果想对 `audit-root` 选出的候选做批量删除预览，用 `preview-root`。它复用同一套 `status/source` 筛选和保守默认 `--limit 50`，汇总展示只读预览会碰到哪些位置：rollout 文件、shell snapshots、`session_index`、`history`、SQLite、已知 global-state 引用、未知 global-state 引用和 `thread_spawn_edges`。它只读，不删除，不改写 JSONL、SQLite、shell snapshot 或 global-state，不接受 `--yes`，也不会自动递归加入 parent、child 或 family session。`preview-root` 的结果不等于“这些都该删”，也不会建议删除任何 session；它只说明如果之后你明确运行 delete，会碰到什么。真正删除仍然必须先跑单独的明确 ID `delete` 预览，再单独运行 `delete ... --yes`。
 
 删除 parent 或 child 前先看 `family`。parent 和 child 是不同 session，各自有自己的 ID。删除 parent 不等于删除 child，删除 child 也不等于删除 parent。删除预览和 audit 会提示关系记录指向缺失 session，或相关 session 缺文件/索引。要一起处理多个相关 session，需要把每个 session ID 明确放进预览或删除命令。工具不会自动递归处理 parent 或 child。
 
-`thread_spawn_edges` 是通用 parent/child 关系边，不是 subagent 专用表。`/side`、`/fork`、subagent、MCP、exec、VS Code、CLI 和 unknown 都可能表现为 child thread。判断 child 类型时，看 child 自己的 `sourceKind`、raw `source`、`thread_source`、`agent_role`、`agent_nickname` 和 `agent_path`。
+`thread_spawn_edges` 是通用 parent/child 关系边，不是 subagent 专用表。`/side`、`/fork`、subagent、MCP、exec、VS Code、CLI 和 unknown 都可能表现为 child thread。判断 child 类型时，看 child 自己的 `sourceKind`、raw `source`、`thread_source`、`agent_role`、`agent_nickname` 和 `agent_path`。一个 child 可以同时带多个标签，比如同时是 `subagent` 和 `side/fork`；JSON/MCP 会返回 `childTypeLabels` 和 `relationshipLabels`，避免把混合身份压成单一类型。
 
 `family` 的这些视图全部只读：
 
-- `family <id> --children` 只显示直接 children，包含 `sourceKind`、edge 状态、child 类型、标题、更新时间、agent 信息，以及 file/index/thread 是否存在。
+- `family <id> --children` 只显示直接 children，包含 `sourceKind`、edge 状态、child 类型标签、标题、更新时间、agent 信息，以及 file/index/thread 是否存在。
 - `family <id> --parents` 只显示直接 parents，保留同样的来源和 edge 信息。
 - `family <id> --subagents` 显示 family 里 `sourceKind=subagent` 或带 agent 信息的成员。
-- `family <id> --impact` 只读显示如果之后只处理当前 session，哪些 parent、child、family member 没被选中，以及 missing parent/child、缺 file/index/thread 等风险。它不删除，不建议删除，也不会生成 `--yes`。
-- `family <id> --full` 在人类输出里显示完整 raw `source` 和完整标题。JSON 输出始终保留完整字段。
+- `family <id> --impact` 只读显示如果之后只处理当前 session，哪些 parent、child、family member 没被选中，以及 missing parent/child、缺 file/index/thread 等风险。输出会分组展示 `selected`、`unselected parents`、`unselected children`、`unselected family members`、`missing relations` 和 `missing surfaces`。它不删除，不建议删除，也不会生成 `--yes`。
+- `family <id> --full` 在块状输出里显示完整 raw `source` 和完整标题，避免用一行宽表撑爆屏幕。JSON 输出和 MCP 始终保留完整字段。
 
-可以给 family 视图加 `--source-kind subagent|mcp|vscode|cli|exec|unknown`，只看匹配成员。需要完整原始字段时，用 `family --json` 或 MCP `get_session_family`。真正删除仍然必须单独 preview，并显式确认。
+可以给 family 视图加 `--source-kind subagent|mcp|vscode|cli|exec|unknown`，只看匹配成员。默认人类输出会保持紧凑，长文本可能缩短；需要完整原始字段时，用 `--full`、`family --json` 或 MCP `get_session_family`。真正删除仍然必须单独跑明确 ID 预览，并显式确认。
 
 ## 标题怎么看
 

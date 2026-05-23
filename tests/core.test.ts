@@ -245,9 +245,14 @@ describe("core integration", () => {
       edgeStatus: "open",
       sourceKind: "subagent",
       childCategory: "subagent",
+      childType: "subagent",
+      childTypeLabels: ["subagent", "side/fork"],
+      relationshipLabels: ["child", "child:subagent", "child:side/fork"],
       hasSessionIndex: true,
       hasThread: true,
     });
+    expect(family.childrenByCategory.subagent.map((node) => node.sessionId)).toEqual([FIXTURE_IDS.ARCHIVED_ID]);
+    expect(family.childrenByCategory["side/fork"].map((node) => node.sessionId)).toEqual([FIXTURE_IDS.ARCHIVED_ID]);
   });
 
   it("queries family modes and classifies direct children from child metadata", async () => {
@@ -331,15 +336,21 @@ describe("core integration", () => {
     expect(childrenQuery.nodes.every((node) => node.relationship === "child")).toBe(true);
     expect(childrenQuery.nodes).toHaveLength(7);
     expect(childrenQuery.childrenByCategory.subagent.map((node) => node.sessionId)).toEqual([FIXTURE_IDS.ARCHIVED_ID]);
+    expect(childrenQuery.childrenByCategory["side/fork"].map((node) => node.sessionId).sort()).toEqual(
+      [FIXTURE_IDS.ARCHIVED_ID, childRows[0].id].sort(),
+    );
     for (const row of childRows) {
       expect(byId.get(row.id)).toMatchObject({
         childCategory: row.expectedCategory,
+        childType: row.expectedCategory,
         sourceKind: row.expectedSourceKind,
         hasThread: true,
         hasSessionIndex: false,
         fileExists: false,
       });
     }
+    expect(byId.get(childRows[0].id)?.childTypeLabels).toEqual(["side/fork"]);
+    expect(byId.get(childRows[0].id)?.relationshipLabels).toEqual(["child", "child:side/fork"]);
     expect(byId.get(childRows[0].id)?.edgeStatus).toBe("closed");
     expect(byId.get(childRows[5].id)?.edgeStatus).toBe("other");
 
@@ -516,6 +527,25 @@ describe("core integration", () => {
       missingChildIds: [missingChildId],
       missingFileSessionIds: [missingParentId, missingChildId],
       missingSessionIndexIds: [missingParentId, missingChildId],
+      missingRelations: {
+        missingParents: [
+          expect.objectContaining({
+            parentThreadId: missingParentId,
+            childThreadId: FIXTURE_IDS.ACTIVE_ID,
+          }),
+        ],
+        missingChildren: [
+          expect.objectContaining({
+            parentThreadId: FIXTURE_IDS.ACTIVE_ID,
+            childThreadId: missingChildId,
+          }),
+        ],
+      },
+      missingSurfaces: {
+        missingFileSessionIds: [missingParentId, missingChildId],
+        missingSessionIndexIds: [missingParentId, missingChildId],
+        missingThreadIds: [missingParentId, missingChildId],
+      },
     });
     expect(impactQuery.impact?.missingSurfaceWarnings).toEqual(
       expect.arrayContaining([

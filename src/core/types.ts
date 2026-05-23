@@ -231,6 +231,17 @@ export type SessionFamilyChildCategory = "subagent" | "side/fork" | "mcp" | "exe
 
 export type SessionFamilyMode = "full" | "children" | "parents" | "subagents" | "impact";
 
+export interface SessionFamilyMissingRelationGroups {
+  missingParents: SessionFamilyBrokenRelation[];
+  missingChildren: SessionFamilyBrokenRelation[];
+}
+
+export interface SessionFamilyMissingSurfaceGroups {
+  missingFileSessionIds: string[];
+  missingSessionIndexIds: string[];
+  missingThreadIds: string[];
+}
+
 export interface SessionFamilyNode {
   sessionId: string;
   displayTitle: string;
@@ -256,6 +267,9 @@ export interface SessionFamilyNode {
   agentNickname: string | null;
   agentPath: string | null;
   childCategory: SessionFamilyChildCategory;
+  childType: SessionFamilyChildCategory;
+  childTypeLabels: SessionFamilyChildCategory[];
+  relationshipLabels: string[];
   parentIds: string[];
   childIds: string[];
   edge: ThreadSpawnEdgeRow | null;
@@ -285,6 +299,8 @@ export interface SessionFamily {
   childrenByCategory: Record<SessionFamilyChildCategory, SessionFamilyNode[]>;
   edges: ThreadSpawnEdgeRow[];
   brokenRelations: SessionFamilyBrokenRelation[];
+  missingRelations: SessionFamilyMissingRelationGroups;
+  missingSurfaces: SessionFamilyMissingSurfaceGroups;
   warnings: string[];
 }
 
@@ -321,6 +337,8 @@ export interface SessionFamilyImpact {
   missingSessionIndexIds: string[];
   missingThreadIds: string[];
   missingSurfaceWarnings: SessionFamilyMissingSurfaceWarning[];
+  missingRelations: SessionFamilyMissingRelationGroups;
+  missingSurfaces: SessionFamilyMissingSurfaceGroups;
   brokenRelations: SessionFamilyBrokenRelation[];
   warnings: string[];
 }

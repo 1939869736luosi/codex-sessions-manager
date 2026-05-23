@@ -182,9 +182,11 @@ describe("cli", () => {
     const impactExit = await runCli(["family", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--impact"], impact.io);
     const impactOutput = impact.stdout.join("\n");
     expect(impactExit).toBe(0);
-    expect(impactOutput).toContain("family impact（只读，未执行删除）");
-    expect(impactOutput).toContain(`未选中的 child: ${FIXTURE_IDS.ARCHIVED_ID}`);
-    expect(impactOutput).not.toContain("--yes");
+    expect(impactOutput).toContain("family impact（只读，未执行删除，不是删除建议，不生成 --yes）");
+    expect(impactOutput).toContain("unselected children:");
+    expect(impactOutput).toContain(FIXTURE_IDS.ARCHIVED_ID);
+    expect(impactOutput).toContain("missing relations:");
+    expect(impactOutput).toContain("missing surfaces:");
   });
 
   it("filters family modes by sourceKind and keeps complete json fields", async () => {
@@ -260,6 +262,63 @@ describe("cli", () => {
       fileExists: true,
     });
     expect(result.family.current.sessionId).toBe(FIXTURE_IDS.ACTIVE_ID);
+  });
+
+  it("keeps default family output compact and expands full fields as blocks", async () => {
+    const longTitle = `Long family title start ${"x".repeat(240)} long family title end`;
+    const longSource = JSON.stringify({
+      subagent: {
+        thread_spawn: {
+          parent_thread_id: FIXTURE_IDS.ACTIVE_ID,
+          agent_nickname: "helper",
+          agent_role: "explorer",
+        },
+      },
+      payload: "y".repeat(240),
+    });
+    const db = new Database(fixture.paths.sqlite);
+    db.prepare("update threads set title = ?, source = ?, thread_source = ?, agent_role = ?, agent_nickname = ? where id = ?").run(
+      longTitle,
+      longSource,
+      "side",
+      "explorer",
+      "helper",
+      FIXTURE_IDS.ARCHIVED_ID,
+    );
+    db.close();
+    await writeFile(
+      fixture.paths.sessionIndex,
+      `${[
+        { id: FIXTURE_IDS.ACTIVE_ID, thread_name: "Active thread", updated_at: "2026-04-03T04:01:00.000Z" },
+        { id: FIXTURE_IDS.ARCHIVED_ID, thread_name: longTitle, updated_at: "2026-04-02T03:01:00.000Z" },
+        { id: FIXTURE_IDS.STALE_ID, thread_name: "Stale only", updated_at: "2026-04-01T01:00:00.000Z" },
+      ].map((row) => JSON.stringify(row)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const compact = createIo();
+    const compactExit = await runCli(["family", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--children"], compact.io);
+    const compactOutput = compact.stdout.join("\n");
+
+    expect(compactExit).toBe(0);
+    expect(compactOutput).toContain("显示模式: 默认短输出");
+    expect(compactOutput).toContain("完整内容用 --full、--json 或 MCP get_session_family 查看");
+    expect(compactOutput).toContain("childTypeLabels: subagent, side/fork");
+    expect(compactOutput).not.toContain("thread_spawn");
+    expect(compactOutput).not.toContain("parent_thread_id");
+    expect(compactOutput).not.toContain("long family title end");
+    expect(compactOutput).not.toContain("y".repeat(120));
+
+    const full = createIo();
+    const fullExit = await runCli(["family", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--children", "--full"], full.io);
+    const fullOutput = full.stdout.join("\n");
+
+    expect(fullExit).toBe(0);
+    expect(fullOutput).toContain("显示模式: --full");
+    expect(fullOutput).toContain("raw source:");
+    expect(fullOutput).toContain("thread_spawn");
+    expect(fullOutput).toContain("parent_thread_id");
+    expect(fullOutput).toContain("long family title end");
   });
 
   it("truncates long title metadata in human-readable show output", async () => {

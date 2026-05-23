@@ -111,8 +111,9 @@ Usage:
 Notes:
   - 默认根目录是 ~/.codex
   - delete 未带 --yes 时只展示预览，不执行删除
+  - 真正删除前应先单独预览，再显式加 --yes；family / impact 不能替代 delete preview
   - family 只读查看 parent / child / side / fork / subagent 关系，不会自动递归处理
-  - family --impact 只读查看关系影响，不执行删除，也不生成 --yes
+  - family --impact 只读查看关系影响，不执行删除，不是删除建议，也不生成 --yes
   - audit 只读检查官方 UI 删除或归档后本地还剩哪些记录
   - audit-root 只读扫描整个 root 的疑似残留，默认 limit=50
   - audit-root 多个 --status 或 --source 为 OR；同时使用 status 和 source 时为 AND

@@ -217,12 +217,12 @@ export function createServer(): McpServer {
   server.registerTool(
     "get_session_family",
     {
-      description: "Inspect parent, child, side/fork, and related family sessions for one Codex session without modifying anything.",
+      description: "Inspect parent, child, side/fork, subagent, broken-relation, and related family sessions for one Codex session without modifying anything. The impact mode is read-only relationship context, not deletion advice and not a delete preview.",
       outputSchema: TOOL_OUTPUT_SCHEMA,
       inputSchema: z.object({
         sessionId: z.string().describe("Exact session id or unique prefix."),
         root: z.string().optional(),
-        mode: z.enum(FAMILY_MODES).optional().describe("Family view: full, children, parents, subagents, or impact."),
+        mode: z.enum(FAMILY_MODES).optional().describe("Family view: full, children, parents, subagents, or impact. impact is read-only and does not recommend or execute deletion."),
         sourceKind: sourceKindSchema.optional().describe("Optional inferred sourceKind filter for returned family nodes."),
       }),
       annotations: {
@@ -358,7 +358,7 @@ export function createServer(): McpServer {
   server.registerTool(
     "preview_delete_sessions",
     {
-      description: "Preview what would be removed by deleting one or more Codex sessions.",
+      description: "Read-only preview of what would be removed by deleting one or more explicit Codex sessions. This is the single-session or explicit-ID preview to inspect before any confirmed delete.",
       outputSchema: TOOL_OUTPUT_SCHEMA,
       inputSchema: z.object({
         sessionIds: z.array(z.string()).min(1),
@@ -380,12 +380,12 @@ export function createServer(): McpServer {
   server.registerTool(
     "delete_sessions",
     {
-      description: "Delete Codex sessions across files, JSONL indexes, and SQLite. Pass trash=true to move them to recoverable trash. Requires confirm=true; otherwise returns a preview only.",
+      description: "Delete explicit Codex sessions across files, JSONL indexes, and SQLite. Pass trash=true to move them to recoverable trash. Requires confirm=true after a separate preview; otherwise returns a preview only. This tool never recursively adds parent, child, or family sessions.",
       outputSchema: TOOL_OUTPUT_SCHEMA,
       inputSchema: z.object({
         sessionIds: z.array(z.string()).min(1),
         root: z.string().optional(),
-        confirm: z.boolean().optional().describe("Must be true to execute deletion. Omit or false to return preview only."),
+        confirm: z.boolean().optional().describe("Must be true to execute deletion after you have inspected a separate preview. Omit or false to return preview only."),
         trash: z.boolean().optional().describe("Move sessions to recoverable trash before deleting live surfaces. Defaults to false for permanent delete compatibility."),
       }),
       annotations: {

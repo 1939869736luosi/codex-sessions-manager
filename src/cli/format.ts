@@ -319,58 +319,105 @@ function existsLabel(value: boolean, count?: number): string {
   return count === undefined ? "yes" : `yes(${count})`;
 }
 
+const FAMILY_TEXT_LIMIT = 80;
+
+function trimFamilyText(value: string | null, limit = FAMILY_TEXT_LIMIT): string {
+  const normalized = value?.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "-";
+  }
+  if (normalized.length <= limit) {
+    return normalized;
+  }
+  return `${normalized.slice(0, limit - 3)}...`;
+}
+
+function formatFullBlock(label: string, value: string | null): string {
+  if (!value) {
+    return `  ${label}: -`;
+  }
+
+  return [
+    `  ${label}:`,
+    ...value.split(/\r?\n/).map((line) => `    ${line}`),
+  ].join("\n");
+}
+
+function formatIdLines(ids: string[]): string[] {
+  return ids.length ? ids.map((id) => `- ${id}`) : ["- 无"];
+}
+
+function formatRelationLine(relation: { parentThreadId: string; childThreadId: string; status: string | null }): string {
+  return `parent=${relation.parentThreadId}, child=${relation.childThreadId}, status=${relation.status ?? "-"}`;
+}
+
+function formatMissingRelationGroups(
+  groups: SessionFamilyImpact["missingRelations"],
+  allBrokenRelations: SessionFamilyImpact["brokenRelations"],
+): string[] {
+  const otherBrokenRelations = allBrokenRelations.filter(
+    (relation) => !relation.missingParentSession && !relation.missingChildSession,
+  );
+
+  return [
+    "missing parent:",
+    ...formatIdLines(groups.missingParents.map(formatRelationLine)),
+    "missing child:",
+    ...formatIdLines(groups.missingChildren.map(formatRelationLine)),
+    ...(otherBrokenRelations.length ? ["other broken relations:", ...otherBrokenRelations.map(formatRelationLine)] : []),
+  ];
+}
+
+function formatMissingSurfaceGroups(groups: SessionFamilyImpact["missingSurfaces"]): string[] {
+  return [
+    "missing file:",
+    ...formatIdLines(groups.missingFileSessionIds),
+    "missing session_index:",
+    ...formatIdLines(groups.missingSessionIndexIds),
+    "missing thread:",
+    ...formatIdLines(groups.missingThreadIds),
+  ];
+}
+
 function formatFamilyNodes(nodes: SessionFamilyNode[], options: { full?: boolean } = {}): string {
   if (nodes.length === 0) {
     return "无";
   }
 
-  const sourceValue = (node: SessionFamilyNode) =>
-    options.full ? (node.source?.replace(/\s+/g, " ").trim() || "-") : node.sourceLabel;
-  const titleValue = (node: SessionFamilyNode) => options.full ? node.displayTitle : trimTitle(node.displayTitle);
+  return nodes.map((node) => {
+    const commonLines = [
+      `  id: ${node.sessionId}`,
+      `  relationship: ${node.relationship}; labels: ${node.relationshipLabels.join(", ")}`,
+      `  edge: ${node.relationshipStatus ?? "-"}; edgeStatus: ${node.edgeStatus}; updated: ${formatDate(node.updatedAt)}; archived: ${node.archived ? "yes" : "no"}`,
+      `  sourceKind: ${node.sourceKind}; childType: ${node.childType}; childTypeLabels: ${node.childTypeLabels.join(", ")}`,
+      `  agent_role: ${trimFamilyText(node.agentRole)}; agent_nickname: ${trimFamilyText(node.agentNickname)}; agent_path: ${trimFamilyText(node.agentPath)}`,
+      `  surfaces: file=${existsLabel(node.fileExists, node.fileCount)}; index=${existsLabel(node.hasSessionIndex, node.sessionIndexCount)}; history=${existsLabel(node.hasHistory, node.historyCount)}; thread=${existsLabel(node.hasThread)}`,
+      `  parentIds: ${node.parentIds.join(", ") || "-"}; childIds: ${node.childIds.join(", ") || "-"}`,
+    ];
 
-  return printTable([
-    [
-      "关系",
-      "edge",
-      "edgeStatus",
-      "archived",
-      "updated",
-      "file",
-      "index",
-      "thread",
-      "sourceKind",
-      "childType",
-      "source",
-      "thread_source",
-      "agent_role",
-      "agent_nickname",
-      "ID",
-      "标题",
-    ],
-    ...nodes.map((node) => [
-      node.relationship,
-      node.relationshipStatus ?? "-",
-      node.edgeStatus,
-      node.archived ? "yes" : "no",
-      formatDate(node.updatedAt),
-      existsLabel(node.fileExists, node.fileCount),
-      existsLabel(node.hasSessionIndex, node.sessionIndexCount),
-      existsLabel(node.hasThread),
-      node.sourceKind,
-      node.childCategory,
-      sourceValue(node),
-      trimDetailText(node.threadSource),
-      trimDetailText(node.agentRole),
-      trimDetailText(node.agentNickname),
-      node.sessionId,
-      titleValue(node),
-    ]),
-  ]);
+    if (options.full) {
+      return [
+        `- ${node.sessionId}`,
+        ...commonLines,
+        formatFullBlock("标题", node.displayTitle),
+        formatFullBlock("raw source", node.source),
+        formatFullBlock("thread_source", node.threadSource),
+      ].join("\n");
+    }
+
+    return [
+      `- ${trimTitle(node.displayTitle)}`,
+      ...commonLines,
+      `  source: ${trimFamilyText(node.sourceLabel)}; thread_source: ${trimFamilyText(node.threadSource)}`,
+    ].join("\n");
+  }).join("\n");
 }
 
 function formatChildrenByCategory(nodes: SessionFamilyNode[]): string[] {
   const counts = nodes.reduce<Record<string, number>>((result, node) => {
-    result[node.childCategory] = (result[node.childCategory] ?? 0) + 1;
+    for (const label of node.childTypeLabels) {
+      result[label] = (result[label] ?? 0) + 1;
+    }
     return result;
   }, {});
   const lines = Object.entries(counts)
@@ -395,17 +442,26 @@ function formatFamilyImpact(impact: SessionFamilyImpact): string {
   const warningLines = impact.warnings.length ? ["", "断裂关系警告:", ...impact.warnings.map((warning) => `- ${warning}`)] : [];
 
   return [
-    "family impact（只读，未执行删除）",
+    "family impact（只读，未执行删除，不是删除建议，不生成 --yes）",
     `目标会话: ${impact.targetSessionId}`,
-    `当前选择: ${impact.selectedSessionIds.join(", ")}`,
-    `未选中的 parent: ${impact.unselectedParentIds.join(", ") || "-"}`,
-    `未选中的 child: ${impact.unselectedChildIds.join(", ") || "-"}`,
-    `未选中的 family member: ${impact.unselectedFamilyMemberIds.join(", ") || "-"}`,
-    `missing parent: ${impact.missingParentIds.join(", ") || "-"}`,
-    `missing child: ${impact.missingChildIds.join(", ") || "-"}`,
-    `缺 file: ${impact.missingFileSessionIds.join(", ") || "-"}`,
-    `缺 session_index: ${impact.missingSessionIndexIds.join(", ") || "-"}`,
-    `缺 thread: ${impact.missingThreadIds.join(", ") || "-"}`,
+    "",
+    "selected（当前 session）:",
+    ...formatIdLines(impact.selectedSessionIds),
+    "",
+    "unselected parents:",
+    ...formatIdLines(impact.unselectedParentIds),
+    "",
+    "unselected children:",
+    ...formatIdLines(impact.unselectedChildIds),
+    "",
+    "unselected family members:",
+    ...formatIdLines(impact.unselectedFamilyMemberIds),
+    "",
+    "missing relations:",
+    ...formatMissingRelationGroups(impact.missingRelations, impact.brokenRelations),
+    "",
+    "missing surfaces:",
+    ...formatMissingSurfaceGroups(impact.missingSurfaces),
     "",
     "缺失明细:",
     missingSurfaceRows,
@@ -417,16 +473,26 @@ export function formatFamily(family: SessionFamily, options: { full?: boolean } 
   const parentIds = family.parents.map((node) => node.sessionId);
   const childIds = family.directChildren.map((node) => node.sessionId);
   const warningLines = family.warnings.length ? ["", "警告:", ...family.warnings.map((warning) => `- ${warning}`)] : [];
+  const detailHint = options.full
+    ? "显示模式: --full，完整标题和完整 raw source 已展开；JSON/MCP 仍保留完整字段。"
+    : "显示模式: 默认短输出，长字段会截断；完整内容用 --full、--json 或 MCP get_session_family 查看。";
 
   return [
     `当前会话: ${family.current.sessionId}`,
-    `标题: ${trimDetailText(family.current.displayTitle)}`,
+    `标题: ${options.full ? family.current.displayTitle : trimFamilyText(family.current.displayTitle)}`,
     `root: ${family.root.sessionId}`,
     `parent: ${parentIds.length ? parentIds.join(", ") : "-"}`,
     `children: ${childIds.length ? childIds.join(", ") : "-"}`,
     `family members: ${family.familyMembers.length}`,
+    detailHint,
     "",
     ...formatChildrenByCategory(family.directChildren),
+    "",
+    "断裂关系:",
+    ...formatMissingRelationGroups(family.missingRelations, family.brokenRelations),
+    "",
+    "缺失位置:",
+    ...formatMissingSurfaceGroups(family.missingSurfaces),
     "",
     "当前会话信息:",
     formatFamilyNodes([family.current], options),
@@ -458,6 +524,9 @@ export function formatFamily(family: SessionFamily, options: { full?: boolean } 
 export function formatFamilyQuery(query: SessionFamilyQuery, options: { full?: boolean } = {}): string {
   const filterLine = query.sourceKinds.length ? `sourceKind filter: ${query.sourceKinds.join(", ")}` : "sourceKind filter: -";
   const warningLines = query.family.warnings.length ? ["", "警告:", ...query.family.warnings.map((warning) => `- ${warning}`)] : [];
+  const detailHint = options.full
+    ? "显示模式: --full，完整标题和完整 raw source 已展开；JSON/MCP 仍保留完整字段。"
+    : "显示模式: 默认短输出，长字段会截断；完整内容用 --full、--json 或 MCP get_session_family 查看。";
 
   if (query.mode === "impact") {
     return formatFamilyImpact(query.impact as SessionFamilyImpact);
@@ -467,11 +536,18 @@ export function formatFamilyQuery(query: SessionFamilyQuery, options: { full?: b
     if (query.sourceKinds.length > 0) {
       return [
         `当前会话: ${query.family.current.sessionId}`,
-        `标题: ${trimDetailText(query.family.current.displayTitle)}`,
+        `标题: ${options.full ? query.family.current.displayTitle : trimFamilyText(query.family.current.displayTitle)}`,
         `root: ${query.family.root.sessionId}`,
         "mode: full",
         filterLine,
         `结果数: ${query.nodes.length}`,
+        detailHint,
+        "",
+        "断裂关系:",
+        ...formatMissingRelationGroups(query.family.missingRelations, query.family.brokenRelations),
+        "",
+        "缺失位置:",
+        ...formatMissingSurfaceGroups(query.family.missingSurfaces),
         "",
         "family members:",
         formatFamilyNodes(query.nodes, options),
@@ -489,14 +565,21 @@ export function formatFamilyQuery(query: SessionFamilyQuery, options: { full?: b
 
   return [
     `当前会话: ${query.family.current.sessionId}`,
-    `标题: ${trimDetailText(query.family.current.displayTitle)}`,
+    `标题: ${options.full ? query.family.current.displayTitle : trimFamilyText(query.family.current.displayTitle)}`,
     `root: ${query.family.root.sessionId}`,
     `mode: ${query.mode}`,
     filterLine,
     `结果数: ${query.nodes.length}`,
+    detailHint,
     "",
     ...(query.mode === "children" ? formatChildrenByCategory(query.nodes) : []),
     query.mode === "children" ? "" : null,
+    "断裂关系:",
+    ...formatMissingRelationGroups(query.family.missingRelations, query.family.brokenRelations),
+    "",
+    "缺失位置:",
+    ...formatMissingSurfaceGroups(query.family.missingSurfaces),
+    "",
     `${titleByMode[query.mode]}:`,
     formatFamilyNodes(query.nodes, options),
     ...warningLines,

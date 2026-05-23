@@ -10,6 +10,7 @@
 - Added read-only session family inspection through CLI `family` and MCP `get_session_family`, including parent, child, `/side`, `/fork`, archive, file, status, and source metadata.
 - Added read-only family query modes for CLI `family` and MCP `get_session_family`: children, parents, subagents, full, sourceKind filtering, and impact views.
 - Added child classification for generic `thread_spawn_edges` parent/child edges, derived from each child session's `sourceKind`, raw source fields, and agent metadata.
+- Added compatibility fields for mixed child identities: `childType`, `childTypeLabels`, `relationshipLabels`, `missingRelations`, and `missingSurfaces`.
 - Added delete preview family warnings when selected sessions have unselected parent, child, or related family sessions.
 - Refined family output with compact `source` labels and broken relationship warnings for missing sessions or missing file/index surfaces.
 - Added read-only residue audit through CLI `audit` and MCP `audit_session`, covering raw rollout files, shell snapshots, session indexes, history, SQLite rows, global-state refs, thread edges, family membership, and broken parent/child relations.
@@ -20,8 +21,10 @@
 
 ### Changed
 
-- Updated public positioning now that Codex Desktop includes archived-chat delete: the project is described as a local residue audit, verification, and cleanup tool rather than a replacement for a missing built-in delete button.
-- Synchronized README, README.zh-CN, Skill, example Skill, and the installed local Skill with the new family inspection, session audit, root residue scan, and root preview guidance.
+- Updated public positioning now that Codex Desktop includes archived-chat delete: the project is described as a local residue audit, verification, and cleanup tool rather than a replacement for ordinary Desktop deletion.
+- Synchronized README, README.zh-CN, Skill, example Skill, CLI help, and MCP descriptions with the new family inspection, session audit, root residue scan, root preview, and explicit preview-before-confirmation guidance.
+- Changed human-readable family output from wide table rows to compact blocks; default output shortens long text and points to `--full`, `--json`, or MCP for full fields, while `--full` expands complete titles and raw source values as blocks.
+- Changed `family --impact` output to explicit read-only delete-precheck groups: selected session, unselected parents, unselected children, unselected family members, missing relations, and missing surfaces.
 
 ### Fixed
 

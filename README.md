@@ -55,7 +55,7 @@ codex-sessions preview-root --source global-state-unknown --limit 20
 # Preview what deletion would do (safe, no changes)
 codex-sessions delete <session-id>
 
-# Delete with recoverable trash (recommended)
+# After preview, delete with recoverable trash (recommended)
 codex-sessions delete <session-id> --trash --yes
 
 # Changed your mind? Restore it
@@ -122,7 +122,7 @@ Add to your MCP config:
 
 18 tools exposed: `inspect_root`, `list_sessions`, `summarize_sources`, `list_projects`, `get_session`, `get_session_family`, `audit_session`, `audit_root`, `preview_root_delete`, `export_session_backup`, `preview_delete_sessions`, `delete_sessions`, `list_trash`, `restore_sessions`, `purge_trash`, `cleanup_session_indexes`, `cleanup_stale_indexes`, `verify_sessions`.
 
-`summarize_sources`, `get_session_family`, `audit_session`, `audit_root`, and `preview_root_delete` are read-only and do not need confirmation. `get_session_family` accepts `mode: full | children | parents | subagents | impact` plus optional `sourceKind`. All destructive tools require `confirm: true`. Without it, you get a preview only.
+`summarize_sources`, `get_session_family`, `audit_session`, `audit_root`, and `preview_root_delete` are read-only and do not need confirmation. `get_session_family` accepts `mode: full | children | parents | subagents | impact` plus optional `sourceKind`; `impact` is relationship context, not deletion advice and not a delete preview. All destructive tools require `confirm: true` after a separate preview. Without confirmation, delete and cleanup tools return previews only.
 
 ## CLI Reference
 
@@ -151,7 +151,7 @@ codex-sessions cleanup-index <session-id...> [--yes]
 codex-sessions verify <session-id...> [--json]
 ```
 
-**Safety first**: All destructive commands require `--yes`. Without it, you only get a preview.
+**Safety first**: All destructive commands require `--yes`. Without it, you only get a preview. Run a separate preview for the exact session IDs first; `family`, `impact`, `audit-root`, and `preview-root` never count as permission to delete.
 
 Use `audit` after the official Codex UI delete/archive flow when you need a clear local residue report. It is read-only. It reports whether the raw rollout file, shell snapshot, `session_index`, `history`, SQLite records, known global-state refs, unknown global-state refs, and `thread_spawn_edges` are still present. It also reports family membership and broken parent/child links. If anything remains, the suggested next command is a preview-only `delete` command; nothing is deleted unless you add `--yes`.
 
@@ -187,21 +187,21 @@ Important source limits:
 - `source=mcp` means the thread was recorded with that source. It is not a log of every MCP tool call inside the conversation.
 - `model_provider` is only displayed and filtered here. This tool does not repair provider identity or rewrite provider history.
 
-Use `preview-root` when you want a read-only batch delete preview for the same candidates `audit-root` would select. It reuses the same status/source filters and conservative default `--limit 50`, then summarizes what a read-only preview would touch across rollout files, shell snapshots, `session_index`, `history`, SQLite, known global-state refs, unknown global-state refs, and `thread_spawn_edges`. It does not delete, does not rewrite JSONL, SQLite, shell snapshots, or global-state, does not accept `--yes`, does not recommend deleting any session, and does not recursively add parent, child, or family sessions. A `preview-root` result is not a deletion recommendation; it only shows what would be touched if you later choose explicit `delete` commands. Actual deletion still requires a separate `delete ... --yes` command.
+Use `preview-root` when you want a read-only batch delete preview for the same candidates `audit-root` would select. It reuses the same status/source filters and conservative default `--limit 50`, then summarizes what a read-only preview would touch across rollout files, shell snapshots, `session_index`, `history`, SQLite, known global-state refs, unknown global-state refs, and `thread_spawn_edges`. It does not delete, does not rewrite JSONL, SQLite, shell snapshots, or global-state, does not accept `--yes`, does not recommend deleting any session, and does not recursively add parent, child, or family sessions. A `preview-root` result is not a deletion recommendation; it only shows what would be touched if you later choose explicit `delete` commands. Actual deletion still requires a separate explicit-ID `delete` preview and then a separate `delete ... --yes` command.
 
 Use `family` before deleting a parent or child session. Parent and child sessions are independent sessions with their own IDs. Deleting a parent does not delete children, and deleting a child does not delete its parent. Delete previews and audits warn when relationship records point at missing sessions or missing file/index surfaces. To process multiple related sessions, put every intended session ID into the preview/delete command explicitly. The tool never recurses into parent or child sessions automatically.
 
-`thread_spawn_edges` is a generic parent/child relationship edge table. It is not a subagent-only table. `/side`, `/fork`, subagent, MCP, exec, VS Code, CLI, and unknown child threads can all appear as child threads. Child type is inferred from the child session itself: inferred `sourceKind`, raw `source`, `thread_source`, `agent_role`, `agent_nickname`, and `agent_path`.
+`thread_spawn_edges` is a generic parent/child relationship edge table. It is not a subagent-only table. `/side`, `/fork`, subagent, MCP, exec, VS Code, CLI, and unknown child threads can all appear as child threads. Child type is inferred from the child session itself: inferred `sourceKind`, raw `source`, `thread_source`, `agent_role`, `agent_nickname`, and `agent_path`. A child can have more than one label, such as both `subagent` and `side/fork`; JSON/MCP expose `childTypeLabels` and `relationshipLabels` so the mixed identity is not collapsed into one label.
 
 Family modes are all read-only:
 
-- `family <id> --children` shows direct children only, including `sourceKind`, edge status, child type, title, updated time, agent metadata, and file/index/thread presence.
+- `family <id> --children` shows direct children only, including `sourceKind`, edge status, child type labels, title, updated time, agent metadata, and file/index/thread presence.
 - `family <id> --parents` shows direct parents only with the same source and edge metadata.
 - `family <id> --subagents` shows family members whose `sourceKind` is `subagent` or that have agent metadata.
-- `family <id> --impact` shows what parent, child, family member, missing parent/child, and missing file/index/thread risks would remain if you later choose to process only this session. It does not delete anything, does not recommend deletion, and does not generate `--yes`.
-- `family <id> --full` keeps full raw `source` and full titles in human output. JSON output always keeps complete fields.
+- `family <id> --impact` shows what parent, child, family member, missing parent/child, and missing file/index/thread risks would remain if you later choose to process only this session. It groups `selected`, `unselected parents`, `unselected children`, `unselected family members`, `missing relations`, and `missing surfaces`. It does not delete anything, does not recommend deletion, and does not generate `--yes`.
+- `family <id> --full` keeps full raw `source` and full titles in block output instead of a wide table. JSON output and MCP always keep complete fields.
 
-Use `--source-kind subagent|mcp|vscode|cli|exec|unknown` with family modes when you only want matching family nodes. Use `family --json` or MCP `get_session_family` when exact raw fields matter. Actual deletion still requires a separate preview and explicit confirmation.
+Use `--source-kind subagent|mcp|vscode|cli|exec|unknown` with family modes when you only want matching family nodes. Default human output is compact and may shorten long text; use `--full`, `family --json`, or MCP `get_session_family` when exact raw fields matter. Actual deletion still requires a separate explicit-ID preview and explicit confirmation.
 
 ## Session Titles
 
