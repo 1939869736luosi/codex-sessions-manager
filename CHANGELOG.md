@@ -18,6 +18,10 @@
 - Updated public positioning now that Codex Desktop includes archived-chat delete: the project is described as a local residue audit, verification, and cleanup tool rather than a replacement for a missing built-in delete button.
 - Synchronized README, README.zh-CN, Skill, example Skill, and the installed local Skill with the new family inspection and residue audit guidance.
 
+### Fixed
+
+- Clarified audit output for valid session IDs that have no local record or residue, reporting them as `absent` instead of `clean`.
+
 ## 0.3.2
 
 ### Fixed

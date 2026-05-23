@@ -81,7 +81,7 @@ function findSession(scan: ScanResult, sessionId: string): SessionEntry | null {
   return scan.sessions.find((session) => session.id === sessionId) ?? null;
 }
 
-function resolveAuditSession(scan: ScanResult, input: string): SessionEntry {
+function resolveAuditSession(scan: ScanResult, input: string): { session: SessionEntry; knownLocally: boolean } {
   const sessionId = input.trim();
   if (!sessionId) {
     throw new Error("audit 需要 1 个 session-id。");
@@ -89,17 +89,20 @@ function resolveAuditSession(scan: ScanResult, input: string): SessionEntry {
 
   const exact = findSession(scan, sessionId);
   if (exact) {
-    return exact;
+    return { session: exact, knownLocally: true };
   }
 
   const knownIds = collectKnownIds(scan);
   if (knownIds.includes(sessionId)) {
-    return emptySessionEntry(sessionId);
+    return { session: emptySessionEntry(sessionId), knownLocally: true };
   }
 
   const prefixedIds = knownIds.filter((id) => id.startsWith(sessionId));
   if (prefixedIds.length === 1) {
-    return findSession(scan, prefixedIds[0]) ?? emptySessionEntry(prefixedIds[0]);
+    return {
+      session: findSession(scan, prefixedIds[0]) ?? emptySessionEntry(prefixedIds[0]),
+      knownLocally: true,
+    };
   }
 
   if (prefixedIds.length > 1) {
@@ -107,7 +110,7 @@ function resolveAuditSession(scan: ScanResult, input: string): SessionEntry {
   }
 
   if (isSessionId(sessionId)) {
-    return emptySessionEntry(sessionId);
+    return { session: emptySessionEntry(sessionId), knownLocally: false };
   }
 
   throw new Error(`找不到会话或本地残留：${sessionId}`);
@@ -120,6 +123,7 @@ function pushStatus(statuses: SessionResidueAuditStatus[], status: SessionResidu
 }
 
 function buildStatus(options: {
+  knownLocally: boolean;
   hasAnyResidue: boolean;
   rawSessionFiles: number;
   sqliteRows: number;
@@ -131,7 +135,7 @@ function buildStatus(options: {
   const statuses: SessionResidueAuditStatus[] = [];
 
   if (!options.hasAnyResidue && options.brokenRelations === 0) {
-    return ["clean"];
+    return options.knownLocally ? ["clean"] : ["absent"];
   }
 
   if (options.rawSessionFiles > 0) {
@@ -159,13 +163,27 @@ function buildStatus(options: {
   return statuses;
 }
 
-function describeCurrentState(session: SessionEntry, hasAnyResidue: boolean, hasOriginalRollout: boolean): SessionResidueAudit["currentState"] {
+function describeCurrentState(
+  session: SessionEntry,
+  knownLocally: boolean,
+  hasAnyResidue: boolean,
+  hasOriginalRollout: boolean,
+): SessionResidueAudit["currentState"] {
+  if (!knownLocally && !hasAnyResidue) {
+    return {
+      kind: "absent",
+      archived: false,
+      hasOriginalRollout: false,
+      message: "未发现这个 ID 的本地记录或残留。",
+    };
+  }
+
   if (!hasAnyResidue) {
     return {
       kind: "clean",
       archived: false,
       hasOriginalRollout: false,
-      message: "未发现这个会话的本地残留。",
+      message: "这个 ID 在本机记录中出现过，但当前没有发现本地残留。",
     };
   }
 
@@ -189,7 +207,7 @@ function describeCurrentState(session: SessionEntry, hasAnyResidue: boolean, has
 }
 
 export function buildSessionResidueAudit(scan: ScanResult, sessionId: string): SessionResidueAudit {
-  const session = resolveAuditSession(scan, sessionId);
+  const { session, knownLocally } = resolveAuditSession(scan, sessionId);
   const preview = buildDeletePreview(scan, [session]);
   const item = preview.items[0];
   const family = buildSessionFamily(scan, session);
@@ -214,6 +232,7 @@ export function buildSessionResidueAudit(scan: ScanResult, sessionId: string): S
       threadSpawnEdges.length >
     0;
   const statuses = buildStatus({
+    knownLocally,
     hasAnyResidue,
     rawSessionFiles,
     sqliteRows,
@@ -232,14 +251,20 @@ export function buildSessionResidueAudit(scan: ScanResult, sessionId: string): S
   const recommendedNextCommand = hasAnyResidue
     ? `codex-sessions delete ${quoteShellArg(session.id)} --root ${quoteShellArg(scan.root.rootPath)}`
     : null;
+  const recommendedNextCommandNote = recommendedNextCommand
+    ? "这是预览命令，不会删除；只有用户加 --yes 才会真的删除。"
+    : knownLocally
+      ? "不需要处理，当前没有发现本地残留。"
+      : "不需要处理，当前没有发现这个 ID 的本地记录或残留。";
 
   return {
     sessionId: session.id,
     title: session.title,
     displayTitle: session.displayTitle,
+    knownLocally,
     rootPath: scan.root.rootPath,
     overallStatus: statuses,
-    currentState: describeCurrentState(session, hasAnyResidue, rawSessionFiles > 0),
+    currentState: describeCurrentState(session, knownLocally, hasAnyResidue, rawSessionFiles > 0),
     surfaces: {
       rolloutFiles: {
         present: rawSessionFiles > 0,
@@ -314,8 +339,6 @@ export function buildSessionResidueAudit(scan: ScanResult, sessionId: string): S
     brokenRelations: family.brokenRelations,
     warnings,
     recommendedNextCommand,
-    recommendedNextCommandNote: recommendedNextCommand
-      ? "这是预览命令，不会删除；只有用户加 --yes 才会真的删除。"
-      : null,
+    recommendedNextCommandNote,
   };
 }

@@ -261,6 +261,7 @@ export interface DeleteFamilyWarning {
 }
 
 export type SessionResidueAuditStatus =
+  | "absent"
   | "clean"
   | "present"
   | "partial"
@@ -299,10 +300,11 @@ export interface SessionResidueAudit {
   sessionId: string;
   title: string;
   displayTitle: string;
+  knownLocally: boolean;
   rootPath: string;
   overallStatus: SessionResidueAuditStatus[];
   currentState: {
-    kind: SessionKind | "clean";
+    kind: SessionKind | "clean" | "absent";
     archived: boolean;
     hasOriginalRollout: boolean;
     message: string;

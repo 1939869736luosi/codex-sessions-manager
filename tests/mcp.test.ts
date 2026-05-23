@@ -299,6 +299,43 @@ describe("mcp server", () => {
     }
   });
 
+  it("returns absent for an unknown valid uuid through MCP", async () => {
+    const { client, server } = await createConnectedClient();
+
+    try {
+      const unknownId = "019e0000-0000-7000-8000-000000000000";
+      const result = await client.callTool({
+        name: "audit_session",
+        arguments: {
+          root: fixture.rootDir,
+          sessionId: unknownId,
+        },
+      });
+
+      const audit = result.structuredContent?.audit as {
+        sessionId: string;
+        knownLocally: boolean;
+        overallStatus: string[];
+        currentState: { kind: string; message: string };
+        recommendedNextCommand: string | null;
+        recommendedNextCommandNote: string;
+      };
+
+      expect(audit.sessionId).toBe(unknownId);
+      expect(audit.knownLocally).toBe(false);
+      expect(audit.overallStatus).toEqual(["absent"]);
+      expect(audit.currentState).toMatchObject({
+        kind: "absent",
+        message: "未发现这个 ID 的本地记录或残留。",
+      });
+      expect(audit.recommendedNextCommand).toBeNull();
+      expect(audit.recommendedNextCommandNote).toBe("不需要处理，当前没有发现这个 ID 的本地记录或残留。");
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("deletes sessions when confirmation is explicit", async () => {
     const { client, server } = await createConnectedClient();
 

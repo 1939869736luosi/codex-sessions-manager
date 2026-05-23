@@ -405,16 +405,60 @@ describe("core integration", () => {
     );
   });
 
-  it("reports clean for a full session id with no local residue", async () => {
-    const cleanId = "019d8888-9999-7aaa-8bbb-222222222222";
-    const audit = buildSessionResidueAudit(await scanCodexRoot(fixture.rootDir), cleanId);
+  it("reports absent for a valid session id with no local record or residue", async () => {
+    const absentId = "019d8888-9999-7aaa-8bbb-222222222222";
+    const audit = buildSessionResidueAudit(await scanCodexRoot(fixture.rootDir), absentId);
 
-    expect(audit.sessionId).toBe(cleanId);
-    expect(audit.overallStatus).toEqual(["clean"]);
+    expect(audit.sessionId).toBe(absentId);
+    expect(audit.knownLocally).toBe(false);
+    expect(audit.overallStatus).toEqual(["absent"]);
     expect(audit.counts.rawSessionFiles).toBe(0);
     expect(audit.counts.sqliteRows).toBe(0);
     expect(audit.recommendedNextCommand).toBeNull();
-    expect(audit.currentState.message).toContain("未发现");
+    expect(audit.recommendedNextCommandNote).toBe("不需要处理，当前没有发现这个 ID 的本地记录或残留。");
+    expect(audit.currentState.kind).toBe("absent");
+    expect(audit.currentState.message).toBe("未发现这个 ID 的本地记录或残留。");
+  });
+
+  it("keeps clean for a locally known session id with no current residue", async () => {
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const knownCleanId = "019d9999-aaaa-7bbb-8ccc-333333333333";
+    const template = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID])[0];
+    const knownCleanSession = {
+      ...template,
+      id: knownCleanId,
+      displayTitle: knownCleanId,
+      indexTitle: null,
+      sqliteTitle: null,
+      firstUserMessage: null,
+      titleSource: "id" as const,
+      titleMismatch: false,
+      titleCandidates: [{ source: "id" as const, title: knownCleanId }],
+      title: knownCleanId,
+      kind: "stale" as const,
+      archived: false,
+      createdAt: null,
+      updatedAt: null,
+      rolloutPath: null,
+      previewSummary: "known clean fixture",
+      historyPreview: [],
+      totalFileSize: 0,
+      fileTargets: [],
+      hasThread: false,
+      hasSessionIndex: false,
+      hasHistory: false,
+      sessionIndexCount: 0,
+      historyCount: 0,
+      thread: null,
+    };
+    const audit = buildSessionResidueAudit({ ...scan, sessions: [...scan.sessions, knownCleanSession] }, knownCleanId);
+
+    expect(audit.knownLocally).toBe(true);
+    expect(audit.overallStatus).toEqual(["clean"]);
+    expect(audit.recommendedNextCommand).toBeNull();
+    expect(audit.recommendedNextCommandNote).toBe("不需要处理，当前没有发现本地残留。");
+    expect(audit.currentState.kind).toBe("clean");
+    expect(audit.currentState.message).toBe("这个 ID 在本机记录中出现过，但当前没有发现本地残留。");
   });
 
   it("reports a clear error for invalid unknown session input", async () => {

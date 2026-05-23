@@ -351,6 +351,40 @@ describe("cli", () => {
     expect(audit.recommendedNextCommandNote).toContain("--yes");
   });
 
+  it("audits an unknown valid uuid without suggesting deletion", async () => {
+    const unknownId = "019e0000-0000-7000-8000-000000000000";
+    const human = createIo();
+    const humanExitCode = await runCli(["audit", unknownId, "--root", fixture.rootDir], human.io);
+    const humanOutput = human.stdout.join("\n");
+    const json = createIo();
+    const jsonExitCode = await runCli(["audit", unknownId, "--root", fixture.rootDir, "--json"], json.io);
+    const audit = JSON.parse(json.stdout.join("\n")) as {
+      sessionId: string;
+      knownLocally: boolean;
+      overallStatus: string[];
+      currentState: { kind: string; message: string };
+      recommendedNextCommand: string | null;
+      recommendedNextCommandNote: string;
+    };
+
+    expect(humanExitCode).toBe(0);
+    expect(humanOutput).toContain("状态: absent");
+    expect(humanOutput).toContain("未发现这个 ID 的本地记录或残留");
+    expect(humanOutput).toContain("不需要处理，当前没有发现这个 ID 的本地记录或残留");
+    expect(humanOutput).not.toContain("未发现这个会话的本地残留");
+    expect(humanOutput).not.toContain("预览命令");
+    expect(jsonExitCode).toBe(0);
+    expect(audit.sessionId).toBe(unknownId);
+    expect(audit.knownLocally).toBe(false);
+    expect(audit.overallStatus).toEqual(["absent"]);
+    expect(audit.currentState).toMatchObject({
+      kind: "absent",
+      message: "未发现这个 ID 的本地记录或残留。",
+    });
+    expect(audit.recommendedNextCommand).toBeNull();
+    expect(audit.recommendedNextCommandNote).toBe("不需要处理，当前没有发现这个 ID 的本地记录或残留。");
+  });
+
   it("previews trash delete without --yes", async () => {
     const capture = createIo();
     const exitCode = await runCli(["delete", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--trash"], capture.io);

@@ -501,8 +501,8 @@ export function formatAudit(audit: SessionResidueAudit): string {
     "建议下一步",
     audit.recommendedNextCommand
       ? `- 预览命令: ${audit.recommendedNextCommand}`
-      : "- 不需要处理，当前没有发现本地残留。",
-    ...(audit.recommendedNextCommandNote ? [`- ${audit.recommendedNextCommandNote}`] : []),
+      : `- ${audit.recommendedNextCommandNote ?? "不需要处理，当前没有发现本地残留。"}`,
+    ...(audit.recommendedNextCommand && audit.recommendedNextCommandNote ? [`- ${audit.recommendedNextCommandNote}`] : []),
   ];
 
   return [
