@@ -41,6 +41,10 @@ codex-sessions audit <session-id>
 codex-sessions audit-root --limit 50
 codex-sessions audit-root --status risky-global-state --source global-state-unknown --limit 50
 
+# 批量预览 root 残留候选的删除影响（安全，不做任何修改）
+codex-sessions preview-root --limit 50
+codex-sessions preview-root --source global-state-unknown --limit 20
+
 # 预览删除（安全，不做任何修改）
 codex-sessions delete <session-id>
 
@@ -84,6 +88,7 @@ codex-sessions verify <session-id>
 | **删除** | 永久删除或放入回收站，你选 |
 | **残留审计** | 只读报告原始 rollout 文件、shell snapshot、session_index、history、SQLite、global-state、thread edges、family 状态和断裂 parent/child 关系 |
 | **Root 残留扫描** | 不需要先知道 session ID，直接只读扫描整个 root 的疑似残留 |
+| **Root 删除预览** | 对 root 残留候选做只读批量 delete preview，不需要手工列 session ID |
 | **回收站 & 恢复** | 完整快照保存；恢复时检查 SQLite 主键冲突 |
 | **验证** | 报告是否还有残留文件、索引行、数据库记录 |
 | **清理索引** | 移除失效索引条目，不动原始数据 |
@@ -107,9 +112,9 @@ codex-sessions verify <session-id>
 }
 ```
 
-暴露 16 个工具：`inspect_root`、`list_sessions`、`list_projects`、`get_session`、`get_session_family`、`audit_session`、`audit_root`、`export_session_backup`、`preview_delete_sessions`、`delete_sessions`、`list_trash`、`restore_sessions`、`purge_trash`、`cleanup_session_indexes`、`cleanup_stale_indexes`、`verify_sessions`。
+暴露 17 个工具：`inspect_root`、`list_sessions`、`list_projects`、`get_session`、`get_session_family`、`audit_session`、`audit_root`、`preview_root_delete`、`export_session_backup`、`preview_delete_sessions`、`delete_sessions`、`list_trash`、`restore_sessions`、`purge_trash`、`cleanup_session_indexes`、`cleanup_stale_indexes`、`verify_sessions`。
 
-`get_session_family`、`audit_session` 和 `audit_root` 是只读工具，不需要确认。所有破坏性操作需要 `confirm: true`，否则只返回预览。
+`get_session_family`、`audit_session`、`audit_root` 和 `preview_root_delete` 是只读工具，不需要确认。所有破坏性操作需要 `confirm: true`，否则只返回预览。
 
 ## CLI 命令
 
@@ -123,6 +128,7 @@ codex-sessions show <session-id>
 codex-sessions family <session-id> [--json]
 codex-sessions audit <session-id> [--json]
 codex-sessions audit-root [--json] [--limit 50] [--status STATUS...] [--source SOURCE...] [--all]
+codex-sessions preview-root [--json] [--limit 50] [--status STATUS...] [--source SOURCE...] [--all]
 codex-sessions export <session-id> [--output ./backup.json]
 codex-sessions delete <session-id...> [--trash] [--yes]
 codex-sessions trash-list
@@ -158,6 +164,8 @@ codex-sessions verify <session-id...> [--json]
 
 人类输出和 JSON 都会带摘要：`filters`、`totalCandidatesBeforeFilter`、`totalCandidatesAfterFilter`、`returnedCandidates`、`limit`、`byStatus`、`bySource`。`byStatus` 和 `bySource` 是“筛选后、limit 前”的统计。
 
+如果想对 `audit-root` 选出的候选做批量删除预览，用 `preview-root`。它复用同一套 `status/source` 筛选和保守默认 `--limit 50`，汇总展示 delete preview 会碰到哪些位置：rollout 文件、shell snapshots、`session_index`、`history`、SQLite、已知 global-state 引用、未知 global-state 引用和 `thread_spawn_edges`。它只读，不删除，不改写 JSONL、SQLite、shell snapshot 或 global-state，不接受 `--yes`，也不会自动递归加入 parent、child 或 family session。`preview-root` 的结果不等于“这些都该删”；它只说明如果之后你明确运行 delete，会碰到什么。真正删除仍然必须单独运行 `delete ... --yes`。
+
 删除 parent 或 child 前先看 `family`。parent 和 child 是不同 session，各自有自己的 ID。删除 parent 不等于删除 child，删除 child 也不等于删除 parent。删除预览和 audit 会提示关系记录指向缺失 session，或相关 session 缺文件/索引。要一起处理多个相关 session，需要把每个 session ID 明确放进预览或删除命令。工具不会自动递归处理 parent 或 child。
 
 人类可读的 `family` 输出会用短 `source` 标签保持表格清楚，例如 `subagent`、`mcp`、`exec`、`side-thread`、`unknown`。需要完整原始 `source` 字段时，用 `family --json` 或 MCP `get_session_family`。
@@ -178,7 +186,7 @@ Codex 本地会话可能同时有多个标题：
 
 ## Codex 存了什么（我们清理什么）
 
-Codex Desktop 删除归档聊天时，可能已经清掉其中一部分。`audit-root` 可以先找出疑似残留 ID，`audit` 再对单个 ID 给只读报告。真正清理之后，再用 `verify` 复查。确认要清理时，才用 `delete --yes` 或 `cleanup-index --yes` 处理残留。
+Codex Desktop 删除归档聊天时，可能已经清掉其中一部分。`audit-root` 可以先找出疑似残留 ID，`preview-root` 可以批量预览这些 ID 的删除影响，`audit` 再对单个 ID 给只读报告。真正清理之后，再用 `verify` 复查。确认要清理时，才用 `delete --yes` 或 `cleanup-index --yes` 处理残留。
 
 ```
 ~/.codex/

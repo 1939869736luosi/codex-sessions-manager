@@ -66,6 +66,7 @@ Use this skill for requests like:
 - "Find side conversations for this session"
 - "Audit what remains locally after the official Codex UI delete/archive action"
 - "Find likely local residue without knowing the session ID"
+- "Preview deleting likely root residue candidates"
 - "Export this session"
 - "Preview deleting these sessions"
 - "Check what Codex Desktop left behind after deleting a chat"
@@ -98,6 +99,7 @@ If the `codex-sessions` MCP server is available in the current agent session, us
 - `get_session_family` (read-only session family inspection)
 - `audit_session` (read-only residue audit)
 - `audit_root` (read-only root residue scan)
+- `preview_root_delete` (read-only root delete preview)
 - `export_session_backup`
 - `preview_delete_sessions`
 - `delete_sessions` (requires `confirm=true` to execute; pass `trash=true` for recoverable deletion)
@@ -142,6 +144,10 @@ codex-sessions audit-root --root <path-to-codex-root>
 codex-sessions audit-root --root <path-to-codex-root> --json --limit 50
 codex-sessions audit-root --root <path-to-codex-root> --status risky-global-state --limit 50
 codex-sessions audit-root --root <path-to-codex-root> --source global-state-unknown --limit 50
+codex-sessions preview-root --root <path-to-codex-root>
+codex-sessions preview-root --root <path-to-codex-root> --json --limit 50
+codex-sessions preview-root --root <path-to-codex-root> --status db-only --limit 20
+codex-sessions preview-root --root <path-to-codex-root> --source global-state-unknown --limit 20
 codex-sessions export <session-id> --root <path-to-codex-root> --output ./backup.json
 codex-sessions delete <session-id...> --root <path-to-codex-root>
 codex-sessions delete <session-id...> --root <path-to-codex-root> --yes
@@ -184,6 +190,10 @@ node dist/cli/index.js audit-root --root <path-to-codex-root>
 node dist/cli/index.js audit-root --root <path-to-codex-root> --json --limit 50
 node dist/cli/index.js audit-root --root <path-to-codex-root> --status risky-global-state --limit 50
 node dist/cli/index.js audit-root --root <path-to-codex-root> --source global-state-unknown --limit 50
+node dist/cli/index.js preview-root --root <path-to-codex-root>
+node dist/cli/index.js preview-root --root <path-to-codex-root> --json --limit 50
+node dist/cli/index.js preview-root --root <path-to-codex-root> --status db-only --limit 20
+node dist/cli/index.js preview-root --root <path-to-codex-root> --source global-state-unknown --limit 20
 node dist/cli/index.js export <session-id> --root <path-to-codex-root> --output ./backup.json
 node dist/cli/index.js delete <session-id...> --root <path-to-codex-root>
 node dist/cli/index.js delete <session-id...> --root <path-to-codex-root> --yes
@@ -210,6 +220,8 @@ node dist/cli/index.js verify <session-id...> --root <path-to-codex-root>
 - `audit_session` and CLI `audit` are read-only. They report local residue after official UI delete/archive actions and must not rewrite files, SQLite, shell snapshots, or global state.
 - `audit_root` and CLI `audit-root` are read-only. They scan for likely residue candidates across a Codex root and must not delete, rewrite, or select parent/child sessions automatically.
 - `audit_root` / `audit-root` status and source filters only narrow displayed candidates. Multiple statuses or multiple sources use OR; combining status and source uses AND. A matching candidate still needs per-session audit or delete preview before any cleanup decision.
+- `preview_root_delete` and CLI `preview-root` are read-only. They reuse `audit-root` filters to build a batch delete preview, but do not delete, do not rewrite JSONL, SQLite, shell snapshots, or global state, do not accept `--yes`, and do not recursively select parent, child, or family sessions.
+- A `preview-root` result is not a deletion recommendation. Actual deletion requires the user to run `delete ... --yes` explicitly.
 - Delete previews warn when selected sessions have unselected parent, child, or family sessions, and when relationship edges point at missing sessions or missing file/index surfaces.
 - CLI `delete` without `--yes` is preview-only.
 - MCP `delete_sessions` without `confirm=true` is preview-only.
@@ -224,7 +236,7 @@ node dist/cli/index.js verify <session-id...> --root <path-to-codex-root>
 - MCP `cleanup_session_indexes` and `cleanup_stale_indexes` require `confirm=true` to rewrite JSONL indexes.
 - Global-state cleanup is limited to known structured keys.
 - Unknown global-state references are warnings only. Do not edit or delete unknown keys automatically.
-- If `audit`, `audit-root`, `verify`, `doctor`, or `inspect_root` reports warnings, tell the user. Do not claim the root is fully clean.
+- If `audit`, `audit-root`, `preview-root`, `verify`, `doctor`, or `inspect_root` reports warnings, tell the user. Do not claim the root is fully clean.
 - Do not output chat content when reporting audit, doctor, verify, or global-state warnings.
 
 ## Side Conversations
@@ -251,6 +263,7 @@ When a user asks about side conversations:
 - For side-conversation requests: distinguish parent thread ID and child thread ID, and say whether the requested action covers one or both.
 - For audit requests: report the overall status, each residue surface count, family summary, warnings, and the preview-only next command. Say clearly that audit does not delete anything and that parent/child sessions are not handled recursively.
 - For root residue requests: use MCP `audit_root` or CLI `audit-root`. Report `filters`, `totalCandidatesBeforeFilter`, `totalCandidatesAfterFilter`, `returnedCandidates`, limit, `byStatus`, `bySource`, session IDs, status labels, residue source counts, family/broken-family state, and the recommended per-session audit command. Do not print chat content. Say clearly that root scans do not delete anything, filtered candidates are not automatically safe to delete, and parent/child sessions are not handled recursively.
+- For root delete preview requests: use MCP `preview_root_delete` or CLI `preview-root`. Report filters, candidate totals before and after filters, previewed and omitted counts, aggregate preview counts, family warning summary, each candidate ID, statuses, sources, preview counts, family warning state, and recommended single-session audit/preview commands. Say clearly that it is read-only, does not delete, does not recurse through family, and does not prove the candidates should be deleted.
 - For delete requests: explain whether this is preview-only, permanent delete, or recoverable trash delete.
 - For trash requests: distinguish moved to trash, restored, and purged.
 - For restore conflicts: explain that the live session already exists and identify conflicting surfaces when available.

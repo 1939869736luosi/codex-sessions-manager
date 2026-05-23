@@ -2,7 +2,7 @@ import path from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 
-import { buildRootResidueAudit, buildSessionResidueAudit } from "../core/audit.js";
+import { buildRootDeletePreview, buildRootResidueAudit, buildSessionResidueAudit } from "../core/audit.js";
 import { exportSessionBackup } from "../core/backup.js";
 import { inspectCodexRoot } from "../core/doctor.js";
 import {
@@ -34,6 +34,7 @@ import {
   formatList,
   formatPreview,
   formatProjects,
+  formatRootDeletePreview,
   formatRootResidueAudit,
   formatShow,
   formatTrashDeleteResult,
@@ -52,6 +53,7 @@ type CommandName =
   | "family"
   | "audit"
   | "audit-root"
+  | "preview-root"
   | "export"
   | "delete"
   | "trash-list"
@@ -87,6 +89,7 @@ Usage:
   codex-sessions family <session-id> [--root PATH] [--json]
   codex-sessions audit <session-id> [--root PATH] [--json]
   codex-sessions audit-root [--root PATH] [--json] [--limit N] [--status STATUS...] [--source SOURCE...] [--all]
+  codex-sessions preview-root [--root PATH] [--json] [--limit N] [--status STATUS...] [--source SOURCE...] [--all]
   codex-sessions export <session-id> [--root PATH] [--output FILE] [--json]
   codex-sessions delete <session-id...> [--root PATH] [--json] [--yes] [--trash]
   codex-sessions trash-list [--root PATH] [--json]
@@ -103,6 +106,7 @@ Notes:
   - audit 只读检查官方 UI 删除或归档后本地还剩哪些记录
   - audit-root 只读扫描整个 root 的疑似残留，默认 limit=50
   - audit-root 多个 --status 或 --source 为 OR；同时使用 status 和 source 时为 AND
+  - preview-root 只读批量预览 audit-root 筛出的候选，不删除、不递归处理 family
   - delete --trash --yes 会先写入回收站，再清理 live session
   - restore 和 purge 未带 --yes 时只展示匹配的回收站记录
   - cleanup-index 和 cleanup-stale 未带 --yes 时只展示预览，不改写 JSONL
@@ -250,6 +254,28 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
         sources: sourceValues,
       });
       io.stdout(asJson ? JSON.stringify(audit, null, 2) : formatRootResidueAudit(audit));
+      return 0;
+    }
+
+    case "preview-root": {
+      if (rest.length !== 0) {
+        throw new Error("preview-root 不接收 session-id。");
+      }
+      if (values.yes) {
+        throw new Error("preview-root 不支持 --yes；它始终只读，不执行删除。");
+      }
+      if (values.trash) {
+        throw new Error("preview-root 不支持 --trash；它始终只生成 delete preview。");
+      }
+
+      const limit = values.limit ? Number(values.limit) : undefined;
+      const preview = buildRootDeletePreview(scan, {
+        limit,
+        includeAll: values.all,
+        statuses: statusValues,
+        sources: sourceValues,
+      });
+      io.stdout(asJson ? JSON.stringify(preview, null, 2) : formatRootDeletePreview(preview));
       return 0;
     }
 

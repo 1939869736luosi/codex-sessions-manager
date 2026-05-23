@@ -6,6 +6,9 @@ import type {
   DeleteValidationItem,
   DoctorReport,
   ProjectSummary,
+  RootDeletePreview,
+  RootDeletePreviewCandidate,
+  RootDeletePreviewCounts,
   RootResidueAudit,
   ScanResult,
   SessionEntry,
@@ -538,6 +541,31 @@ function formatRootResidueCounts(candidate: RootResidueAudit["candidates"][numbe
   ].join(", ");
 }
 
+function formatRootPreviewCounts(counts: RootDeletePreviewCounts): string {
+  return [
+    `rollout=${counts.rolloutFiles}`,
+    `shell=${counts.shellSnapshots}`,
+    `index=${counts.sessionIndexRows}`,
+    `history=${counts.historyRows}`,
+    `sqlite=${counts.sqliteRows}`,
+    `global_known=${counts.knownGlobalStateRefs}`,
+    `global_unknown=${counts.possibleUnknownGlobalStateRefs}`,
+    `edges=${counts.threadSpawnEdges}`,
+  ].join(", ");
+}
+
+function formatRootPreviewFamilyWarning(candidate: RootDeletePreviewCandidate): string {
+  const warningCount = candidate.familyWarnings.length;
+  const missingParents = candidate.familyWarnings.reduce((sum, warning) => sum + warning.missingParentIds.length, 0);
+  const missingChildren = candidate.familyWarnings.reduce((sum, warning) => sum + warning.missingChildIds.length, 0);
+  const unselected = candidate.familyWarnings.reduce((sum, warning) => sum + warning.unselectedRelatedSessionIds.length, 0);
+  if (warningCount === 0) {
+    return "-";
+  }
+
+  return [`warnings=${warningCount}`, `unselected=${unselected}`, `missing_parent=${missingParents}`, `missing_child=${missingChildren}`].join(", ");
+}
+
 function formatRootResidueFamily(candidate: RootResidueAudit["candidates"][number]): string {
   return [
     `family=${yesNo(candidate.family.isFamilyMember)}`,
@@ -606,6 +634,75 @@ export function formatRootResidueAudit(audit: RootResidueAudit): string {
         candidate.recommendedAuditCommand,
       ]),
     ]),
+    ...warningLines,
+  ].join("\n");
+}
+
+function formatRootDeletePreviewFilters(preview: RootDeletePreview): string {
+  const parts = [
+    preview.filters.statuses.length ? `status=${preview.filters.statuses.join("|")}` : null,
+    preview.filters.sources.length ? `source=${preview.filters.sources.join("|")}` : null,
+    preview.filters.includeAll ? "all=true" : null,
+  ].filter((part): part is string => Boolean(part));
+
+  return parts.length ? parts.join(", ") : "无";
+}
+
+function formatFamilyWarningSummary(preview: RootDeletePreview): string[] {
+  const summary = preview.familyWarningSummary;
+  return [
+    "family 风险摘要",
+    `- 有提醒的 ID: ${summary.candidatesWithFamilyWarnings}`,
+    `- 未选择 parent: ${summary.unselectedParentIds.length}`,
+    `- 未选择 child: ${summary.unselectedChildIds.length}`,
+    `- 未选择 family member: ${summary.unselectedFamilyMemberIds.length}`,
+    `- 缺失 parent: ${summary.missingParentIds.length}`,
+    `- 缺失 child: ${summary.missingChildIds.length}`,
+    `- 断裂关系: ${summary.brokenRelationCount}`,
+  ];
+}
+
+export function formatRootDeletePreview(preview: RootDeletePreview): string {
+  const warningLines = preview.warnings.length ? ["", "警告:", ...preview.warnings.map((warning) => `- ${warning}`)] : [];
+  const candidateRows = preview.candidates.length
+    ? [
+        "",
+        printTable([
+          ["session id", "statuses", "sources", "preview counts", "family warning", "建议 audit 命令"],
+          ...preview.candidates.map((candidate) => [
+            candidate.sessionId,
+            candidate.statuses.join(","),
+            candidate.sources.join(",") || "-",
+            formatRootPreviewCounts(candidate.previewCounts),
+            formatRootPreviewFamilyWarning(candidate),
+            candidate.recommendedAuditCommand,
+          ]),
+        ]),
+      ]
+    : ["", "没有匹配候选。"];
+
+  return [
+    "root 批量 delete preview（只读，未删除）",
+    `Root: ${preview.rootPath}`,
+    `筛选条件: ${formatRootDeletePreviewFilters(preview)}`,
+    `匹配候选数: ${preview.totalCandidatesAfterFilter}`,
+    `筛选前候选数: ${preview.totalCandidatesBeforeFilter}`,
+    `本次预览 ID 数: ${preview.previewedCandidates}`,
+    `省略 ID 数: ${preview.omittedCandidates}`,
+    `limit: ${preview.limit}`,
+    "",
+    "总计",
+    `- rollout files: ${preview.aggregatePreview.rolloutFiles}`,
+    `- shell snapshots: ${preview.aggregatePreview.shellSnapshots}`,
+    `- session_index: ${preview.aggregatePreview.sessionIndexRows}`,
+    `- history: ${preview.aggregatePreview.historyRows}`,
+    `- SQLite: ${preview.aggregatePreview.sqliteRows}`,
+    `- known global-state: ${preview.aggregatePreview.knownGlobalStateRefs}`,
+    `- unknown global-state: ${preview.aggregatePreview.possibleUnknownGlobalStateRefs}`,
+    `- thread_spawn_edges: ${preview.aggregatePreview.threadSpawnEdges}`,
+    "",
+    ...formatFamilyWarningSummary(preview),
+    ...candidateRows,
     ...warningLines,
   ].join("\n");
 }

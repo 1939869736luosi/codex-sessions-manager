@@ -4,7 +4,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import Database from "better-sqlite3";
 
-import { buildRootResidueAudit, buildSessionResidueAudit } from "../src/core/audit.js";
+import { buildRootDeletePreview, buildRootResidueAudit, buildSessionResidueAudit } from "../src/core/audit.js";
 import { exportSessionBackup } from "../src/core/backup.js";
 import {
   buildDeletePreview,
@@ -526,6 +526,89 @@ describe("core integration", () => {
     expect(multiSourceLimited.returnedCandidates).toBe(1);
     expect(multiSourceLimited.candidates).toHaveLength(1);
     expect(multiSourceLimited.filters.sources).toEqual(["global_state_unknown", "sqlite"]);
+  });
+
+  it("builds a read-only root delete preview from audit-root filters", async () => {
+    const unknownGlobalId = "019d9999-aaaa-7bbb-8ccc-333333333333";
+    const dbOnlyId = "019daaaa-bbbb-7ccc-8ddd-444444444444";
+    const missingParentId = "019dbbbb-cccc-7ddd-8eee-555555555555";
+    const missingChildId = "019dcccc-dddd-7eee-8fff-666666666666";
+    const globalState = JSON.parse(await readFile(fixture.paths.globalState, "utf8")) as Record<string, unknown>;
+    globalState["deleted-session-marker"] = unknownGlobalId;
+    await writeFile(fixture.paths.globalState, `${JSON.stringify(globalState, null, 2)}\n`, "utf8");
+
+    const db = new Database(fixture.paths.sqlite);
+    db.prepare(
+      `insert into threads (
+         id, title, first_user_message, created_at, updated_at, archived, rollout_path, model, cwd
+       )
+       values (?, 'DB only residue', 'db only residue input', 1775119000, 1775119060, 0, null, 'gpt-5.4', '/workspace/db-only')`,
+    ).run(dbOnlyId);
+    db.close();
+
+    const beforeSessionIndex = await readFile(fixture.paths.sessionIndex, "utf8");
+    const beforeHistory = await readFile(fixture.paths.history, "utf8");
+    const beforeGlobalState = await readFile(fixture.paths.globalState, "utf8");
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const globalUnknown = buildRootDeletePreview(scan, { sources: ["global-state-unknown"] });
+    const dbOnly = buildRootDeletePreview(scan, { statuses: ["db-only"] });
+    const limited = buildRootDeletePreview(scan, { sources: ["sqlite", "global-state-unknown"], limit: 1 });
+
+    const familyDb = new Database(fixture.paths.sqlite);
+    familyDb.prepare(
+      "insert into thread_spawn_edges (parent_thread_id, child_thread_id, status) values (?, ?, 'missing-parent')",
+    ).run(missingParentId, FIXTURE_IDS.ACTIVE_ID);
+    familyDb.prepare(
+      "insert into thread_spawn_edges (parent_thread_id, child_thread_id, status) values (?, ?, 'missing-child')",
+    ).run(FIXTURE_IDS.ACTIVE_ID, missingChildId);
+    familyDb.close();
+    const brokenFamily = buildRootDeletePreview(await scanCodexRoot(fixture.rootDir), { statuses: ["broken-family"], limit: 20 });
+
+    expect(globalUnknown.filters.sources).toEqual(["global_state_unknown"]);
+    expect(globalUnknown.candidates.map((candidate) => candidate.sessionId)).toEqual([unknownGlobalId]);
+    expect(globalUnknown.previewedCandidates).toBe(1);
+    expect(globalUnknown.omittedCandidates).toBe(0);
+    expect(globalUnknown.aggregatePreview).toMatchObject({
+      rolloutFiles: 0,
+      shellSnapshots: 0,
+      sessionIndexRows: 0,
+      historyRows: 0,
+      knownGlobalStateRefs: 0,
+      possibleUnknownGlobalStateRefs: 1,
+      threadSpawnEdges: 0,
+    });
+
+    expect(dbOnly.filters.statuses).toEqual(["db-only"]);
+    expect(dbOnly.candidates.map((candidate) => candidate.sessionId)).toEqual([dbOnlyId]);
+    expect(dbOnly.aggregatePreview.sqliteRows).toBe(1);
+
+    expect(limited.totalCandidatesAfterFilter).toBe(2);
+    expect(limited.previewedCandidates).toBe(1);
+    expect(limited.omittedCandidates).toBe(1);
+    expect(limited.limit).toBe(1);
+
+    expect(brokenFamily.candidates.map((candidate) => candidate.sessionId)).toEqual(
+      expect.arrayContaining([missingParentId, missingChildId]),
+    );
+    expect(brokenFamily.familyWarningSummary.missingParentIds).toEqual([missingParentId]);
+    expect(brokenFamily.familyWarningSummary.missingChildIds).toEqual([missingChildId]);
+    expect(brokenFamily.familyWarningSummary.brokenRelationCount).toBe(2);
+    expect(brokenFamily.familyWarningSummary.warningCount).toBe(2);
+    expect(brokenFamily.aggregatePreview.threadSpawnEdges).toBe(3);
+    expect(brokenFamily.candidates.every((candidate) => candidate.familyWarnings.length > 0)).toBe(true);
+    expect([
+      ...globalUnknown.candidates,
+      ...dbOnly.candidates,
+      ...limited.candidates,
+      ...brokenFamily.candidates,
+    ].every((candidate) => !candidate.recommendedAuditCommand.includes("--yes") && !candidate.recommendedPreviewCommand.includes("--yes"))).toBe(
+      true,
+    );
+
+    await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
+    await expect(readFile(fixture.paths.sessionIndex, "utf8")).resolves.toBe(beforeSessionIndex);
+    await expect(readFile(fixture.paths.history, "utf8")).resolves.toBe(beforeHistory);
+    await expect(readFile(fixture.paths.globalState, "utf8")).resolves.toBe(beforeGlobalState);
   });
 
   it("reports absent for a valid session id with no local record or residue", async () => {

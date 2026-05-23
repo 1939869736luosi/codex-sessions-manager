@@ -7,7 +7,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-import { buildRootResidueAudit, buildSessionResidueAudit } from "../core/audit.js";
+import { buildRootDeletePreview, buildRootResidueAudit, buildSessionResidueAudit } from "../core/audit.js";
 import { exportSessionBackup } from "../core/backup.js";
 import { inspectCodexRoot } from "../core/doctor.js";
 import {
@@ -235,6 +235,39 @@ export function createServer(): McpServer {
           ? `No likely residue candidates found in ${audit.rootPath}.`
           : `Found ${audit.totalCandidatesAfterFilter} likely residue candidates in ${audit.rootPath}.`,
         audit as unknown as Record<string, unknown>,
+      );
+    },
+  );
+
+  server.registerTool(
+    "preview_root_delete",
+    {
+      description:
+        "Read-only batch delete preview for candidates selected by audit_root filters. It never deletes and never recursively selects parent/child/family sessions.",
+      outputSchema: TOOL_OUTPUT_SCHEMA,
+      inputSchema: z.object({
+        root: z.string().optional().describe("Optional explicit path to the .codex root."),
+        limit: z.number().int().positive().optional().describe("Maximum candidates to preview. Defaults to 50."),
+        status: z.union([z.string(), z.array(z.string())]).optional().describe("Filter by one or more audit-root statuses. Multiple values use OR."),
+        source: z.union([z.string(), z.array(z.string())]).optional().describe("Filter by one or more audit-root sources. Multiple values use OR."),
+        all: z.boolean().optional().describe("Include complete non-residue sessions too. Defaults to false."),
+      }),
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({ root, limit, status, source, all }) => {
+      const scan = await scanCodexRoot(root);
+      const preview = buildRootDeletePreview(scan, {
+        limit,
+        includeAll: all,
+        statuses: typeof status === "string" ? [status] : status,
+        sources: typeof source === "string" ? [source] : source,
+      });
+      return textResult(
+        `Prepared read-only root delete preview for ${preview.previewedCandidates} of ${preview.totalCandidatesAfterFilter} matching candidates.`,
+        preview as unknown as Record<string, unknown>,
       );
     },
   );

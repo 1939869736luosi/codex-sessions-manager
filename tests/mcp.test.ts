@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
+import Database from "better-sqlite3";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
@@ -415,6 +416,139 @@ describe("mcp server", () => {
       expect(audit.candidates.map((candidate) => candidate.sessionId).sort()).toEqual(
         [FIXTURE_IDS.STALE_ID, FIXTURE_IDS.UNRELATED_ID].sort(),
       );
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("returns structured root delete preview through MCP without changing files", async () => {
+    const { client, server } = await createConnectedClient();
+
+    try {
+      const unknownGlobalId = "019d9999-aaaa-7bbb-8ccc-333333333333";
+      const globalState = JSON.parse(await readFile(fixture.paths.globalState, "utf8")) as Record<string, unknown>;
+      globalState["deleted-session-marker"] = unknownGlobalId;
+      await writeFile(fixture.paths.globalState, `${JSON.stringify(globalState, null, 2)}\n`, "utf8");
+      const beforeSessionIndex = await readFile(fixture.paths.sessionIndex, "utf8");
+      const beforeHistory = await readFile(fixture.paths.history, "utf8");
+      const beforeGlobalState = await readFile(fixture.paths.globalState, "utf8");
+
+      const result = await client.callTool({
+        name: "preview_root_delete",
+        arguments: {
+          root: fixture.rootDir,
+          source: "global-state-unknown",
+          limit: 10,
+        },
+      });
+
+      const preview = result.structuredContent as {
+        rootPath: string;
+        filters: { statuses: string[]; sources: string[]; includeAll: boolean };
+        totalCandidatesBeforeFilter: number;
+        totalCandidatesAfterFilter: number;
+        previewedCandidates: number;
+        omittedCandidates: number;
+        limit: number;
+        aggregatePreview: {
+          possibleUnknownGlobalStateRefs: number;
+          knownGlobalStateRefs: number;
+          threadSpawnEdges: number;
+        };
+        familyWarningSummary: { candidatesWithFamilyWarnings: number; warningCount: number };
+        candidates: Array<{
+          sessionId: string;
+          statuses: string[];
+          sources: string[];
+          previewCounts: { possibleUnknownGlobalStateRefs: number };
+          familyWarnings: unknown[];
+          recommendedAuditCommand: string;
+          recommendedPreviewCommand: string;
+        }>;
+        warnings: string[];
+      };
+
+      expect(preview.rootPath).toBe(fixture.rootDir);
+      expect(preview.filters).toEqual({ statuses: [], sources: ["global_state_unknown"], includeAll: false });
+      expect(preview.totalCandidatesBeforeFilter).toBe(3);
+      expect(preview.totalCandidatesAfterFilter).toBe(1);
+      expect(preview.previewedCandidates).toBe(1);
+      expect(preview.omittedCandidates).toBe(0);
+      expect(preview.limit).toBe(10);
+      expect(preview.aggregatePreview).toMatchObject({
+        possibleUnknownGlobalStateRefs: 1,
+        knownGlobalStateRefs: 0,
+        threadSpawnEdges: 0,
+      });
+      expect(preview.familyWarningSummary).toMatchObject({ candidatesWithFamilyWarnings: 0, warningCount: 0 });
+      expect(preview.candidates).toHaveLength(1);
+      expect(preview.candidates[0]).toMatchObject({
+        sessionId: unknownGlobalId,
+        sources: ["global_state_unknown"],
+        previewCounts: { possibleUnknownGlobalStateRefs: 1 },
+        familyWarnings: [],
+      });
+      expect(preview.candidates[0].recommendedAuditCommand).not.toContain("--yes");
+      expect(preview.candidates[0].recommendedPreviewCommand).not.toContain("--yes");
+      expect(preview.warnings).toEqual([]);
+      await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
+      await expect(readFile(fixture.paths.sessionIndex, "utf8")).resolves.toBe(beforeSessionIndex);
+      await expect(readFile(fixture.paths.history, "utf8")).resolves.toBe(beforeHistory);
+      await expect(readFile(fixture.paths.globalState, "utf8")).resolves.toBe(beforeGlobalState);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("filters root delete preview through MCP status and source parameters", async () => {
+    const { client, server } = await createConnectedClient();
+
+    try {
+      const unknownGlobalId = "019d9999-aaaa-7bbb-8ccc-333333333333";
+      const dbOnlyId = "019daaaa-bbbb-7ccc-8ddd-444444444444";
+      const globalState = JSON.parse(await readFile(fixture.paths.globalState, "utf8")) as Record<string, unknown>;
+      globalState["deleted-session-marker"] = unknownGlobalId;
+      await writeFile(fixture.paths.globalState, `${JSON.stringify(globalState, null, 2)}\n`, "utf8");
+      const db = new Database(fixture.paths.sqlite);
+      db.prepare(
+        `insert into threads (
+           id, title, first_user_message, created_at, updated_at, archived, rollout_path, model, cwd
+         )
+         values (?, 'DB only residue', 'db only residue input', 1775119000, 1775119060, 0, null, 'gpt-5.4', '/workspace/db-only')`,
+      ).run(dbOnlyId);
+      db.close();
+
+      const result = await client.callTool({
+        name: "preview_root_delete",
+        arguments: {
+          root: fixture.rootDir,
+          status: ["db-only", "risky-global-state"],
+          source: ["sqlite", "global-state-unknown"],
+          limit: 10,
+        },
+      });
+
+      const preview = result.structuredContent as {
+        filters: { statuses: string[]; sources: string[] };
+        totalCandidatesBeforeFilter: number;
+        totalCandidatesAfterFilter: number;
+        previewedCandidates: number;
+        omittedCandidates: number;
+        candidates: Array<{ sessionId: string; recommendedPreviewCommand: string }>;
+      };
+
+      expect(preview.filters.statuses).toEqual(["db-only", "risky-global-state"]);
+      expect(preview.filters.sources).toEqual(["global_state_unknown", "sqlite"]);
+      expect(preview.totalCandidatesBeforeFilter).toBe(4);
+      expect(preview.totalCandidatesAfterFilter).toBe(2);
+      expect(preview.previewedCandidates).toBe(2);
+      expect(preview.omittedCandidates).toBe(0);
+      expect(preview.candidates.map((candidate) => candidate.sessionId).sort()).toEqual(
+        [unknownGlobalId, dbOnlyId].sort(),
+      );
+      expect(preview.candidates.every((candidate) => !candidate.recommendedPreviewCommand.includes("--yes"))).toBe(true);
     } finally {
       await client.close();
       await server.close();

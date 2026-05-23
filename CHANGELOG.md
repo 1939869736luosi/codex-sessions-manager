@@ -14,11 +14,12 @@
 - Added structured audit status labels for `clean`, `present`, `partial`, `db-only`, `index-only`, `risky-global-state`, and `broken-family`.
 - Added read-only root residue scanning through CLI `audit-root` and MCP `audit_root`, including default risk filtering, `--json`, `--limit`, and per-candidate audit commands.
 - Added `audit-root` status/source filters plus structured summary fields: `filters`, `totalCandidatesBeforeFilter`, `totalCandidatesAfterFilter`, `byStatus`, and `bySource`.
+- Added read-only root delete preview through CLI `preview-root` and MCP `preview_root_delete`, reusing `audit-root` filters to batch-preview candidate delete impact without deleting, rewriting local data, or recursively selecting family sessions.
 
 ### Changed
 
 - Updated public positioning now that Codex Desktop includes archived-chat delete: the project is described as a local residue audit, verification, and cleanup tool rather than a replacement for a missing built-in delete button.
-- Synchronized README, README.zh-CN, Skill, example Skill, and the installed local Skill with the new family inspection, session audit, and root residue scan guidance.
+- Synchronized README, README.zh-CN, Skill, example Skill, and the installed local Skill with the new family inspection, session audit, root residue scan, and root preview guidance.
 
 ### Fixed
 

@@ -1,7 +1,12 @@
 import { buildDeletePreview } from "./delete.js";
 import { buildSessionFamily } from "./family.js";
-import { collectSqliteSessionIds, sumSqliteDeletionCounts } from "./sqlite.js";
+import { collectSqliteDeletionTotals, collectSqliteSessionIds, sumSqliteDeletionCounts } from "./sqlite.js";
 import type {
+  DeleteFamilyWarning,
+  DeletePreview,
+  DeletePreviewItem,
+  RootDeletePreview,
+  RootDeletePreviewCounts,
   RootResidueAudit,
   RootResidueCandidate,
   RootResidueCandidateSource,
@@ -480,6 +485,10 @@ function buildRecommendedAuditCommand(scan: ScanResult, sessionId: string): stri
   return `codex-sessions audit ${quoteShellArg(sessionId)} --root ${quoteShellArg(scan.root.rootPath)}`;
 }
 
+function buildRecommendedPreviewCommand(scan: ScanResult, sessionId: string): string {
+  return `codex-sessions delete ${quoteShellArg(sessionId)} --root ${quoteShellArg(scan.root.rootPath)}`;
+}
+
 function toRootResidueCandidate(scan: ScanResult, audit: SessionResidueAudit): RootResidueCandidate {
   return {
     sessionId: audit.sessionId,
@@ -506,6 +515,67 @@ function toRootResidueCandidate(scan: ScanResult, audit: SessionResidueAudit): R
     },
     warnings: audit.warnings,
     recommendedAuditCommand: buildRecommendedAuditCommand(scan, audit.sessionId),
+  };
+}
+
+function toPreviewCounts(item: DeletePreviewItem): RootDeletePreviewCounts {
+  return {
+    rolloutFiles: item.filePaths.length,
+    shellSnapshots: item.shellSnapshotFiles.length,
+    sessionIndexRows: item.sessionIndexRows,
+    historyRows: item.historyRows,
+    sqliteRows: sumSqliteDeletionCounts(item.sqlite),
+    knownGlobalStateRefs: item.globalStateRefs,
+    possibleUnknownGlobalStateRefs: item.possibleUnknownGlobalStateRefs,
+    threadSpawnEdges: item.sqlite.spawnEdgeRows,
+  };
+}
+
+function aggregatePreviewCounts(
+  scan: ScanResult,
+  preview: DeletePreview,
+  sessions: SessionEntry[],
+): RootDeletePreviewCounts {
+  const sqliteTotals = collectSqliteDeletionTotals(
+    scan.root.sqlitePath,
+    sessions.map((session) => session.id),
+    scan.root.logsSqlitePath,
+  );
+
+  return {
+    rolloutFiles: preview.totals.sessionFiles,
+    shellSnapshots: preview.totals.shellSnapshotFiles,
+    sessionIndexRows: preview.totals.sessionIndexRows,
+    historyRows: preview.totals.historyRows,
+    sqliteRows: sumSqliteDeletionCounts(sqliteTotals),
+    knownGlobalStateRefs: preview.totals.globalStateRefs,
+    possibleUnknownGlobalStateRefs: preview.totals.possibleUnknownGlobalStateRefs,
+    threadSpawnEdges: sqliteTotals.spawnEdgeRows,
+  };
+}
+
+function warningsForSession(preview: DeletePreview, sessionId: string): DeleteFamilyWarning[] {
+  return preview.familyWarnings.filter((warning) => warning.sessionId === sessionId);
+}
+
+function summarizeFamilyWarnings(familyWarnings: DeleteFamilyWarning[]): RootDeletePreview["familyWarningSummary"] {
+  const brokenRelationKeys = uniqueSorted(
+    familyWarnings.flatMap((warning) =>
+      warning.brokenRelations.map((relation) => `${relation.parentThreadId}->${relation.childThreadId}`),
+    ),
+  );
+  const warnings = uniqueSorted(familyWarnings.flatMap((warning) => warning.warnings));
+
+  return {
+    candidatesWithFamilyWarnings: uniqueSorted(familyWarnings.map((warning) => warning.sessionId)).length,
+    unselectedParentIds: uniqueSorted(familyWarnings.flatMap((warning) => warning.unselectedParentIds)),
+    unselectedChildIds: uniqueSorted(familyWarnings.flatMap((warning) => warning.unselectedChildIds)),
+    unselectedFamilyMemberIds: uniqueSorted(familyWarnings.flatMap((warning) => warning.unselectedFamilyMemberIds)),
+    missingParentIds: uniqueSorted(familyWarnings.flatMap((warning) => warning.missingParentIds)),
+    missingChildIds: uniqueSorted(familyWarnings.flatMap((warning) => warning.missingChildIds)),
+    brokenRelationCount: brokenRelationKeys.length,
+    warningCount: warnings.length,
+    warnings,
   };
 }
 
@@ -650,5 +720,50 @@ export function buildRootResidueAudit(
     bySource: countBy(candidates.flatMap((candidate) => candidate.sources)),
     candidates: returned,
     warnings: uniqueSorted([...scan.warnings, ...collected.warnings]),
+  };
+}
+
+export function buildRootDeletePreview(
+  scan: ScanResult,
+  options: {
+    limit?: number;
+    includeAll?: boolean;
+    statuses?: string[];
+    sources?: string[];
+  } = {},
+): RootDeletePreview {
+  const audit = buildRootResidueAudit(scan, options);
+  const sessions = audit.candidates.map((candidate) => findSession(scan, candidate.sessionId) ?? emptySessionEntry(candidate.sessionId));
+  const preview = buildDeletePreview(scan, sessions);
+  const previewItemsById = new Map(preview.items.map((item) => [item.sessionId, item]));
+  const candidates = audit.candidates.map((candidate) => {
+    const previewItem = previewItemsById.get(candidate.sessionId);
+    if (!previewItem) {
+      throw new Error(`无法生成 preview：缺少候选 ${candidate.sessionId}。`);
+    }
+
+    return {
+      sessionId: candidate.sessionId,
+      statuses: candidate.statuses,
+      sources: candidate.sources,
+      previewCounts: toPreviewCounts(previewItem),
+      familyWarnings: warningsForSession(preview, candidate.sessionId),
+      recommendedAuditCommand: candidate.recommendedAuditCommand,
+      recommendedPreviewCommand: buildRecommendedPreviewCommand(scan, candidate.sessionId),
+    };
+  });
+
+  return {
+    rootPath: audit.rootPath,
+    filters: audit.filters,
+    totalCandidatesBeforeFilter: audit.totalCandidatesBeforeFilter,
+    totalCandidatesAfterFilter: audit.totalCandidatesAfterFilter,
+    previewedCandidates: audit.returnedCandidates,
+    omittedCandidates: Math.max(0, audit.totalCandidatesAfterFilter - audit.returnedCandidates),
+    limit: audit.limit,
+    aggregatePreview: aggregatePreviewCounts(scan, preview, sessions),
+    familyWarningSummary: summarizeFamilyWarnings(preview.familyWarnings),
+    candidates,
+    warnings: audit.warnings,
   };
 }

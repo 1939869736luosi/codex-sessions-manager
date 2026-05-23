@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { appendFile, readFile } from "node:fs/promises";
+import { appendFile, readFile, writeFile } from "node:fs/promises";
 import Database from "better-sqlite3";
 
 import { runCli } from "../src/cli/run.js";
@@ -427,6 +427,146 @@ describe("cli", () => {
     expect(result.bySource).toMatchObject({ session_index: 1, shell_snapshots: 1 });
     expect(result.candidates[0].recommendedAuditCommand).toContain("codex-sessions audit");
     expect(result.warnings).toEqual([]);
+  });
+
+  it("previews root residue delete candidates in human and json modes without deleting", async () => {
+    const beforeSessionIndex = await readFile(fixture.paths.sessionIndex, "utf8");
+    const beforeHistory = await readFile(fixture.paths.history, "utf8");
+    const beforeGlobalState = await readFile(fixture.paths.globalState, "utf8");
+    const human = createIo();
+    const humanExitCode = await runCli(["preview-root", "--root", fixture.rootDir, "--limit", "10"], human.io);
+    const humanOutput = human.stdout.join("\n");
+    const json = createIo();
+    const jsonExitCode = await runCli(["preview-root", "--root", fixture.rootDir, "--json", "--limit", "1"], json.io);
+    const result = JSON.parse(json.stdout.join("\n")) as {
+      rootPath: string;
+      filters: { statuses: string[]; sources: string[]; includeAll: boolean };
+      totalCandidatesBeforeFilter: number;
+      totalCandidatesAfterFilter: number;
+      previewedCandidates: number;
+      omittedCandidates: number;
+      limit: number;
+      aggregatePreview: {
+        rolloutFiles: number;
+        shellSnapshots: number;
+        sessionIndexRows: number;
+        historyRows: number;
+        sqliteRows: number;
+        knownGlobalStateRefs: number;
+        possibleUnknownGlobalStateRefs: number;
+        threadSpawnEdges: number;
+      };
+      familyWarningSummary: { candidatesWithFamilyWarnings: number };
+      candidates: Array<{
+        sessionId: string;
+        statuses: string[];
+        sources: string[];
+        previewCounts: { sessionIndexRows: number; shellSnapshots: number };
+        recommendedAuditCommand: string;
+        recommendedPreviewCommand: string;
+      }>;
+      warnings: string[];
+    };
+
+    expect(humanExitCode).toBe(0);
+    expect(humanOutput).toContain("root 批量 delete preview（只读，未删除）");
+    expect(humanOutput).toContain("Root:");
+    expect(humanOutput).toContain("筛选条件");
+    expect(humanOutput).toContain("匹配候选数");
+    expect(humanOutput).toContain("本次预览 ID 数");
+    expect(humanOutput).toContain("省略 ID 数");
+    expect(humanOutput).toContain("rollout files");
+    expect(humanOutput).toContain("shell snapshots");
+    expect(humanOutput).toContain("session_index");
+    expect(humanOutput).toContain("history");
+    expect(humanOutput).toContain("SQLite");
+    expect(humanOutput).toContain("known global-state");
+    expect(humanOutput).toContain("unknown global-state");
+    expect(humanOutput).toContain("thread_spawn_edges");
+    expect(humanOutput).toContain("family 风险摘要");
+    expect(humanOutput).toContain("建议 audit 命令");
+    expect(humanOutput).toContain(FIXTURE_IDS.STALE_ID);
+    expect(humanOutput).toContain(FIXTURE_IDS.UNRELATED_ID);
+    expect(humanOutput).not.toContain("active user input");
+    expect(humanOutput).not.toContain("--yes");
+
+    expect(jsonExitCode).toBe(0);
+    expect(result.rootPath).toBe(fixture.rootDir);
+    expect(result.filters).toEqual({ statuses: [], sources: [], includeAll: false });
+    expect(result.totalCandidatesBeforeFilter).toBe(2);
+    expect(result.totalCandidatesAfterFilter).toBe(2);
+    expect(result.previewedCandidates).toBe(1);
+    expect(result.omittedCandidates).toBe(1);
+    expect(result.limit).toBe(1);
+    expect(result.aggregatePreview.sessionIndexRows + result.aggregatePreview.shellSnapshots).toBeGreaterThan(0);
+    expect(result.familyWarningSummary.candidatesWithFamilyWarnings).toBe(0);
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0].recommendedAuditCommand).toContain("codex-sessions audit");
+    expect(result.candidates[0].recommendedPreviewCommand).toContain("codex-sessions delete");
+    expect(result.candidates[0].recommendedAuditCommand).not.toContain("--yes");
+    expect(result.candidates[0].recommendedPreviewCommand).not.toContain("--yes");
+    expect(result.warnings).toEqual([]);
+    await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
+    await expect(readFile(fixture.paths.unrelatedShellSnapshot, "utf8")).resolves.toContain(FIXTURE_IDS.UNRELATED_ID);
+    await expect(readFile(fixture.paths.sessionIndex, "utf8")).resolves.toBe(beforeSessionIndex);
+    await expect(readFile(fixture.paths.history, "utf8")).resolves.toBe(beforeHistory);
+    await expect(readFile(fixture.paths.globalState, "utf8")).resolves.toBe(beforeGlobalState);
+  });
+
+  it("filters preview-root candidates with repeated status and source options", async () => {
+    const unknownGlobalId = "019d9999-aaaa-7bbb-8ccc-333333333333";
+    const dbOnlyId = "019daaaa-bbbb-7ccc-8ddd-444444444444";
+    const globalState = JSON.parse(await readFile(fixture.paths.globalState, "utf8")) as Record<string, unknown>;
+    globalState["deleted-session-marker"] = unknownGlobalId;
+    await writeFile(fixture.paths.globalState, `${JSON.stringify(globalState, null, 2)}\n`, "utf8");
+
+    const db = new Database(fixture.paths.sqlite);
+    db.prepare(
+      `insert into threads (
+         id, title, first_user_message, created_at, updated_at, archived, rollout_path, model, cwd
+       )
+       values (?, 'DB only residue', 'db only residue input', 1775119000, 1775119060, 0, null, 'gpt-5.4', '/workspace/db-only')`,
+    ).run(dbOnlyId);
+    db.close();
+
+    const capture = createIo();
+    const exitCode = await runCli(
+      [
+        "preview-root",
+        "--root",
+        fixture.rootDir,
+        "--json",
+        "--status",
+        "db-only",
+        "--status",
+        "risky-global-state",
+        "--source",
+        "sqlite",
+        "--source",
+        "global-state-unknown",
+        "--limit",
+        "1",
+      ],
+      capture.io,
+    );
+    const result = JSON.parse(capture.stdout.join("\n")) as {
+      filters: { statuses: string[]; sources: string[] };
+      totalCandidatesBeforeFilter: number;
+      totalCandidatesAfterFilter: number;
+      previewedCandidates: number;
+      omittedCandidates: number;
+      candidates: Array<{ sessionId: string; recommendedPreviewCommand: string }>;
+    };
+
+    expect(exitCode).toBe(0);
+    expect(result.filters.statuses).toEqual(["db-only", "risky-global-state"]);
+    expect(result.filters.sources).toEqual(["global_state_unknown", "sqlite"]);
+    expect(result.totalCandidatesBeforeFilter).toBe(4);
+    expect(result.totalCandidatesAfterFilter).toBe(2);
+    expect(result.previewedCandidates).toBe(1);
+    expect(result.omittedCandidates).toBe(1);
+    expect([unknownGlobalId, dbOnlyId]).toContain(result.candidates[0].sessionId);
+    expect(result.candidates[0].recommendedPreviewCommand).not.toContain("--yes");
   });
 
   it("filters root residue candidates from the cli with repeated status and source options", async () => {

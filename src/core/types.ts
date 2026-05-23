@@ -417,6 +417,53 @@ export interface RootResidueAudit {
   warnings: string[];
 }
 
+export interface RootDeletePreviewCounts {
+  rolloutFiles: number;
+  shellSnapshots: number;
+  sessionIndexRows: number;
+  historyRows: number;
+  sqliteRows: number;
+  knownGlobalStateRefs: number;
+  possibleUnknownGlobalStateRefs: number;
+  threadSpawnEdges: number;
+}
+
+export interface RootDeletePreviewFamilyWarningSummary {
+  candidatesWithFamilyWarnings: number;
+  unselectedParentIds: string[];
+  unselectedChildIds: string[];
+  unselectedFamilyMemberIds: string[];
+  missingParentIds: string[];
+  missingChildIds: string[];
+  brokenRelationCount: number;
+  warningCount: number;
+  warnings: string[];
+}
+
+export interface RootDeletePreviewCandidate {
+  sessionId: string;
+  statuses: RootResidueCandidateStatus[];
+  sources: RootResidueCandidateSource[];
+  previewCounts: RootDeletePreviewCounts;
+  familyWarnings: DeleteFamilyWarning[];
+  recommendedAuditCommand: string;
+  recommendedPreviewCommand: string;
+}
+
+export interface RootDeletePreview {
+  rootPath: string;
+  filters: RootResidueFilters;
+  totalCandidatesBeforeFilter: number;
+  totalCandidatesAfterFilter: number;
+  previewedCandidates: number;
+  omittedCandidates: number;
+  limit: number;
+  aggregatePreview: RootDeletePreviewCounts;
+  familyWarningSummary: RootDeletePreviewFamilyWarningSummary;
+  candidates: RootDeletePreviewCandidate[];
+  warnings: string[];
+}
+
 export interface DeletePreviewItem {
   sessionId: string;
   title: string;
