@@ -79,6 +79,42 @@ Duplicate trash rules:
 - Before purging an old copy, confirm the live session is absent and at least one backup copy remains, unless the user explicitly accepts having no trash backup.
 - `purge --yes` permanently removes only the selected trash entry. It does not touch live sessions.
 
+## Low-Risk Trash Drill
+
+Use this narrow workflow for residue that has all of these properties:
+
+- exactly one raw session file
+- the raw file is empty or otherwise intentionally disposable
+- exactly one `history.jsonl` row
+- no `session_index.jsonl` row
+- no shell snapshots
+- no SQLite rows
+- no known, P11 exact-key, or unknown global-state references
+- no parent, child, subagent, side/fork, or broken family relation warnings
+
+Preview first:
+
+```bash
+node dist/cli/index.js audit <session-id> --root <path-to-codex-root> --json
+node dist/cli/index.js family <session-id> --root <path-to-codex-root> --impact --json
+node dist/cli/index.js delete <session-id> --root <path-to-codex-root> --trash --json
+```
+
+Execute only after the preview still matches the narrow scope:
+
+```bash
+node dist/cli/index.js delete <session-id> --root <path-to-codex-root> --trash --yes --json
+```
+
+After deletion, confirm that the live root is clean and the trash entry exists:
+
+```bash
+node dist/cli/index.js audit <session-id> --root <path-to-codex-root> --json
+node dist/cli/index.js trash-list --root <path-to-codex-root> --json
+```
+
+To test recoverability, preview and restore the trash entry, audit the restored surfaces, then move the same explicit session id back to trash if cleanup is still desired. Do not run `purge --yes` during this drill. For residual-only sessions that no longer resolve through `verify`, use `audit` plus `trash-list` as the post-delete proof.
+
 ## Side Conversations
 
 Codex `/side` conversations are separate transcripts. They may appear in local storage as child threads linked to a parent thread.
