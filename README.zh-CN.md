@@ -31,6 +31,9 @@ npm install -g codex-sessions-manager
 # 列出最近的会话
 codex-sessions list --limit 10
 
+# 查看父子关系（安全，不做任何修改）
+codex-sessions family <session-id>
+
 # 预览删除（安全，不做任何修改）
 codex-sessions delete <session-id>
 
@@ -78,7 +81,8 @@ codex-sessions verify <session-id>
 | **清理索引** | 移除失效索引条目，不动原始数据 |
 | **健康检查** | `doctor` 命令做完整诊断 |
 | **MCP 服务** | AI Agent（Claude Code、Codex、Kiro）直接管理会话 |
-| **子对话感知** | 识别 `/fork` 和 `/side` 的父子关系；不会自动递归删除子对话 |
+| **会话家族** | 只读查看 parent、child、`/fork`、`/side` 关系 |
+| **子对话感知** | 父会话和子会话仍是独立 session；删除、导出、验证都不会自动递归 |
 
 ## 给 AI Agent 用（MCP）
 
@@ -95,9 +99,9 @@ codex-sessions verify <session-id>
 }
 ```
 
-暴露 13 个工具：`inspect_root`、`list_sessions`、`list_projects`、`get_session`、`export_session_backup`、`preview_delete_sessions`、`delete_sessions`、`list_trash`、`restore_sessions`、`purge_trash`、`cleanup_session_indexes`、`cleanup_stale_indexes`、`verify_sessions`。
+暴露 14 个工具：`inspect_root`、`list_sessions`、`list_projects`、`get_session`、`get_session_family`、`export_session_backup`、`preview_delete_sessions`、`delete_sessions`、`list_trash`、`restore_sessions`、`purge_trash`、`cleanup_session_indexes`、`cleanup_stale_indexes`、`verify_sessions`。
 
-所有破坏性操作需要 `confirm: true`，否则只返回预览。
+`get_session_family` 是只读工具，不需要确认。所有破坏性操作需要 `confirm: true`，否则只返回预览。
 
 ## CLI 命令
 
@@ -108,6 +112,7 @@ codex-sessions list --group-by project
 codex-sessions projects
 codex-sessions doctor [--json]
 codex-sessions show <session-id>
+codex-sessions family <session-id> [--json]
 codex-sessions export <session-id> [--output ./backup.json]
 codex-sessions delete <session-id...> [--trash] [--yes]
 codex-sessions trash-list
@@ -119,6 +124,8 @@ codex-sessions verify <session-id...> [--json]
 ```
 
 **安全第一**：所有破坏性命令需要 `--yes` 才执行，不加只看预览。
+
+删除 parent 或 child 前先看 `family`。parent 和 child 是不同 session，各自有自己的 ID。删除 parent 不等于删除 child，删除 child 也不等于删除 parent。删除预览会提示尚未选中的 parent、child 或 family 相关 session。要一起处理多个相关 session，需要把每个 session ID 明确放进预览或删除命令。
 
 ## 标题怎么看
 

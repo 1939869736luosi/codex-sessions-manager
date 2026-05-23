@@ -18,6 +18,7 @@ import {
   previewCleanupStaleIndexes,
   validateDeletion,
 } from "../core/delete.js";
+import { resolveSessionFamily } from "../core/family.js";
 import { groupSessionsByProject, listProjectSummaries } from "../core/project.js";
 import { filterSessions, resolveSessions } from "../core/query.js";
 import { scanCodexRoot } from "../core/scan.js";
@@ -37,7 +38,7 @@ export function createServer(): McpServer {
   const server = new McpServer(
     {
       name: "codex-sessions",
-      version: "0.3.1",
+      version: "0.3.2",
     },
     {
       capabilities: { logging: {} },
@@ -150,6 +151,31 @@ export function createServer(): McpServer {
       const session = resolveSessions(scan, [sessionId])[0];
       const timeline = await readSessionTimeline(session);
       return textResult(`Loaded session ${session.id}.`, { session, timeline });
+    },
+  );
+
+  server.registerTool(
+    "get_session_family",
+    {
+      description: "Inspect parent, child, side/fork, and related family sessions for one Codex session without modifying anything.",
+      outputSchema: TOOL_OUTPUT_SCHEMA,
+      inputSchema: z.object({
+        sessionId: z.string().describe("Exact session id or unique prefix."),
+        root: z.string().optional(),
+      }),
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({ sessionId, root }) => {
+      const scan = await scanCodexRoot(root);
+      const family = resolveSessionFamily(scan, sessionId);
+      return textResult(`Loaded session family for ${family.current.sessionId}.`, {
+        root: scan.root,
+        warnings: scan.warnings,
+        family,
+      });
     },
   );
 

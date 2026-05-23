@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 
-import type { SqliteDeletionCounts, SqliteTableInspection, ThreadRow } from "./types.js";
+import type { SqliteDeletionCounts, SqliteTableInspection, ThreadRow, ThreadSpawnEdgeRow } from "./types.js";
 
 export const SQLITE_KEY_TABLES = [
   "threads",
@@ -178,6 +178,19 @@ function countSessionLogs(db: Database.Database, sessionId: string): number {
   return countRows(db, "select count(*) as count from logs where thread_id = ?", [sessionId]);
 }
 
+function selectOptionalColumn(columns: Set<string>, columnName: string): string {
+  return columns.has(columnName) ? quoteIdentifier(columnName) : `null as ${quoteIdentifier(columnName)}`;
+}
+
+function stringOrNull(value: unknown): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  const text = String(value).trim();
+  return text ? text : null;
+}
+
 function selectSessionLogs(db: Database.Database, sessionId: string): Record<string, unknown>[] {
   if (!hasSessionLogsTable(db)) {
     return [];
@@ -209,6 +222,11 @@ function mapThreadRow(row: Record<string, unknown>): ThreadRow {
     rolloutPath: row.rollout_path ? String(row.rollout_path) : null,
     model: row.model ? String(row.model) : null,
     cwd: row.cwd ? String(row.cwd) : null,
+    source: stringOrNull(row.source),
+    threadSource: stringOrNull(row.thread_source),
+    agentRole: stringOrNull(row.agent_role),
+    agentNickname: stringOrNull(row.agent_nickname),
+    agentPath: stringOrNull(row.agent_path),
   };
 }
 
@@ -218,15 +236,74 @@ export function scanThreads(sqlitePath: string | null): Map<string, ThreadRow> {
   }
 
   return withDatabase(sqlitePath, true, (db) => {
+    if (!tableExists(db, "threads")) {
+      return new Map();
+    }
+
+    const columns = new Set(getTableColumns(db, "threads"));
+    const orderBy = columns.has("updated_at") ? "updated_at desc" : "id";
     const rows = db
       .prepare(
-        `select id, title, first_user_message, created_at, updated_at, archived, rollout_path, model, cwd
+        `select id, title, first_user_message, created_at, updated_at, archived, rollout_path, model, cwd,
+           ${selectOptionalColumn(columns, "source")},
+           ${selectOptionalColumn(columns, "thread_source")},
+           ${selectOptionalColumn(columns, "agent_role")},
+           ${selectOptionalColumn(columns, "agent_nickname")},
+           ${selectOptionalColumn(columns, "agent_path")}
          from threads
-         order by updated_at desc`,
+         order by ${orderBy}`,
       )
       .all() as Record<string, unknown>[];
 
     return new Map(rows.map((row) => [String(row.id), mapThreadRow(row)]));
+  });
+}
+
+export function scanThreadSpawnEdges(sqlitePath: string | null): ThreadSpawnEdgeRow[] {
+  if (!sqlitePath) {
+    return [];
+  }
+
+  return withDatabase(sqlitePath, true, (db) => {
+    if (
+      !tableExists(db, "thread_spawn_edges") ||
+      !columnExists(db, "thread_spawn_edges", "parent_thread_id") ||
+      !columnExists(db, "thread_spawn_edges", "child_thread_id")
+    ) {
+      return [];
+    }
+
+    const columns = getTableColumns(db, "thread_spawn_edges");
+    const rows = selectRows(
+      db,
+      "select * from thread_spawn_edges order by parent_thread_id, child_thread_id",
+    );
+
+    return rows.flatMap((row): ThreadSpawnEdgeRow[] => {
+      const parentThreadId = stringOrNull(row.parent_thread_id);
+      const childThreadId = stringOrNull(row.child_thread_id);
+
+      if (!parentThreadId || !childThreadId) {
+        return [];
+      }
+
+      const metadata: Record<string, unknown> = {};
+      for (const column of columns) {
+        if (column === "parent_thread_id" || column === "child_thread_id" || column === "status") {
+          continue;
+        }
+        metadata[column] = row[column] ?? null;
+      }
+
+      return [
+        {
+          parentThreadId,
+          childThreadId,
+          status: stringOrNull(row.status),
+          metadata,
+        },
+      ];
+    });
   });
 }
 

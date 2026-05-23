@@ -34,6 +34,18 @@ export interface ThreadRow {
   rolloutPath: string | null;
   model: string | null;
   cwd: string | null;
+  source: string | null;
+  threadSource: string | null;
+  agentRole: string | null;
+  agentNickname: string | null;
+  agentPath: string | null;
+}
+
+export interface ThreadSpawnEdgeRow {
+  parentThreadId: string;
+  childThreadId: string;
+  status: string | null;
+  metadata: Record<string, unknown>;
 }
 
 export type SessionTitleSource = "session_index" | "sqlite" | "first_user_message" | "id";
@@ -82,6 +94,11 @@ export interface SessionEntry {
   model: string | null;
   cwd: string | null;
   rolloutPath: string | null;
+  source: string | null;
+  threadSource: string | null;
+  agentRole: string | null;
+  agentNickname: string | null;
+  agentPath: string | null;
   previewSummary: string;
   historyPreview: string[];
   totalFileSize: number;
@@ -126,6 +143,7 @@ export interface HistoryData {
 export interface SqliteScanData {
   sqlitePath: string | null;
   threadsById: Map<string, ThreadRow>;
+  threadSpawnEdges: ThreadSpawnEdgeRow[];
   warning: string | null;
 }
 
@@ -175,6 +193,56 @@ export interface SqliteDeletionCounts {
   threadGoalRows: number;
 }
 
+export type SessionFamilyRelationship =
+  | "self"
+  | "root"
+  | "parent"
+  | "child"
+  | "ancestor"
+  | "descendant"
+  | "sibling"
+  | "related";
+
+export interface SessionFamilyNode {
+  sessionId: string;
+  displayTitle: string;
+  kind: SessionKind;
+  relationship: SessionFamilyRelationship;
+  relationshipStatus: string | null;
+  parentEdgeStatus: string | null;
+  archived: boolean;
+  updatedAt: string | null;
+  fileExists: boolean;
+  fileCount: number;
+  source: string | null;
+  threadSource: string | null;
+  agentRole: string | null;
+  agentNickname: string | null;
+  agentPath: string | null;
+  parentIds: string[];
+  childIds: string[];
+  edge: ThreadSpawnEdgeRow | null;
+}
+
+export interface SessionFamily {
+  current: SessionFamilyNode;
+  root: SessionFamilyNode;
+  parent: SessionFamilyNode | null;
+  parents: SessionFamilyNode[];
+  directChildren: SessionFamilyNode[];
+  familyMembers: SessionFamilyNode[];
+  edges: ThreadSpawnEdgeRow[];
+  warnings: string[];
+}
+
+export interface DeleteFamilyWarning {
+  sessionId: string;
+  unselectedParentIds: string[];
+  unselectedChildIds: string[];
+  unselectedFamilyMemberIds: string[];
+  unselectedRelatedSessionIds: string[];
+}
+
 export interface DeletePreviewItem {
   sessionId: string;
   title: string;
@@ -191,6 +259,7 @@ export interface DeletePreviewItem {
 
 export interface DeletePreview {
   items: DeletePreviewItem[];
+  familyWarnings: DeleteFamilyWarning[];
   totals: {
     sessionFiles: number;
     shellSnapshotFiles: number;

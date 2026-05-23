@@ -13,6 +13,7 @@ import {
   previewCleanupStaleIndexes,
   validateDeletion,
 } from "../core/delete.js";
+import { resolveSessionFamily } from "../core/family.js";
 import { listProjectSummaries } from "../core/project.js";
 import { filterSessions, resolveSessions } from "../core/query.js";
 import { scanCodexRoot } from "../core/scan.js";
@@ -26,6 +27,7 @@ import {
   formatCleanupResult,
   formatDeleteResult,
   formatDoctor,
+  formatFamily,
   formatGroupedList,
   formatList,
   formatPreview,
@@ -44,6 +46,7 @@ type CommandName =
   | "list"
   | "projects"
   | "show"
+  | "family"
   | "export"
   | "delete"
   | "trash-list"
@@ -76,6 +79,7 @@ Usage:
   codex-sessions projects [--root PATH] [--json]
   codex-sessions doctor [--root PATH] [--json]
   codex-sessions show <session-id> [--root PATH] [--json]
+  codex-sessions family <session-id> [--root PATH] [--json]
   codex-sessions export <session-id> [--root PATH] [--output FILE] [--json]
   codex-sessions delete <session-id...> [--root PATH] [--json] [--yes] [--trash]
   codex-sessions trash-list [--root PATH] [--json]
@@ -88,6 +92,7 @@ Usage:
 Notes:
   - 默认根目录是 ~/.codex
   - delete 未带 --yes 时只展示预览，不执行删除
+  - family 只读查看 parent / children / side / fork 关系，不会自动递归处理
   - delete --trash --yes 会先写入回收站，再清理 live session
   - restore 和 purge 未带 --yes 时只展示匹配的回收站记录
   - cleanup-index 和 cleanup-stale 未带 --yes 时只展示预览，不改写 JSONL
@@ -191,6 +196,16 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
       const session = resolveSessions(scan, [rest[0]])[0];
       const timeline = await readSessionTimeline(session);
       io.stdout(asJson ? JSON.stringify({ session, timeline }, null, 2) : formatShow(session, timeline));
+      return 0;
+    }
+
+    case "family": {
+      if (rest.length !== 1) {
+        throw new Error("family 需要 1 个 session-id。");
+      }
+
+      const family = resolveSessionFamily(scan, rest[0]);
+      io.stdout(asJson ? JSON.stringify({ root: scan.root, warnings: scan.warnings, family }, null, 2) : formatFamily(family));
       return 0;
     }
 

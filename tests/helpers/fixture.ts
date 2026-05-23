@@ -8,6 +8,7 @@ const ACTIVE_ID = "019d1111-2222-7333-8444-aaaaaaaaaaaa";
 const ARCHIVED_ID = "019d2222-3333-7444-8555-bbbbbbbbbbbb";
 const STALE_ID = "019d3333-4444-7555-8666-cccccccccccc";
 const UNRELATED_ID = "019d4444-5555-7666-8777-dddddddddddd";
+const CHILD_ID = "019d5555-6666-7777-8888-eeeeeeeeeeee";
 const ACTIVE_CWD = "/workspace/demo";
 const ARCHIVED_CWD = "/workspace/archive-demo";
 
@@ -212,7 +213,12 @@ export async function createFixture(options: FixtureOptions = {}): Promise<Fixtu
       archived integer,
       rollout_path text,
       model text,
-      cwd text
+      cwd text,
+      source text,
+      thread_source text,
+      agent_role text,
+      agent_nickname text,
+      agent_path text
     );
     create table thread_dynamic_tools (
       thread_id text not null,
@@ -269,14 +275,32 @@ export async function createFixture(options: FixtureOptions = {}): Promise<Fixtu
     `);
   }
 
-  for (const [id, rolloutPath, archived, firstUserMessage, createdAt, updatedAt, cwd] of [
-    [ACTIVE_ID, activeSessionFile, 0, "active input", 1775198400, 1775198460, ACTIVE_CWD],
-    [ARCHIVED_ID, archivedSessionFile, 1, "archived input", 1775118000, 1775118060, ARCHIVED_CWD],
+  for (const [id, rolloutPath, archived, firstUserMessage, createdAt, updatedAt, cwd, source, threadSource, agentRole, agentNickname, agentPath] of [
+    [ACTIVE_ID, activeSessionFile, 0, "active input", 1775198400, 1775198460, ACTIVE_CWD, "main", "main", null, null, null],
+    [ARCHIVED_ID, archivedSessionFile, 1, "archived input", 1775118000, 1775118060, ARCHIVED_CWD, "side", "side", "subagent", "helper", "/tmp/helper"],
   ] as const) {
     db.prepare(
-      `insert into threads (id, title, first_user_message, created_at, updated_at, archived, rollout_path, model, cwd)
-       values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(id, `Title ${id}`, firstUserMessage, createdAt, updatedAt, archived, rolloutPath, "gpt-5.4", cwd);
+      `insert into threads (
+         id, title, first_user_message, created_at, updated_at, archived, rollout_path, model, cwd,
+         source, thread_source, agent_role, agent_nickname, agent_path
+       )
+       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      id,
+      `Title ${id}`,
+      firstUserMessage,
+      createdAt,
+      updatedAt,
+      archived,
+      rolloutPath,
+      "gpt-5.4",
+      cwd,
+      source,
+      threadSource,
+      agentRole,
+      agentNickname,
+      agentPath,
+    );
     if (stateLogsTable) {
       db.prepare("insert into logs (thread_id) values (?)").run(id);
     }
@@ -331,6 +355,7 @@ export const FIXTURE_IDS = {
   ARCHIVED_ID,
   STALE_ID,
   UNRELATED_ID,
+  CHILD_ID,
   ACTIVE_CWD,
   ARCHIVED_CWD,
 };

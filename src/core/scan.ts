@@ -6,7 +6,7 @@ import { collectGlobalStateReferences, collectPossibleUnknownGlobalStateReferenc
 import { deriveProjectIdentity } from "./project.js";
 import { resolveCodexRoot } from "./root.js";
 import { scanShellSnapshots } from "./shell-snapshots.js";
-import { scanThreads } from "./sqlite.js";
+import { scanThreadSpawnEdges, scanThreads } from "./sqlite.js";
 import type {
   GlobalStateReference,
   HistoryData,
@@ -281,6 +281,11 @@ function buildSession(
     model: thread?.model ?? null,
     cwd: thread?.cwd ?? null,
     rolloutPath: thread?.rolloutPath ?? null,
+    source: thread?.source ?? null,
+    threadSource: thread?.threadSource ?? null,
+    agentRole: thread?.agentRole ?? null,
+    agentNickname: thread?.agentNickname ?? null,
+    agentPath: thread?.agentPath ?? null,
     previewSummary,
     historyPreview,
     totalFileSize,
@@ -324,9 +329,11 @@ export async function scanCodexRoot(rootArg?: string): Promise<ScanResult> {
 
   let sqliteWarning: string | null = null;
   let threadsById = new Map<string, ScanResult["sqlite"]["threadsById"] extends Map<string, infer T> ? T : never>();
+  let threadSpawnEdges: ScanResult["sqlite"]["threadSpawnEdges"] = [];
 
   try {
     threadsById = scanThreads(root.sqlitePath) as typeof threadsById;
+    threadSpawnEdges = scanThreadSpawnEdges(root.sqlitePath);
   } catch (error) {
     const sqliteName = root.sqlitePath ? path.basename(root.sqlitePath) : "SQLite 状态库";
     sqliteWarning = `读取 ${sqliteName} 失败：${error instanceof Error ? error.message : String(error)}`;
@@ -339,6 +346,10 @@ export async function scanCodexRoot(rootArg?: string): Promise<ScanResult> {
   for (const key of sessionIndex.latestById.keys()) ids.add(key);
   for (const key of history.lineCountById.keys()) ids.add(key);
   for (const key of threadsById.keys()) ids.add(key);
+  for (const edge of threadSpawnEdges) {
+    ids.add(edge.parentThreadId);
+    ids.add(edge.childThreadId);
+  }
 
   const sessions = [...ids]
     .map((id) => {
@@ -359,6 +370,7 @@ export async function scanCodexRoot(rootArg?: string): Promise<ScanResult> {
     sqlite: {
       sqlitePath: root.sqlitePath,
       threadsById: threadsById as ScanResult["sqlite"]["threadsById"],
+      threadSpawnEdges,
       warning: sqliteWarning,
     },
     globalState: {

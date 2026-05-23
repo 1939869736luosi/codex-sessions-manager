@@ -5,6 +5,7 @@ import {
   collectPossibleUnknownGlobalStateReferences,
   removeGlobalStateReferences,
 } from "./global-state.js";
+import { buildDeleteFamilyWarnings } from "./family.js";
 import { filterJsonLines, safeJsonParse, splitJsonLines } from "./jsonl.js";
 import { scanShellSnapshots } from "./shell-snapshots.js";
 import {
@@ -98,6 +99,7 @@ export function buildDeletePreview(scan: ScanResult, sessions: SessionEntry[]): 
 
   return {
     items,
+    familyWarnings: buildDeleteFamilyWarnings(scan, sessions),
     totals: {
       sessionFiles: items.reduce((sum, item) => sum + item.filePaths.length, 0),
       shellSnapshotFiles: items.reduce((sum, item) => sum + item.shellSnapshotFiles.length, 0),

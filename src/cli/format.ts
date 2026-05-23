@@ -8,6 +8,8 @@ import type {
   ProjectSummary,
   ScanResult,
   SessionEntry,
+  SessionFamily,
+  SessionFamilyNode,
   SessionIndexCleanupResult,
   TimelineItem,
   TrashDeleteResult,
@@ -258,6 +260,76 @@ export function formatShow(session: SessionEntry, timeline: TimelineItem[]): str
   return lines.join("\n");
 }
 
+function formatFamilyNodes(nodes: SessionFamilyNode[]): string {
+  if (nodes.length === 0) {
+    return "无";
+  }
+
+  return printTable([
+    ["关系", "edge", "archived", "updated", "file", "source", "thread_source", "agent_role", "agent_nickname", "ID", "标题"],
+    ...nodes.map((node) => [
+      node.relationship,
+      node.relationshipStatus ?? "-",
+      node.archived ? "yes" : "no",
+      formatDate(node.updatedAt),
+      node.fileExists ? `yes(${node.fileCount})` : "no",
+      trimDetailText(node.source),
+      trimDetailText(node.threadSource),
+      trimDetailText(node.agentRole),
+      trimDetailText(node.agentNickname),
+      node.sessionId,
+      trimTitle(node.displayTitle),
+    ]),
+  ]);
+}
+
+export function formatFamily(family: SessionFamily): string {
+  const parentIds = family.parents.map((node) => node.sessionId);
+  const childIds = family.directChildren.map((node) => node.sessionId);
+  const warningLines = family.warnings.length ? ["", "警告:", ...family.warnings.map((warning) => `- ${warning}`)] : [];
+
+  return [
+    `当前会话: ${family.current.sessionId}`,
+    `标题: ${trimDetailText(family.current.displayTitle)}`,
+    `root: ${family.root.sessionId}`,
+    `parent: ${parentIds.length ? parentIds.join(", ") : "-"}`,
+    `children: ${childIds.length ? childIds.join(", ") : "-"}`,
+    `family members: ${family.familyMembers.length}`,
+    "",
+    "当前会话信息:",
+    formatFamilyNodes([family.current]),
+    "",
+    "直接 parent:",
+    formatFamilyNodes(family.parents),
+    "",
+    "直接 children:",
+    formatFamilyNodes(family.directChildren),
+    "",
+    "family:",
+    formatFamilyNodes(family.familyMembers),
+    ...warningLines,
+  ].join("\n");
+}
+
+function formatFamilyWarnings(warnings: DeletePreview["familyWarnings"]): string[] {
+  if (warnings.length === 0) {
+    return [];
+  }
+
+  return [
+    "",
+    "关系提醒:",
+    ...warnings.map((warning) => {
+      const parts = [
+        warning.unselectedParentIds.length ? `parent=${warning.unselectedParentIds.join(", ")}` : null,
+        warning.unselectedChildIds.length ? `children=${warning.unselectedChildIds.join(", ")}` : null,
+        warning.unselectedFamilyMemberIds.length ? `family=${warning.unselectedFamilyMemberIds.join(", ")}` : null,
+      ].filter((part): part is string => Boolean(part));
+      return `- ${warning.sessionId}: 还有未选中的相关会话 (${parts.join("; ")})。工具不会自动递归处理这些会话。`;
+    }),
+  ];
+}
+
 export function formatPreview(preview: DeletePreview): string {
   const lines = [
     `将处理 ${preview.items.length} 条会话`,
@@ -281,6 +353,7 @@ export function formatPreview(preview: DeletePreview): string {
       `  history: ${item.historyRows}`,
       `  sqlite: ${sumSqlite(item.sqlite)}`,
     ]),
+    ...formatFamilyWarnings(preview.familyWarnings),
   ];
 
   return lines.join("\n");

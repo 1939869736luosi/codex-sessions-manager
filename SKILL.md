@@ -61,6 +61,8 @@ Use this skill for requests like:
 - "List my recent Codex sessions"
 - "Find sessions for this project"
 - "Show this session"
+- "Find the session family for this session"
+- "Show parent and side/fork child sessions"
 - "Find side conversations for this session"
 - "Export this session"
 - "Preview deleting these sessions"
@@ -91,6 +93,7 @@ If the `codex-sessions` MCP server is available in the current agent session, us
 - `list_sessions`
 - `list_projects`
 - `get_session`
+- `get_session_family` (read-only session family inspection)
 - `export_session_backup`
 - `preview_delete_sessions`
 - `delete_sessions` (requires `confirm=true` to execute; pass `trash=true` for recoverable deletion)
@@ -127,6 +130,8 @@ codex-sessions list --root <path-to-codex-root> --group-by project
 codex-sessions list --root <path-to-codex-root> --updated-after 2026-04-01 --updated-before 2026-04-30
 codex-sessions projects --root <path-to-codex-root>
 codex-sessions show <session-id> --root <path-to-codex-root>
+codex-sessions family <session-id> --root <path-to-codex-root>
+codex-sessions family <session-id> --root <path-to-codex-root> --json
 codex-sessions export <session-id> --root <path-to-codex-root> --output ./backup.json
 codex-sessions delete <session-id...> --root <path-to-codex-root>
 codex-sessions delete <session-id...> --root <path-to-codex-root> --yes
@@ -161,6 +166,8 @@ node dist/cli/index.js list --root <path-to-codex-root> --group-by project
 node dist/cli/index.js list --root <path-to-codex-root> --updated-after 2026-04-01 --updated-before 2026-04-30
 node dist/cli/index.js projects --root <path-to-codex-root>
 node dist/cli/index.js show <session-id> --root <path-to-codex-root>
+node dist/cli/index.js family <session-id> --root <path-to-codex-root>
+node dist/cli/index.js family <session-id> --root <path-to-codex-root> --json
 node dist/cli/index.js export <session-id> --root <path-to-codex-root> --output ./backup.json
 node dist/cli/index.js delete <session-id...> --root <path-to-codex-root>
 node dist/cli/index.js delete <session-id...> --root <path-to-codex-root> --yes
@@ -183,6 +190,8 @@ node dist/cli/index.js verify <session-id...> --root <path-to-codex-root>
 - Run MCP `inspect_root` or CLI `doctor` before delete, restore, purge, or cleanup when Codex storage may have changed.
 - Treat delete, restore, purge, and cleanup as dangerous write paths.
 - Always preview before destructive actions unless the user has already clearly confirmed execution.
+- `get_session_family` and CLI `family` are read-only. They do not delete, export, restore, or select related sessions automatically.
+- Delete previews warn when selected sessions have unselected parent, child, or family sessions.
 - CLI `delete` without `--yes` is preview-only.
 - MCP `delete_sessions` without `confirm=true` is preview-only.
 - Permanent delete remains available for compatibility.
@@ -206,6 +215,7 @@ Codex `/side` creates an ephemeral side conversation with a separate transcript.
 When a user asks about side conversations:
 
 - Treat the parent thread and side child thread as separate sessions with separate transcripts.
+- Use `get_session_family` or CLI `family` first to identify parent, child, `/side`, and `/fork` relationships.
 - Search, show, export, delete, trash, restore, or verify the child thread by its own session ID.
 - Do not assume deleting, exporting, or summarizing a parent thread also handles its side child threads.
 - If the user wants a parent thread and its side conversations handled together, identify the child thread IDs first, preview all selected IDs together, and only then run any confirmed write operation.
@@ -217,6 +227,7 @@ When a user asks about side conversations:
 - For project requests: show project name/path, session count, status counts, latest updated time, and total size.
 - For show requests: summarize the session and include key metadata. Include `displayTitle`, `indexTitle`, `sqliteTitle`, `firstUserMessage`, `titleSource`, `titleMismatch`, and `titleCandidates` when available. Human-readable CLI output may shorten long title fields and timeline previews; use JSON/MCP output for full values.
 - Treat `displayTitle` as the default user-facing title. It prefers `session_index.jsonl.thread_name`, which is usually the title searchable in Codex UI. Do not present `sqliteTitle` as the only title when sources disagree.
+- For family requests: distinguish current session, root, parent IDs, child IDs, relationship status, archived state, file existence, and source metadata. Say clearly that the action covers only explicitly selected session IDs.
 - For side-conversation requests: distinguish parent thread ID and child thread ID, and say whether the requested action covers one or both.
 - For delete requests: explain whether this is preview-only, permanent delete, or recoverable trash delete.
 - For trash requests: distinguish moved to trash, restored, and purged.

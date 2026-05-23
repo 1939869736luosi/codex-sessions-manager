@@ -54,6 +54,55 @@ describe("cli", () => {
     expect(output).toContain("第一条用户请求: active input");
   });
 
+  it("shows session family relationships in human-readable mode", async () => {
+    const capture = createIo();
+    const exitCode = await runCli(["family", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir], capture.io);
+    const output = capture.stdout.join("\n");
+
+    expect(exitCode).toBe(0);
+    expect(output).toContain(`当前会话: ${FIXTURE_IDS.ACTIVE_ID}`);
+    expect(output).toContain(`root: ${FIXTURE_IDS.ACTIVE_ID}`);
+    expect(output).toContain(`children: ${FIXTURE_IDS.ARCHIVED_ID}`);
+    expect(output).toContain("thread_source");
+    expect(output).toContain("subagent");
+    expect(output).toContain("helper");
+  });
+
+  it("shows an unrelated session family normally", async () => {
+    const capture = createIo();
+    const exitCode = await runCli(["family", FIXTURE_IDS.STALE_ID, "--root", fixture.rootDir], capture.io);
+    const output = capture.stdout.join("\n");
+
+    expect(exitCode).toBe(0);
+    expect(output).toContain(`当前会话: ${FIXTURE_IDS.STALE_ID}`);
+    expect(output).toContain(`root: ${FIXTURE_IDS.STALE_ID}`);
+    expect(output).toContain("parent: -");
+    expect(output).toContain("children: -");
+    expect(output).toContain("family members: 1");
+  });
+
+  it("returns session family as json", async () => {
+    const capture = createIo();
+    const exitCode = await runCli(["family", FIXTURE_IDS.ARCHIVED_ID, "--root", fixture.rootDir, "--json"], capture.io);
+    const result = JSON.parse(capture.stdout.join("\n")) as {
+      family: {
+        current: { sessionId: string; parentIds: string[]; source: string; threadSource: string };
+        root: { sessionId: string };
+        parents: Array<{ sessionId: string }>;
+        directChildren: Array<{ sessionId: string }>;
+      };
+    };
+
+    expect(exitCode).toBe(0);
+    expect(result.family.current.sessionId).toBe(FIXTURE_IDS.ARCHIVED_ID);
+    expect(result.family.current.parentIds).toEqual([FIXTURE_IDS.ACTIVE_ID]);
+    expect(result.family.current.source).toBe("side");
+    expect(result.family.current.threadSource).toBe("side");
+    expect(result.family.root.sessionId).toBe(FIXTURE_IDS.ACTIVE_ID);
+    expect(result.family.parents.map((node) => node.sessionId)).toEqual([FIXTURE_IDS.ACTIVE_ID]);
+    expect(result.family.directChildren).toEqual([]);
+  });
+
   it("truncates long title metadata in human-readable show output", async () => {
     const longSqliteTitle = `sqlite-title-start ${"x".repeat(260)} sqlite-title-end`;
     const longFirstUserMessage = `first-message-start ${"y".repeat(260)} first-message-end`;
@@ -143,6 +192,8 @@ describe("cli", () => {
     expect(capture.stdout.join("\n")).toContain("session_index");
     expect(capture.stdout.join("\n")).toContain("global state 引用");
     expect(capture.stdout.join("\n")).toContain("shell snapshot 文件");
+    expect(capture.stdout.join("\n")).toContain("关系提醒");
+    expect(capture.stdout.join("\n")).toContain(FIXTURE_IDS.ARCHIVED_ID);
     await expect(readFile(fixture.paths.activeShellSnapshot, "utf8")).resolves.toContain(FIXTURE_IDS.ACTIVE_ID);
     expect(await readFile(fixture.paths.globalState, "utf8")).toContain(FIXTURE_IDS.ACTIVE_ID);
   });

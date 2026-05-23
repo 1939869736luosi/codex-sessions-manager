@@ -31,6 +31,9 @@ npm install -g codex-sessions-manager
 # List recent sessions
 codex-sessions list --limit 10
 
+# Inspect parent and child sessions (safe, no changes)
+codex-sessions family <session-id>
+
 # Preview what deletion would do (safe, no changes)
 codex-sessions delete <session-id>
 
@@ -78,7 +81,8 @@ After deletion, run `verify` to confirm zero orphans remain.
 | **Cleanup** | Remove stale index entries without touching raw data |
 | **Health check** | `doctor` command for full root diagnostics |
 | **MCP server** | AI agents (Claude Code, Codex, Kiro) manage sessions directly |
-| **Side conversations** | Detects `/fork` and `/side` relationships; it does not recursively delete child threads automatically |
+| **Session family** | Read-only parent, child, `/fork`, and `/side` relationship view |
+| **Side conversations** | Parent and child sessions stay separate; delete/export/verify never recurses automatically |
 
 ## Use with AI Agents (MCP)
 
@@ -95,9 +99,9 @@ Add to your MCP config:
 }
 ```
 
-13 tools exposed: `inspect_root`, `list_sessions`, `list_projects`, `get_session`, `export_session_backup`, `preview_delete_sessions`, `delete_sessions`, `list_trash`, `restore_sessions`, `purge_trash`, `cleanup_session_indexes`, `cleanup_stale_indexes`, `verify_sessions`.
+14 tools exposed: `inspect_root`, `list_sessions`, `list_projects`, `get_session`, `get_session_family`, `export_session_backup`, `preview_delete_sessions`, `delete_sessions`, `list_trash`, `restore_sessions`, `purge_trash`, `cleanup_session_indexes`, `cleanup_stale_indexes`, `verify_sessions`.
 
-All destructive tools require `confirm: true`. Without it, you get a preview only.
+`get_session_family` is read-only and does not need confirmation. All destructive tools require `confirm: true`. Without it, you get a preview only.
 
 ## CLI Reference
 
@@ -108,6 +112,7 @@ codex-sessions list --group-by project
 codex-sessions projects
 codex-sessions doctor [--json]
 codex-sessions show <session-id>
+codex-sessions family <session-id> [--json]
 codex-sessions export <session-id> [--output ./backup.json]
 codex-sessions delete <session-id...> [--trash] [--yes]
 codex-sessions trash-list
@@ -119,6 +124,8 @@ codex-sessions verify <session-id...> [--json]
 ```
 
 **Safety first**: All destructive commands require `--yes`. Without it, you only get a preview.
+
+Use `family` before deleting a parent or child session. Parent and child sessions are independent sessions with their own IDs. Deleting a parent does not delete children, and deleting a child does not delete its parent. Delete previews warn when related parent, child, or family sessions are not selected. To process multiple related sessions, put every intended session ID into the preview/delete command explicitly.
 
 ## Session Titles
 

@@ -95,6 +95,59 @@ describe("mcp server", () => {
     }
   });
 
+  it("returns structured session family through MCP", async () => {
+    const { client, server } = await createConnectedClient();
+
+    try {
+      const result = await client.callTool({
+        name: "get_session_family",
+        arguments: {
+          root: fixture.rootDir,
+          sessionId: FIXTURE_IDS.ACTIVE_ID,
+        },
+      });
+
+      const family = result.structuredContent?.family as {
+        current: { sessionId: string; childIds: string[] };
+        root: { sessionId: string };
+        parent: null | { sessionId: string };
+        directChildren: Array<{
+          sessionId: string;
+          relationship: string;
+          relationshipStatus: string;
+          source: string;
+          threadSource: string;
+          agentRole: string;
+          agentNickname: string;
+          fileExists: boolean;
+        }>;
+        familyMembers: Array<{ sessionId: string }>;
+      };
+
+      expect(family.current.sessionId).toBe(FIXTURE_IDS.ACTIVE_ID);
+      expect(family.current.childIds).toEqual([FIXTURE_IDS.ARCHIVED_ID]);
+      expect(family.root.sessionId).toBe(FIXTURE_IDS.ACTIVE_ID);
+      expect(family.parent).toBeNull();
+      expect(family.directChildren).toHaveLength(1);
+      expect(family.directChildren[0]).toMatchObject({
+        sessionId: FIXTURE_IDS.ARCHIVED_ID,
+        relationship: "child",
+        relationshipStatus: "running",
+        source: "side",
+        threadSource: "side",
+        agentRole: "subagent",
+        agentNickname: "helper",
+        fileExists: true,
+      });
+      expect(family.familyMembers.map((node) => node.sessionId).sort()).toEqual(
+        [FIXTURE_IDS.ACTIVE_ID, FIXTURE_IDS.ARCHIVED_ID].sort(),
+      );
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("lists projects", async () => {
     const { client, server } = await createConnectedClient();
 
@@ -159,9 +212,14 @@ describe("mcp server", () => {
 
       const preview = result.structuredContent?.preview as {
         totals: { globalStateRefs: number; possibleUnknownGlobalStateRefs: number };
+        familyWarnings: Array<{ sessionId: string; unselectedChildIds: string[] }>;
       };
       expect(preview.totals.globalStateRefs).toBe(3);
       expect(preview.totals.possibleUnknownGlobalStateRefs).toBe(1);
+      expect(preview.familyWarnings[0]).toMatchObject({
+        sessionId: FIXTURE_IDS.ACTIVE_ID,
+        unselectedChildIds: [FIXTURE_IDS.ARCHIVED_ID],
+      });
       expect(result.structuredContent).toHaveProperty("warnings");
       await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
     } finally {

@@ -7,10 +7,13 @@
 - Added separate title metadata fields: `displayTitle`, `indexTitle`, `sqliteTitle`, `firstUserMessage`, `titleSource`, `titleMismatch`, and `titleCandidates`.
 - Updated list/search behavior to use the Codex UI-searchable `displayTitle` by default while keeping detail output explicit about mismatched title sources.
 - Shortened long title metadata and timeline previews in human-readable `show` output; use `show --json` for full values.
+- Added read-only session family inspection through CLI `family` and MCP `get_session_family`, including parent, child, `/side`, `/fork`, archive, file, status, and source metadata.
+- Added delete preview family warnings when selected sessions have unselected parent, child, or related family sessions.
 
 ### Changed
 
 - Updated public positioning now that Codex Desktop includes archived-chat delete: the project is described as a local residue audit, verification, and cleanup tool rather than a replacement for a missing built-in delete button.
+- Synchronized README, README.zh-CN, Skill, example Skill, and the installed local Skill with the new family inspection guidance.
 
 ## 0.3.2
 

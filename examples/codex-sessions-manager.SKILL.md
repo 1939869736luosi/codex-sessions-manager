@@ -44,6 +44,7 @@ Prefer MCP tools when the `codex-sessions` MCP server is available:
 - `list_sessions`
 - `list_projects`
 - `get_session`
+- `get_session_family` (read-only session family inspection)
 - `export_session_backup`
 - `preview_delete_sessions`
 - `delete_sessions`
@@ -58,6 +59,8 @@ Use CLI only when MCP is unavailable or blocked.
 
 For Codex `/side` conversations, treat the parent thread and side child thread as separate sessions. Do not assume parent operations include side child transcripts. If the user wants both handled, identify the child session IDs first and include them in the preview or confirmed operation.
 
+Use `get_session_family` first when the request mentions parent, child, `/side`, or `/fork` relationships. It is read-only and does not select related sessions for write operations.
+
 For session titles, treat `displayTitle` as the default user-facing title. It prefers `session_index.jsonl.thread_name`, which is usually closest to Codex UI search. When showing one session in detail, include `indexTitle`, `sqliteTitle`, `firstUserMessage`, `titleSource`, `titleMismatch`, and `titleCandidates` if the tool returns them. Human-readable CLI output may shorten long title fields and timeline previews; use JSON/MCP output for full values.
 
 ## CLI Fallback
@@ -69,6 +72,8 @@ codex-sessions doctor --root <path-to-codex-root>
 codex-sessions list --root <path-to-codex-root> --limit 20
 codex-sessions projects --root <path-to-codex-root>
 codex-sessions show <session-id> --root <path-to-codex-root>
+codex-sessions family <session-id> --root <path-to-codex-root>
+codex-sessions family <session-id> --root <path-to-codex-root> --json
 codex-sessions export <session-id> --root <path-to-codex-root> --output ./backup.json
 codex-sessions delete <session-id> --root <path-to-codex-root>
 codex-sessions delete <session-id> --root <path-to-codex-root> --trash
@@ -96,6 +101,8 @@ node dist/cli/index.js doctor --root <path-to-codex-root>
 node dist/cli/index.js list --root <path-to-codex-root> --limit 20
 node dist/cli/index.js projects --root <path-to-codex-root>
 node dist/cli/index.js show <session-id> --root <path-to-codex-root>
+node dist/cli/index.js family <session-id> --root <path-to-codex-root>
+node dist/cli/index.js family <session-id> --root <path-to-codex-root> --json
 node dist/cli/index.js export <session-id> --root <path-to-codex-root> --output ./backup.json
 node dist/cli/index.js delete <session-id> --root <path-to-codex-root>
 node dist/cli/index.js delete <session-id> --root <path-to-codex-root> --trash
@@ -113,6 +120,8 @@ node dist/cli/index.js verify <session-id> --root <path-to-codex-root>
 ## Safety Rules
 
 - Run `inspect_root` or CLI `doctor` before delete, restore, purge, or cleanup when Codex storage may have changed.
+- `get_session_family` and CLI `family` are read-only. They do not delete, export, restore, or select related sessions automatically.
+- Delete previews warn when selected sessions have unselected parent, child, or family sessions.
 - `delete` without `--yes` is preview-only.
 - Permanent delete remains available, but prefer recoverable deletion with `--trash --yes`.
 - MCP `delete_sessions` requires `confirm=true` to execute. Use `trash=true` for recoverable deletion.

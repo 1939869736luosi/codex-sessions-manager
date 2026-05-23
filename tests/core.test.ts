@@ -14,6 +14,7 @@ import {
   previewCleanupStaleIndexes,
   validateDeletion,
 } from "../src/core/delete.js";
+import { buildSessionFamily } from "../src/core/family.js";
 import { inspectCodexRoot } from "../src/core/doctor.js";
 import { listProjectSummaries } from "../src/core/project.js";
 import { filterSessions, resolveSessions } from "../src/core/query.js";
@@ -149,6 +150,116 @@ describe("core integration", () => {
     expect(backup.sqlite.threads).toHaveLength(1);
     expect(backup.sqlite.logs).toHaveLength(1);
     expect(backup.sqlite.threadGoals).toHaveLength(1);
+  });
+
+  it("builds a session family for a parent with children", async () => {
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const active = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID])[0];
+    const family = buildSessionFamily(scan, active);
+
+    expect(family.current.sessionId).toBe(FIXTURE_IDS.ACTIVE_ID);
+    expect(family.root.sessionId).toBe(FIXTURE_IDS.ACTIVE_ID);
+    expect(family.parent).toBeNull();
+    expect(family.directChildren.map((node) => node.sessionId)).toEqual([FIXTURE_IDS.ARCHIVED_ID]);
+    expect(family.directChildren[0]).toMatchObject({
+      relationship: "child",
+      relationshipStatus: "running",
+      archived: true,
+      fileExists: true,
+      source: "side",
+      threadSource: "side",
+      agentRole: "subagent",
+      agentNickname: "helper",
+      agentPath: "/tmp/helper",
+    });
+  });
+
+  it("builds a session family for a child with a parent", async () => {
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const archived = resolveSessions(scan, [FIXTURE_IDS.ARCHIVED_ID])[0];
+    const family = buildSessionFamily(scan, archived);
+
+    expect(family.current.sessionId).toBe(FIXTURE_IDS.ARCHIVED_ID);
+    expect(family.root.sessionId).toBe(FIXTURE_IDS.ACTIVE_ID);
+    expect(family.parents.map((node) => node.sessionId)).toEqual([FIXTURE_IDS.ACTIVE_ID]);
+    expect(family.parent?.relationshipStatus).toBe("running");
+    expect(family.current.parentIds).toEqual([FIXTURE_IDS.ACTIVE_ID]);
+    expect(family.current.childIds).toEqual([]);
+  });
+
+  it("builds a session family when a session has both parent and children", async () => {
+    const db = new Database(fixture.paths.sqlite);
+    db.prepare(
+      `insert into threads (
+         id, title, first_user_message, created_at, updated_at, archived, rollout_path, model, cwd,
+         source, thread_source, agent_role, agent_nickname, agent_path
+       )
+       values (?, 'Child thread', 'child input', 1775119000, 1775119060, 0, null, 'gpt-5.4', '/workspace/child', 'fork', 'fork', null, null, null)`,
+    ).run(FIXTURE_IDS.CHILD_ID);
+    db.prepare(
+      "insert into thread_spawn_edges (parent_thread_id, child_thread_id, status) values (?, ?, 'complete')",
+    ).run(FIXTURE_IDS.ARCHIVED_ID, FIXTURE_IDS.CHILD_ID);
+    db.close();
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const archived = resolveSessions(scan, [FIXTURE_IDS.ARCHIVED_ID])[0];
+    const family = buildSessionFamily(scan, archived);
+
+    expect(family.root.sessionId).toBe(FIXTURE_IDS.ACTIVE_ID);
+    expect(family.parents.map((node) => node.sessionId)).toEqual([FIXTURE_IDS.ACTIVE_ID]);
+    expect(family.directChildren.map((node) => node.sessionId)).toEqual([FIXTURE_IDS.CHILD_ID]);
+    expect(family.directChildren[0]).toMatchObject({
+      relationship: "child",
+      relationshipStatus: "complete",
+      kind: "db-only",
+      fileExists: false,
+      source: "fork",
+      threadSource: "fork",
+    });
+    expect(family.familyMembers.map((node) => node.sessionId).sort()).toEqual(
+      [FIXTURE_IDS.ACTIVE_ID, FIXTURE_IDS.ARCHIVED_ID, FIXTURE_IDS.CHILD_ID].sort(),
+    );
+  });
+
+  it("returns a normal single-node family for unrelated sessions", async () => {
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const stale = resolveSessions(scan, [FIXTURE_IDS.STALE_ID])[0];
+    const family = buildSessionFamily(scan, stale);
+
+    expect(family.current.sessionId).toBe(FIXTURE_IDS.STALE_ID);
+    expect(family.root.sessionId).toBe(FIXTURE_IDS.STALE_ID);
+    expect(family.parent).toBeNull();
+    expect(family.directChildren).toEqual([]);
+    expect(family.familyMembers.map((node) => node.sessionId)).toEqual([FIXTURE_IDS.STALE_ID]);
+  });
+
+  it("warns during delete preview when related parent or child sessions are not selected", async () => {
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const [active] = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID]);
+    const [archived] = resolveSessions(scan, [FIXTURE_IDS.ARCHIVED_ID]);
+    const parentPreview = buildDeletePreview(scan, [active]);
+    const childPreview = buildDeletePreview(scan, [archived]);
+    const combinedPreview = buildDeletePreview(scan, [active, archived]);
+
+    expect(parentPreview.familyWarnings).toEqual([
+      {
+        sessionId: FIXTURE_IDS.ACTIVE_ID,
+        unselectedParentIds: [],
+        unselectedChildIds: [FIXTURE_IDS.ARCHIVED_ID],
+        unselectedFamilyMemberIds: [FIXTURE_IDS.ARCHIVED_ID],
+        unselectedRelatedSessionIds: [FIXTURE_IDS.ARCHIVED_ID],
+      },
+    ]);
+    expect(childPreview.familyWarnings).toEqual([
+      {
+        sessionId: FIXTURE_IDS.ARCHIVED_ID,
+        unselectedParentIds: [FIXTURE_IDS.ACTIVE_ID],
+        unselectedChildIds: [],
+        unselectedFamilyMemberIds: [FIXTURE_IDS.ACTIVE_ID],
+        unselectedRelatedSessionIds: [FIXTURE_IDS.ACTIVE_ID],
+      },
+    ]);
+    expect(combinedPreview.familyWarnings).toEqual([]);
   });
 
   it("deletes an active session and validates all cleanup surfaces", async () => {
