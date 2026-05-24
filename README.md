@@ -224,6 +224,8 @@ Use `preview-plan <plan-file>` to re-scan the root read-only and compare the pla
 
 MCP `preview_delete_plan` accepts either `planFile` or an inline `plan` object and uses the same stale detection. It is read-only, does not accept `confirm`, `trash`, `yes`, or `force`, and returns no current `deletePreview` when `stale=true`.
 
+By design, this toolkit does not support delete-by-plan, preview tokens, `--force`, sourceKind-based delete execution, or advanced family/sourceKind automatic deletion orchestration. Actual deletion must return to a separate explicit-ID delete preview and explicit human confirmation.
+
 ### P11 exact-key global-state cleanup
 
 Only two formerly unknown `.codex-global-state.json` paths can be removed by confirmed delete:

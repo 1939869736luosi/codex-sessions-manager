@@ -211,7 +211,7 @@ MCP `plan_delete_sessions` 支持同样的 sourceKind candidate 语义：传 `so
 
 MCP `preview_delete_plan` 接收 `planFile` 或 inline `plan` object，并复用同一套 stale detection。它只读，不接受 `confirm`、`trash`、`yes` 或 `force`；当 `stale=true` 时不会返回当前 `deletePreview`。
 
-当前仍未实现 delete-by-plan、preview token、`--force`、sourceKind-based delete execution，或高级 family/sourceKind 删除编排。真正删除仍然必须回到单独的明确 ID delete preview，并在人工确认后显式执行。
+当前设计上不支持 delete-by-plan、preview token、`--force`、sourceKind-based delete execution，或高级 family/sourceKind 自动删除编排。真正删除仍然必须回到单独的明确 ID delete preview，并在人工确认后显式执行。
 
 ### P11 exact-key global-state 清理
 

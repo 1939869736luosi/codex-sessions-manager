@@ -13,6 +13,7 @@
 - SourceKind candidate plans require an explicit limit capped at 50, reject root-level `sourceKind=unknown`, reject active/current candidates into `rejectedIds`, and intentionally do not support `--write-plan` or any delete execution path.
 - MCP plan tools are read-only, return `executionSupported=false`, create no preview token, do not implement `delete_sessions_by_plan`, and do not support sourceKind delete execution.
 - `preview_delete_plan` returns no current `deletePreview` when `stale=true` and accepts no `confirm`, `trash`, `yes`, or `force` write semantics.
+- Clarified that delete-by-plan, preview tokens, sourceKind delete execution, side/fork-specific include flags, and release/cleanup automation are intentionally unsupported design boundaries, not pending bugs.
 
 ## 0.4.0
 
