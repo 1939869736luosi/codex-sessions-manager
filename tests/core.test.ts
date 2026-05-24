@@ -16,6 +16,7 @@ import {
   validateDeletion,
 } from "../src/core/delete.js";
 import { buildSessionFamily, buildSessionFamilyQuery } from "../src/core/family.js";
+import { buildPlanDelete } from "../src/core/plan-delete.js";
 import { inspectCodexRoot } from "../src/core/doctor.js";
 import { listProjectSummaries } from "../src/core/project.js";
 import { filterSessions, resolveSessions } from "../src/core/query.js";
@@ -253,6 +254,155 @@ describe("core integration", () => {
     });
     expect(family.childrenByCategory.subagent.map((node) => node.sessionId)).toEqual([FIXTURE_IDS.ARCHIVED_ID]);
     expect(family.childrenByCategory["side/fork"].map((node) => node.sessionId)).toEqual([FIXTURE_IDS.ARCHIVED_ID]);
+  });
+
+  it("rejects active sessions by default instead of selecting them", async () => {
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const plan = buildPlanDelete(scan, [FIXTURE_IDS.ACTIVE_ID]);
+
+    expect(plan.readOnly).toBe(true);
+    expect(plan.executionSupported).toBe(false);
+    expect(plan.seedSessionIds).toEqual([FIXTURE_IDS.ACTIVE_ID]);
+    expect(plan.selectedIds).toEqual([]);
+    expect(plan.includedIds).toEqual([]);
+    expect(plan.rejectedIds).toEqual([
+      { sessionId: FIXTURE_IDS.ACTIVE_ID, reason: "active-session-refused-by-default" },
+    ]);
+  });
+
+  it("rejects active related sessions instead of offering them as available includes", async () => {
+    const activeChildFile = path.join(
+      path.dirname(fixture.paths.activeSessionFile),
+      `rollout-2026-04-03T12-30-00-${FIXTURE_IDS.CHILD_ID}.jsonl`,
+    );
+    await writeFile(
+      activeChildFile,
+      `${JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-04-03T04:30:00.000Z",
+        payload: { type: "user_message", message: "active child input" },
+      })}\n`,
+      "utf8",
+    );
+    await appendFile(
+      fixture.paths.sessionIndex,
+      `${JSON.stringify({ id: FIXTURE_IDS.CHILD_ID, thread_name: "Active child", updated_at: "2026-04-03T04:31:00.000Z" })}\n`,
+      "utf8",
+    );
+    const db = new Database(fixture.paths.sqlite);
+    db.prepare(
+      `insert into threads (
+         id, title, first_user_message, created_at, updated_at, archived, rollout_path, model, model_provider, cwd,
+         source, thread_source, agent_role, agent_nickname, agent_path
+       ) values (?, 'Active child', 'active child input', 1775200200, 1775200260, 0, ?, 'gpt-5.4', 'openai', '/workspace/demo', 'cli', 'cli', null, null, null)`,
+    ).run(FIXTURE_IDS.CHILD_ID, activeChildFile);
+    db.prepare("insert into thread_spawn_edges (parent_thread_id, child_thread_id, status) values (?, ?, 'running')").run(
+      FIXTURE_IDS.ARCHIVED_ID,
+      FIXTURE_IDS.CHILD_ID,
+    );
+    db.close();
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const seedOnly = buildPlanDelete(scan, [FIXTURE_IDS.ARCHIVED_ID]);
+    const withChildren = buildPlanDelete(scan, [FIXTURE_IDS.ARCHIVED_ID], { includeChildren: true });
+
+    for (const plan of [seedOnly, withChildren]) {
+      expect(plan.rejectedIds).toEqual(expect.arrayContaining([
+        { sessionId: FIXTURE_IDS.ACTIVE_ID, reason: "active-session-refused-by-default" },
+        { sessionId: FIXTURE_IDS.CHILD_ID, reason: "active-session-refused-by-default" },
+      ]));
+      expect(plan.selectedIds).not.toContain(FIXTURE_IDS.ACTIVE_ID);
+      expect(plan.selectedIds).not.toContain(FIXTURE_IDS.CHILD_ID);
+      expect(plan.availableIncludes.parents.map((item) => item.sessionId)).not.toContain(FIXTURE_IDS.ACTIVE_ID);
+      expect(plan.availableIncludes.children.map((item) => item.sessionId)).not.toContain(FIXTURE_IDS.CHILD_ID);
+      expect(plan.availableIncludes.descendants.map((item) => item.sessionId)).not.toContain(FIXTURE_IDS.CHILD_ID);
+      expect(plan.availableIncludes.family.map((item) => item.sessionId)).not.toContain(FIXTURE_IDS.ACTIVE_ID);
+      expect(plan.availableIncludes.family.map((item) => item.sessionId)).not.toContain(FIXTURE_IDS.CHILD_ID);
+    }
+  });
+
+  it("plans delete as seed-only by default and exposes only unselected related sessions as available includes", async () => {
+    const db = new Database(fixture.paths.sqlite);
+    db.prepare(
+      `insert into threads (
+         id, title, first_user_message, created_at, updated_at, archived, rollout_path, model, model_provider, cwd,
+         source, thread_source, agent_role, agent_nickname, agent_path
+       ) values (?, 'Grandchild thread', 'grandchild input', 1775119000, 1775119060, 0, null, 'gpt-5.4', 'openai', '/workspace/demo', 'cli', 'cli', null, null, null)`,
+    ).run(FIXTURE_IDS.CHILD_ID);
+    db.prepare("insert into thread_spawn_edges (parent_thread_id, child_thread_id, status) values (?, ?, 'complete')").run(
+      FIXTURE_IDS.ARCHIVED_ID,
+      FIXTURE_IDS.CHILD_ID,
+    );
+    db.close();
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const seedOnly = buildPlanDelete(scan, [FIXTURE_IDS.ARCHIVED_ID]);
+
+    expect(seedOnly.selectedIds).toEqual([FIXTURE_IDS.ARCHIVED_ID]);
+    expect(seedOnly.includedIds).toEqual([{ sessionId: FIXTURE_IDS.ARCHIVED_ID, reason: "seed" }]);
+    expect(seedOnly.availableIncludes.children.map((item) => item.sessionId)).toEqual([FIXTURE_IDS.CHILD_ID]);
+    expect(seedOnly.availableIncludes.descendants.map((item) => item.sessionId)).toEqual([FIXTURE_IDS.CHILD_ID]);
+
+    const withChildren = buildPlanDelete(scan, [FIXTURE_IDS.ARCHIVED_ID], { includeChildren: true });
+    expect(withChildren.selectedIds).toEqual([
+      FIXTURE_IDS.ARCHIVED_ID,
+      FIXTURE_IDS.CHILD_ID,
+    ]);
+    expect(withChildren.availableIncludes.children.map((item) => item.sessionId)).toEqual([]);
+    expect(withChildren.availableIncludes.descendants.map((item) => item.sessionId)).toEqual([]);
+
+    expect(buildPlanDelete(scan, [FIXTURE_IDS.ARCHIVED_ID], { includeDescendants: true }).selectedIds).toEqual([
+      FIXTURE_IDS.ARCHIVED_ID,
+      FIXTURE_IDS.CHILD_ID,
+    ]);
+
+    const familyPlan = buildPlanDelete(scan, [FIXTURE_IDS.CHILD_ID], { includeFamily: true });
+    expect(familyPlan.selectedIds).toEqual([
+      FIXTURE_IDS.ARCHIVED_ID,
+      FIXTURE_IDS.CHILD_ID,
+    ]);
+    expect(familyPlan.rejectedIds).toEqual([
+      { sessionId: FIXTURE_IDS.ACTIVE_ID, reason: "active-session-refused-by-default" },
+    ]);
+    expect(familyPlan.warnings).toEqual(expect.arrayContaining([expect.stringContaining("高风险")]));
+  });
+
+  it("plans broken relations and missing surfaces without including missing targets", async () => {
+    const missingChildId = "019d7777-8888-7999-8aaa-111111111111";
+    const db = new Database(fixture.paths.sqlite);
+    db.prepare(
+      "insert into thread_spawn_edges (parent_thread_id, child_thread_id, status) values (?, ?, 'missing-child')",
+    ).run(FIXTURE_IDS.ACTIVE_ID, missingChildId);
+    db.close();
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const plan = buildPlanDelete(scan, [FIXTURE_IDS.ACTIVE_ID], { includeDescendants: true });
+
+    expect(plan.selectedIds).not.toContain(missingChildId);
+    expect(plan.brokenRelations).toEqual([expect.objectContaining({ childThreadId: missingChildId })]);
+    expect(plan.warnings).toEqual(expect.arrayContaining([expect.stringContaining(`missing child session: ${missingChildId}`)]));
+    expect(plan.missingSurfaces.missingThreadIds).toContain(missingChildId);
+  });
+
+  it("reports unknown global-state and redacts exact-key values in delete plans", async () => {
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const unknownPlan = buildPlanDelete(scan, [FIXTURE_IDS.INSTALLATION_GLOBAL_STATE_ID]);
+    const exactPlan = buildPlanDelete(scan, [FIXTURE_IDS.EXACT_GLOBAL_STATE_ID]);
+
+    expect(unknownPlan.warnings).toEqual(expect.arrayContaining([expect.stringContaining("unknown global-state")]));
+    expect(exactPlan.globalStateExactKey).toEqual([
+      expect.objectContaining({
+        sessionId: FIXTURE_IDS.EXACT_GLOBAL_STATE_ID,
+        path: expect.any(String),
+        ruleId: expect.any(String),
+        valueShape: expect.any(String),
+        byteEstimate: expect.any(Number),
+      }),
+      expect.objectContaining({ sessionId: FIXTURE_IDS.EXACT_GLOBAL_STATE_ID }),
+    ]);
+    expect(JSON.stringify(exactPlan.globalStateExactKey)).not.toContain("secret prompt text must not be printed");
+    expect(JSON.stringify(exactPlan.globalStateExactKey)).not.toContain("second prompt");
   });
 
   it("queries family modes and classifies direct children from child metadata", async () => {

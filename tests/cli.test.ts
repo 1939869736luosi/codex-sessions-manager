@@ -189,6 +189,61 @@ describe("cli", () => {
     expect(impactOutput).toContain("missing surfaces:");
   });
 
+  it("prints plan-delete as read-only and not a deletion confirmation", async () => {
+    const capture = createIo();
+    const exitCode = await runCli(["plan-delete", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir], capture.io);
+    const output = capture.stdout.join("\n");
+
+    expect(exitCode).toBe(0);
+    expect(output).toContain("只读 plan-delete");
+    expect(output).toContain("未执行删除");
+    expect(output).toContain("不是删除确认");
+    expect(output).toContain("family 不默认递归包含");
+    expect(output).toContain("T7-P1 不支持执行");
+    expect(output).not.toContain("--yes");
+  });
+
+  it("prints plan-delete json with readOnly and executionSupported safety fields", async () => {
+    const capture = createIo();
+    const exitCode = await runCli(["plan-delete", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--json"], capture.io);
+    const result = JSON.parse(capture.stdout.join("\n")) as {
+      readOnly: boolean;
+      executionSupported: boolean;
+      seedSessionIds: string[];
+      selectedIds: string[];
+      includedIds: Array<{ sessionId: string; reason: string }>;
+      rejectedIds: Array<{ sessionId: string; reason: string }>;
+    };
+
+    expect(exitCode).toBe(0);
+    expect(result.readOnly).toBe(true);
+    expect(result.executionSupported).toBe(false);
+    expect(result.seedSessionIds).toEqual([FIXTURE_IDS.ACTIVE_ID]);
+    expect(result.selectedIds).toEqual([]);
+    expect(result.includedIds).toEqual([]);
+    expect(result.rejectedIds).toEqual([
+      { sessionId: FIXTURE_IDS.ACTIVE_ID, reason: "active-session-refused-by-default" },
+    ]);
+  });
+
+  it("documents plan-delete without execution or plan-file options", () => {
+    const help = getHelpText();
+
+    expect(help).toContain("codex-sessions plan-delete <session-id...> [--root PATH] [--json]");
+    expect(help).toContain("--include-children");
+    expect(help).toContain("plan-delete 是只读删除计划");
+    expect(help).not.toContain("--write-plan");
+    expect(help).not.toContain("--include-side");
+    expect(help).not.toContain("delete-plan");
+  });
+
+  it("rejects root-level selection filters for plan-delete", async () => {
+    const capture = createIo();
+
+    await expect(runCli(["plan-delete", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--source-kind", "subagent"], capture.io))
+      .rejects.toThrow("plan-delete 只支持 explicit session IDs");
+  });
+
   it("filters family modes by sourceKind and keeps complete json fields", async () => {
     const rawSource = JSON.stringify({
       subagent: {

@@ -35,6 +35,7 @@ These operations are intended to inspect or report information without modifying
 | `doctor` | `inspect_root` | Diagnose root structure and compatibility |
 | `verify` | `verify_sessions` | Report remaining files, indexes, SQLite rows, and warnings |
 | `trash-list` | `list_trash` | List trash entries |
+| `plan-delete` | — | Build a read-only explicit-ID delete plan; no MCP tool in T7-P1 |
 
 `doctor` and `inspect_root` are read-only diagnostics. They are intended to detect Codex storage changes, missing files, SQLite table availability, trash state, and global-state warnings.
 
@@ -56,6 +57,8 @@ Without `--yes` or `confirm=true`, destructive operations return a preview and d
 ## Delete, Trash, Restore, and Purge
 
 Permanent delete remains the default delete mode for compatibility. However, `delete` without `--yes` only prints a preview.
+
+`plan-delete` is stricter than a delete preview: it is read-only, accepts only explicit session IDs, never writes a plan file, never executes deletion, and reports `executionSupported=false`. By default it selects only seed IDs. The include flags (`--include-children`, `--include-subagents`, `--include-descendants`, `--include-family`) only change the planned `selectedIds`; they do not authorize or execute a write. `--include-family` is high risk and side/fork sessions remain ambiguous available includes.
 
 For routine cleanup, prefer recoverable trash deletion:
 

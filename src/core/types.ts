@@ -616,6 +616,80 @@ export interface DeletePreview {
   };
 }
 
+export type PlanDeleteIncludeReason =
+  | "seed"
+  | "include-children"
+  | "include-subagents"
+  | "include-descendants"
+  | "include-family";
+
+export type PlanDeleteAvailableIncludeKind =
+  | "parent"
+  | "child"
+  | "subagent"
+  | "descendant"
+  | "family"
+  | "side/fork";
+
+export interface PlanDeleteIncludedId {
+  sessionId: string;
+  reason: PlanDeleteIncludeReason;
+}
+
+export interface PlanDeleteAvailableInclude {
+  sessionId: string;
+  kind: PlanDeleteAvailableIncludeKind;
+  relationship: SessionFamilyRelationship;
+  sourceKind: SourceKind;
+  childTypeLabels: SessionFamilyChildCategory[];
+  reason: string;
+}
+
+export interface PlanDeleteRejectedId {
+  sessionId: string;
+  reason: string;
+}
+
+export interface PlanDeleteOptions {
+  includeChildren?: boolean;
+  includeSubagents?: boolean;
+  includeDescendants?: boolean;
+  includeFamily?: boolean;
+}
+
+export interface PlanDeleteSurfaceCounts {
+  sessionFiles: number;
+  shellSnapshotFiles: number;
+  globalStateRefs: number;
+  exactKeyGlobalStateRefs: number;
+  possibleUnknownGlobalStateRefs: number;
+  sessionIndexRows: number;
+  historyRows: number;
+  sqliteRows: number;
+}
+
+export interface PlanDeleteResult {
+  readOnly: true;
+  executionSupported: false;
+  seedSessionIds: string[];
+  selectedIds: string[];
+  includedIds: PlanDeleteIncludedId[];
+  availableIncludes: {
+    parents: PlanDeleteAvailableInclude[];
+    children: PlanDeleteAvailableInclude[];
+    subagents: PlanDeleteAvailableInclude[];
+    descendants: PlanDeleteAvailableInclude[];
+    family: PlanDeleteAvailableInclude[];
+    sideOrFork: PlanDeleteAvailableInclude[];
+  };
+  rejectedIds: PlanDeleteRejectedId[];
+  warnings: string[];
+  brokenRelations: SessionFamilyBrokenRelation[];
+  missingSurfaces: SessionFamilyMissingSurfaceGroups;
+  surfaceCounts: PlanDeleteSurfaceCounts;
+  globalStateExactKey: GlobalStateExactKeyPreview[];
+}
+
 export interface DeleteValidationItem {
   sessionId: string;
   title: string;

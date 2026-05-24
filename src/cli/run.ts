@@ -15,6 +15,7 @@ import {
   validateDeletion,
 } from "../core/delete.js";
 import { buildSessionFamilyQuery } from "../core/family.js";
+import { buildPlanDelete } from "../core/plan-delete.js";
 import { listProjectSummaries } from "../core/project.js";
 import { filterSessions, resolveSessions } from "../core/query.js";
 import { scanCodexRoot } from "../core/scan.js";
@@ -40,6 +41,7 @@ import {
   formatFamilyQuery,
   formatGroupedList,
   formatList,
+  formatPlanDelete,
   formatPreview,
   formatProjects,
   formatRootDeletePreview,
@@ -65,6 +67,7 @@ type CommandName =
   | "audit-root"
   | "preview-root"
   | "export"
+  | "plan-delete"
   | "delete"
   | "trash-list"
   | "restore"
@@ -107,6 +110,9 @@ Usage:
   codex-sessions audit-root [--root PATH] [--json] [--limit N] [--status STATUS...] [--source SOURCE...] [--all]
   codex-sessions preview-root [--root PATH] [--json] [--limit N] [--status STATUS...] [--source SOURCE...] [--all]
   codex-sessions export <session-id> [--root PATH] [--output FILE] [--json]
+  codex-sessions plan-delete <session-id...> [--root PATH] [--json]
+                            [--include-children] [--include-subagents]
+                            [--include-descendants] [--include-family]
   codex-sessions delete <session-id...> [--root PATH] [--json] [--yes] [--trash]
   codex-sessions trash-list [--root PATH] [--json]
   codex-sessions restore <trash-id-or-session-id> [--root PATH] [--json] [--yes]
@@ -125,6 +131,9 @@ Notes:
   - audit-root 只读扫描整个 root 的疑似残留，默认 limit=50
   - audit-root 多个 --status 或 --source 为 OR；同时使用 status 和 source 时为 AND
   - preview-root 只读批量预览 audit-root 筛出的候选，不删除、不递归处理 family
+  - plan-delete 是只读删除计划：只接受 explicit session IDs，不执行删除，不写 plan file，不支持 --yes
+  - plan-delete include flags 只影响 selectedIds；family 不默认递归包含，--include-family 为高风险只读计划
+  - plan-delete side/fork 仅作为 ambiguous available include 输出；当前没有 side/fork 专用 include flags
   - global-state exact-key 只支持 P11 两个路径；delete 预览只显示 path/rule/shape/bytes，不打印 prompt 或完整 value
   - 删除 exact-key 应先看 delete 预览，再加 --yes；audit-root / preview-root 不能当作删除确认
   - 其它 unknown global-state 只报警，不会因为路径相似、全文命中或 root 扫描候选而删除
@@ -164,6 +173,10 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
       subagents: { type: "boolean", default: false },
       impact: { type: "boolean", default: false },
       full: { type: "boolean", default: false },
+      "include-children": { type: "boolean", default: false },
+      "include-subagents": { type: "boolean", default: false },
+      "include-descendants": { type: "boolean", default: false },
+      "include-family": { type: "boolean", default: false },
       query: { type: "string" },
       project: { type: "string" },
       status: { type: "string", multiple: true },
@@ -409,6 +422,42 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
 
       const result = await deleteSessions(scan, sessions);
       io.stdout(asJson ? JSON.stringify(result, null, 2) : formatDeleteResult(result));
+      return 0;
+    }
+
+    case "plan-delete": {
+      if (rest.length === 0) {
+        throw new Error("plan-delete 至少需要 1 个 session-id。");
+      }
+      if (values.yes) {
+        throw new Error("plan-delete 不支持 --yes；它始终只读，不执行删除。");
+      }
+      if (values.trash) {
+        throw new Error("plan-delete 不支持 --trash；它不会执行或生成可执行删除计划。");
+      }
+      if (
+        sourceKindValues.length > 0 ||
+        sourceValues.length > 0 ||
+        statusValues.length > 0 ||
+        values.all ||
+        values.query ||
+        values.project ||
+        values.limit ||
+        values.children ||
+        values.parents ||
+        values.subagents ||
+        values.impact
+      ) {
+        throw new Error("plan-delete 只支持 explicit session IDs 和 include flags；不支持 root 级批量选择或 family mode filters。");
+      }
+
+      const plan = buildPlanDelete(scan, rest, {
+        includeChildren: values["include-children"],
+        includeSubagents: values["include-subagents"],
+        includeDescendants: values["include-descendants"],
+        includeFamily: values["include-family"],
+      });
+      io.stdout(asJson ? JSON.stringify(plan, null, 2) : formatPlanDelete(plan));
       return 0;
     }
 

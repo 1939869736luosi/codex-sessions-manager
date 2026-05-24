@@ -67,6 +67,7 @@ Use this skill for requests like:
 - "Audit what remains locally after the official Codex UI delete/archive action"
 - "Find likely local residue without knowing the session ID"
 - "Preview deleting likely root residue candidates"
+- "Plan deleting these explicit session IDs without deleting anything"
 - "Export this session"
 - "Preview deleting these sessions"
 - "Check what Codex Desktop left behind after deleting a chat"
@@ -128,6 +129,8 @@ For source-aware listing, pass `sourceKind`, `source`, `threadSource`, `agentRol
 
 For family lookups, call `get_session_family` with optional `mode: full | children | parents | subagents | impact` and optional `sourceKind`. These modes are read-only. `impact` is a relationship risk view only; it is not deletion advice, not a delete preview, and must not execute or imply confirmation.
 
+There is no MCP tool for T7-P1 `plan-delete`. Use the CLI fallback when the user specifically wants a read-only explicit-ID delete plan.
+
 ### 2. Fall back to CLI
 
 Prefer the installed CLI:
@@ -168,6 +171,11 @@ codex-sessions preview-root --root <path-to-codex-root> --status global-state-ex
 codex-sessions preview-root --root <path-to-codex-root> --source global-state-unknown --limit 20
 codex-sessions preview-root --root <path-to-codex-root> --source global-state-exact-key --limit 20
 codex-sessions export <session-id> --root <path-to-codex-root> --output ./backup.json
+codex-sessions plan-delete <session-id...> --root <path-to-codex-root>
+codex-sessions plan-delete <session-id...> --root <path-to-codex-root> --include-children
+codex-sessions plan-delete <session-id...> --root <path-to-codex-root> --include-subagents
+codex-sessions plan-delete <session-id...> --root <path-to-codex-root> --include-descendants
+codex-sessions plan-delete <session-id...> --root <path-to-codex-root> --include-family --json
 codex-sessions delete <session-id...> --root <path-to-codex-root>
 codex-sessions delete <session-id...> --root <path-to-codex-root> --yes
 codex-sessions delete <session-id...> --root <path-to-codex-root> --trash
@@ -230,6 +238,11 @@ node dist/cli/index.js preview-root --root <path-to-codex-root> --status global-
 node dist/cli/index.js preview-root --root <path-to-codex-root> --source global-state-unknown --limit 20
 node dist/cli/index.js preview-root --root <path-to-codex-root> --source global-state-exact-key --limit 20
 node dist/cli/index.js export <session-id> --root <path-to-codex-root> --output ./backup.json
+node dist/cli/index.js plan-delete <session-id...> --root <path-to-codex-root>
+node dist/cli/index.js plan-delete <session-id...> --root <path-to-codex-root> --include-children
+node dist/cli/index.js plan-delete <session-id...> --root <path-to-codex-root> --include-subagents
+node dist/cli/index.js plan-delete <session-id...> --root <path-to-codex-root> --include-descendants
+node dist/cli/index.js plan-delete <session-id...> --root <path-to-codex-root> --include-family --json
 node dist/cli/index.js delete <session-id...> --root <path-to-codex-root>
 node dist/cli/index.js delete <session-id...> --root <path-to-codex-root> --yes
 node dist/cli/index.js delete <session-id...> --root <path-to-codex-root> --trash
@@ -270,6 +283,9 @@ The `--yes` examples above are execution examples, not first-step recommendation
 - `audit_root` / `audit-root` status and source filters only narrow displayed candidates. Multiple statuses or multiple sources use OR; combining status and source uses AND. A matching candidate is not a deletion list entry or deletion recommendation; it still needs per-session audit or read-only preview before any cleanup decision.
 - `preview_root_delete` and CLI `preview-root` are read-only. They reuse `audit-root` filters to build a batch delete preview, but do not delete, do not rewrite JSONL, SQLite, shell snapshots, or global state, do not accept `--yes`, do not recommend deleting any session, and do not recursively select parent, child, or family sessions.
 - A `preview-root` result is not a deletion recommendation. Actual deletion should use a separate explicit-ID delete preview for review and then user-confirmed `delete ... --yes`.
+- CLI `plan-delete` is read-only and has no MCP equivalent in T7-P1. It accepts only explicit session IDs, never source/status root-level selection, never writes a plan file, and never executes deletion. JSON output must include `readOnly: true` and `executionSupported: false`.
+- `plan-delete` selects only seed IDs by default. `--include-children`, `--include-subagents`, `--include-descendants`, and `--include-family` only affect plan selection; `--include-family` is high risk and must be described as such. Side/fork sessions are ambiguous `availableIncludes`; do not invent side/fork include flags.
+- A `plan-delete` result is not deletion confirmation, not a preview token, and not a substitute for a separate explicit-ID delete preview and explicit user confirmation.
 - Delete previews warn when selected sessions have unselected parent, child, or family sessions, and when relationship edges point at missing sessions or missing file/index surfaces.
 - CLI `delete` without `--yes` is preview-only.
 - MCP `delete_sessions` without `confirm=true` is preview-only.
@@ -328,6 +344,7 @@ When a user asks about side conversations:
 - For audit requests: report the overall status, each residue surface count, family summary, warnings, and the preview-only next command. Say clearly that audit does not delete anything and that parent/child sessions are not handled recursively.
 - For root residue requests: use MCP `audit_root` or CLI `audit-root`. Report `filters`, `totalCandidatesBeforeFilter`, `totalCandidatesAfterFilter`, `returnedCandidates`, limit, `byStatus`, `bySource`, session IDs, status labels, residue source counts, family/broken-family state, and the recommended per-session audit command. Do not print chat content. Say clearly that root scans do not delete anything, candidates are not a deletion list, filtered candidates are not automatically safe to delete, and parent/child sessions are not handled recursively.
 - For root delete preview requests: use MCP `preview_root_delete` or CLI `preview-root`. Report filters, candidate totals before and after filters, previewed and omitted counts, aggregate preview counts, family warning summary, each candidate ID, statuses, sources, preview counts, family warning state, and recommended single-session audit/preview commands. Say clearly that it is read-only, does not delete, does not recommend deleting any session, does not recurse through family, and does not prove the candidates should be deleted.
+- For plan-delete requests: use CLI `plan-delete` only. Report seed IDs, selected IDs, included IDs with reasons, available includes, rejected IDs, warnings, broken relations, missing surfaces, surface counts, and exact-key global-state metadata. Say clearly that it is read-only, did not delete anything, is not deletion confirmation, family is not included by default, and execution is not supported in T7-P1.
 - For delete requests: explain whether this is preview-only, permanent delete, or recoverable trash delete. Do not run confirmed deletion unless a separate preview has been reviewed and the user explicitly confirmed execution.
 - For trash requests: distinguish moved to trash, restored, and purged.
 - For restore conflicts: explain that the live session already exists and identify conflicting surfaces when available.

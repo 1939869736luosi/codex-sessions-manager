@@ -52,6 +52,11 @@ codex-sessions audit-root --status risky-global-state --source global-state-unkn
 codex-sessions preview-root --limit 50
 codex-sessions preview-root --source global-state-unknown --limit 20
 
+# Build an explicit-ID read-only delete plan (safe, no changes; no plan file)
+codex-sessions plan-delete <session-id...>
+codex-sessions plan-delete <session-id...> --include-children
+codex-sessions plan-delete <session-id...> --include-descendants --json
+
 # Preview what deletion would do (safe, no changes)
 codex-sessions delete <session-id>
 
@@ -101,6 +106,7 @@ After deletion, run `verify` to confirm zero orphans remain.
 | **Residue audit** | Read-only report for raw rollout files, shell snapshots, session indexes, history, SQLite rows, global-state refs, thread edges, family status, and broken parent/child links |
 | **Root residue scan** | Read-only root-level scan for likely leftover IDs, without requiring a session ID first |
 | **Root delete preview** | Read-only batch delete preview for root residue candidates, without requiring you to list session IDs by hand |
+| **Explicit delete plan** | Read-only `plan-delete` for explicit session IDs; include flags can add children, subagents, descendants, or connected family to the plan selection, but execution is not supported |
 | **Trash & Restore** | Full snapshot saved; restore checks for SQLite key conflicts before writing |
 | **Verify** | Reports any remaining files, index rows, or DB records |
 | **Cleanup** | Remove stale index entries without touching raw data |
@@ -146,6 +152,7 @@ codex-sessions audit <session-id> [--json]
 codex-sessions audit-root [--json] [--limit 50] [--status STATUS...] [--source SOURCE...] [--all]
 codex-sessions preview-root [--json] [--limit 50] [--status STATUS...] [--source SOURCE...] [--all]
 codex-sessions export <session-id> [--output ./backup.json]
+codex-sessions plan-delete <session-id...> [--json] [--include-children] [--include-subagents] [--include-descendants] [--include-family]
 codex-sessions delete <session-id...> [--trash] [--yes]
 codex-sessions trash-list
 codex-sessions restore <trash-id-or-session-id> --yes
@@ -155,7 +162,7 @@ codex-sessions cleanup-index <session-id...> [--yes]
 codex-sessions verify <session-id...> [--json]
 ```
 
-**Safety first**: All destructive commands require `--yes`. Without it, you only get a preview. Run a separate preview for the exact session IDs first; `family`, `impact`, `audit-root`, and `preview-root` never count as permission to delete.
+**Safety first**: All destructive commands require `--yes`. Without it, you only get a preview. Run a separate preview for the exact session IDs first; `family`, `impact`, `audit-root`, `preview-root`, and `plan-delete` never count as permission to delete.
 
 `export` and trash bundles are recovery data, not previews. They may include full global-state exact-key values such as prompt-history content. Human delete previews show only path, rule, shape, and byte counts.
 
@@ -198,6 +205,8 @@ Important source limits:
 - `model_provider` is only displayed and filtered here. This tool does not repair provider identity or rewrite provider history.
 
 Use `preview-root` when you want a read-only batch delete preview for the same candidates `audit-root` would select. It reuses the same status/source filters and conservative default `--limit 50`, then summarizes what a read-only preview would touch across rollout files, shell snapshots, `session_index`, `history`, SQLite, known global-state refs, P11 exact-key global-state refs, unknown global-state refs, and `thread_spawn_edges`. It does not delete, does not rewrite JSONL, SQLite, shell snapshots, or global-state, does not accept `--yes`, does not recommend deleting any session, and does not recursively add parent, child, or family sessions. A `preview-root` result is not a deletion recommendation; it only shows what would be touched if you later choose explicit `delete` commands. Actual deletion should use a separate explicit-ID `delete` preview for review, followed by an explicitly confirmed `delete ... --yes` command.
+
+Use `plan-delete` when you already have explicit session IDs and want a safer relationship-aware plan before any deletion preview or write. It is read-only, has `readOnly: true` and `executionSupported: false`, does not write a plan file, does not accept root-level source/status selection, and has no MCP tool in this release. By default only the seed IDs are selected. Related parents, children, subagents, descendants, family members, and side/fork ambiguous sessions are reported in `availableIncludes` or warnings. `--include-children`, `--include-subagents`, `--include-descendants`, and `--include-family` only change `selectedIds`; they do not execute deletion. `--include-family` is highest risk and emits a strong warning. Exact-key global-state output shows only path, rule, shape, and byte metadata; unknown global-state remains warning-only.
 
 ### P11 exact-key global-state cleanup
 

@@ -5,6 +5,7 @@ import type {
   DeletePreview,
   DeleteValidationItem,
   DoctorReport,
+  PlanDeleteResult,
   ProjectSummary,
   RootDeletePreview,
   RootDeletePreviewCandidate,
@@ -663,6 +664,69 @@ export function formatPreview(preview: DeletePreview): string {
   ];
 
   return lines.join("\n");
+}
+
+function formatPlanIncludeRows(items: PlanDeleteResult["availableIncludes"][keyof PlanDeleteResult["availableIncludes"]]): string {
+  if (items.length === 0) {
+    return "-";
+  }
+
+  return items
+    .map((item) => `${item.sessionId} (${item.kind}, ${item.relationship}, sourceKind=${item.sourceKind})`)
+    .join("\n");
+}
+
+export function formatPlanDelete(plan: PlanDeleteResult): string {
+  const warnings = plan.warnings.length ? ["", "警告:", ...plan.warnings.map((warning) => `- ${warning}`)] : [];
+  const rejected = plan.rejectedIds.length
+    ? ["", "rejectedIds:", ...plan.rejectedIds.map((item) => `- ${item.sessionId}: ${item.reason}`)]
+    : [];
+
+  return [
+    "只读 plan-delete（T7-P1）",
+    "未执行删除；这不是删除确认；不会生成 plan file。",
+    "family 不默认递归包含；side/fork 只作为 ambiguous available include 输出。",
+    "T7-P1 不支持执行能力：executionSupported=false，不能用本输出执行 delete-plan。",
+    "",
+    `readOnly: ${plan.readOnly}`,
+    `executionSupported: ${plan.executionSupported}`,
+    `seedSessionIds: ${plan.seedSessionIds.join(", ") || "-"}`,
+    `selectedIds: ${plan.selectedIds.join(", ") || "-"}`,
+    "includedIds:",
+    ...(plan.includedIds.length ? plan.includedIds.map((item) => `- ${item.sessionId}: ${item.reason}`) : ["-"]),
+    "",
+    "surfaceCounts:",
+    `- sessionFiles: ${plan.surfaceCounts.sessionFiles}`,
+    `- shellSnapshotFiles: ${plan.surfaceCounts.shellSnapshotFiles}`,
+    `- globalStateRefs: ${plan.surfaceCounts.globalStateRefs}`,
+    `- exactKeyGlobalStateRefs: ${plan.surfaceCounts.exactKeyGlobalStateRefs}`,
+    `- possibleUnknownGlobalStateRefs: ${plan.surfaceCounts.possibleUnknownGlobalStateRefs}`,
+    `- sessionIndexRows: ${plan.surfaceCounts.sessionIndexRows}`,
+    `- historyRows: ${plan.surfaceCounts.historyRows}`,
+    `- sqliteRows: ${plan.surfaceCounts.sqliteRows}`,
+    "",
+    "availableIncludes.children:",
+    formatPlanIncludeRows(plan.availableIncludes.children),
+    "",
+    "availableIncludes.subagents:",
+    formatPlanIncludeRows(plan.availableIncludes.subagents),
+    "",
+    "availableIncludes.descendants:",
+    formatPlanIncludeRows(plan.availableIncludes.descendants),
+    "",
+    "availableIncludes.family:",
+    formatPlanIncludeRows(plan.availableIncludes.family),
+    "",
+    "availableIncludes.side/fork ambiguous:",
+    formatPlanIncludeRows(plan.availableIncludes.sideOrFork),
+    "",
+    "globalStateExactKey metadata:",
+    ...(plan.globalStateExactKey.length
+      ? plan.globalStateExactKey.map((ref) => `- ${ref.path} rule=${ref.ruleId} shape=${ref.valueShape} bytes=${ref.byteEstimate}`)
+      : ["-"]),
+    ...rejected,
+    ...warnings,
+  ].join("\n");
 }
 
 export function formatDeleteResult(result: DeleteExecutionResult): string {
