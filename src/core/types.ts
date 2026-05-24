@@ -669,6 +669,11 @@ export interface PlanDeleteSurfaceCounts {
 }
 
 export interface PlanDeleteResult {
+  schemaVersion?: "codex-sessions-delete-plan.v1";
+  scanTimestamp?: string;
+  rootFingerprint?: DeletePlanRootFingerprint;
+  selectedSnapshot?: DeletePlanSelectedSnapshot;
+  planHash?: string;
   readOnly: true;
   executionSupported: false;
   seedSessionIds: string[];
@@ -688,6 +693,51 @@ export interface PlanDeleteResult {
   missingSurfaces: SessionFamilyMissingSurfaceGroups;
   surfaceCounts: PlanDeleteSurfaceCounts;
   globalStateExactKey: GlobalStateExactKeyPreview[];
+}
+
+export interface DeletePlanSurfaceFingerprint {
+  path: string | null;
+  exists: boolean;
+  size: number | null;
+  mtimeMs: number | null;
+  parseable: boolean;
+}
+
+export interface DeletePlanRootFingerprint {
+  rootRealpath: string;
+  sessionIndex: DeletePlanSurfaceFingerprint;
+  history: DeletePlanSurfaceFingerprint;
+  globalState: DeletePlanSurfaceFingerprint;
+  sqlite: DeletePlanSurfaceFingerprint;
+  logsSqlite: DeletePlanSurfaceFingerprint;
+}
+
+export interface DeletePlanSelectedSnapshot {
+  surfaceCounts: PlanDeleteSurfaceCounts;
+  familyEdges: Array<{ parentThreadId: string; childThreadId: string; status: string | null }>;
+  exactKeyGlobalStatePaths: string[];
+}
+
+export interface DeletePlanFile extends PlanDeleteResult {
+  schemaVersion: "codex-sessions-delete-plan.v1";
+  scanTimestamp: string;
+  rootFingerprint: DeletePlanRootFingerprint;
+  selectedSnapshot: DeletePlanSelectedSnapshot;
+  planHash: string;
+}
+
+export interface PreviewPlanResult {
+  readOnly: true;
+  executionSupported: false;
+  planSchemaVersion: string;
+  planHash: string | null;
+  scanTimestamp: string;
+  stale: boolean;
+  staleReasons: string[];
+  rejectedIds: PlanDeleteRejectedId[];
+  selectedIds: string[];
+  deletableSelectedIds: string[];
+  deletePreview: DeletePreview | null;
 }
 
 export interface DeleteValidationItem {

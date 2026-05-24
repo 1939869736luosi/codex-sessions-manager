@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { appendFile, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import Database from "better-sqlite3";
 
 import { getHelpText, runCli } from "../src/cli/run.js";
@@ -226,13 +228,140 @@ describe("cli", () => {
     ]);
   });
 
-  it("documents plan-delete without execution or plan-file options", () => {
+  it("writes an auditable redacted plan file and previews it read-only", async () => {
+    await writeExactGlobalStateFixture(fixture.paths.globalState);
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-plan-test-"));
+    const planPath = path.join(tempDir, "delete-plan.json");
+
+    try {
+      const writeCapture = createIo();
+      const writeExitCode = await runCli(
+        ["plan-delete", FIXTURE_IDS.EXACT_GLOBAL_STATE_ID, "--root", fixture.rootDir, "--write-plan", planPath, "--json"],
+        writeCapture.io,
+      );
+      const plan = JSON.parse(await readFile(planPath, "utf8")) as {
+        schemaVersion: string;
+        readOnly: boolean;
+        executionSupported: boolean;
+        selectedIds: string[];
+        planHash: string;
+        rootFingerprint: { rootRealpath: string };
+      };
+      const planText = await readFile(planPath, "utf8");
+
+      expect(writeExitCode).toBe(0);
+      expect(JSON.parse(writeCapture.stdout.join("\n")).planFile).toBe(planPath);
+      expect(plan.schemaVersion).toBe("codex-sessions-delete-plan.v1");
+      expect(plan.readOnly).toBe(true);
+      expect(plan.executionSupported).toBe(false);
+      expect(plan.selectedIds).toEqual([FIXTURE_IDS.EXACT_GLOBAL_STATE_ID]);
+      expect(plan.planHash).toMatch(/^[a-f0-9]{64}$/);
+      expect(plan.rootFingerprint.rootRealpath.endsWith(path.basename(fixture.rootDir))).toBe(true);
+      expect(planText).not.toContain("secret prompt text must not be printed");
+      expect(planText).not.toContain("second prompt");
+      expect(planText).not.toContain("archived prompt");
+
+      const beforeSessionIndex = await readFile(fixture.paths.sessionIndex, "utf8");
+      const beforeHistory = await readFile(fixture.paths.history, "utf8");
+      const beforeGlobalState = await readFile(fixture.paths.globalState, "utf8");
+      const previewCapture = createIo();
+      const previewExitCode = await runCli(["preview-plan", planPath, "--root", fixture.rootDir, "--json"], previewCapture.io);
+      const preview = JSON.parse(previewCapture.stdout.join("\n")) as {
+        readOnly: boolean;
+        stale: boolean;
+        deletePreview: { items: Array<{ sessionId: string }>; totals: { exactKeyGlobalStateRefs: number } } | null;
+      };
+
+      expect(previewExitCode).toBe(0);
+      expect(preview.readOnly).toBe(true);
+      expect(preview.stale).toBe(false);
+      expect(preview.deletePreview?.items.map((item) => item.sessionId)).toEqual([FIXTURE_IDS.EXACT_GLOBAL_STATE_ID]);
+      expect(preview.deletePreview?.totals.exactKeyGlobalStateRefs).toBe(2);
+      await expect(readFile(fixture.paths.sessionIndex, "utf8")).resolves.toBe(beforeSessionIndex);
+      await expect(readFile(fixture.paths.history, "utf8")).resolves.toBe(beforeHistory);
+      await expect(readFile(fixture.paths.globalState, "utf8")).resolves.toBe(beforeGlobalState);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("marks preview-plan stale when indexed, history, global-state, or sqlite surfaces change", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-plan-stale-"));
+
+    try {
+      for (const [name, mutate] of [
+        ["session_index", async () => appendFile(fixture.paths.sessionIndex, `${JSON.stringify({ id: FIXTURE_IDS.UNRELATED_ID })}\n`, "utf8")],
+        ["history", async () => appendFile(fixture.paths.history, `${JSON.stringify({ session_id: FIXTURE_IDS.ARCHIVED_ID, text: "new" })}\n`, "utf8")],
+        ["global-state", async () => writeFile(fixture.paths.globalState, "{bad json\n", "utf8")],
+        ["sqlite", async () => {
+          const db = new Database(fixture.paths.sqlite);
+          db.prepare("delete from thread_spawn_edges where child_thread_id = ?").run(FIXTURE_IDS.ARCHIVED_ID);
+          db.close();
+        }],
+      ] as const) {
+        await fixture.cleanup();
+        fixture = await createFixture();
+        const planPath = path.join(tempDir, `${name}.json`);
+        await runCli(["plan-delete", FIXTURE_IDS.ARCHIVED_ID, "--root", fixture.rootDir, "--write-plan", planPath], createIo().io);
+
+        await mutate();
+
+        const capture = createIo();
+        const exitCode = await runCli(["preview-plan", planPath, "--root", fixture.rootDir, "--json"], capture.io);
+        const result = JSON.parse(capture.stdout.join("\n")) as {
+          stale: boolean;
+          staleReasons: string[];
+          deletePreview: unknown;
+        };
+
+        expect(exitCode).toBe(0);
+        expect(result.stale).toBe(true);
+        expect(result.staleReasons.some((reason) => reason.includes(name))).toBe(true);
+        expect(result.deletePreview).toBeNull();
+      }
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not preview active/rejected plan IDs as deletable and has no delete-plan entrypoint", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-plan-active-"));
+    const planPath = path.join(tempDir, "active.json");
+
+    try {
+      await runCli(["plan-delete", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--write-plan", planPath], createIo().io);
+
+      const capture = createIo();
+      const exitCode = await runCli(["preview-plan", planPath, "--root", fixture.rootDir, "--json"], capture.io);
+      const result = JSON.parse(capture.stdout.join("\n")) as {
+        stale: boolean;
+        deletePreview: { items: Array<{ sessionId: string }> } | null;
+        rejectedIds: Array<{ sessionId: string }>;
+      };
+
+      expect(exitCode).toBe(0);
+      expect(result.stale).toBe(false);
+      expect(result.deletePreview?.items).toEqual([]);
+      expect(result.rejectedIds.map((item) => item.sessionId)).toContain(FIXTURE_IDS.ACTIVE_ID);
+      await expect(runCli(["plan-delete", FIXTURE_IDS.ARCHIVED_ID, "--root", fixture.rootDir, "--yes"], createIo().io)).rejects.toThrow(
+        "plan-delete 不支持 --yes",
+      );
+      await expect(runCli(["delete-plan", planPath, "--root", fixture.rootDir, "--yes"], createIo().io)).rejects.toThrow();
+      expect(getHelpText()).not.toContain("delete-plan");
+      expect(getHelpText()).not.toContain("--force");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("documents plan-delete plan-file support without execution options", () => {
     const help = getHelpText();
 
-    expect(help).toContain("codex-sessions plan-delete <session-id...> [--root PATH] [--json]");
+    expect(help).toContain("codex-sessions plan-delete <session-id...> [--root PATH] [--json] [--write-plan FILE]");
+    expect(help).toContain("codex-sessions preview-plan <plan-file> [--root PATH] [--json]");
     expect(help).toContain("--include-children");
     expect(help).toContain("plan-delete 是只读删除计划");
-    expect(help).not.toContain("--write-plan");
+    expect(help).toContain("plan file 是审计材料");
     expect(help).not.toContain("--include-side");
     expect(help).not.toContain("delete-plan");
   });

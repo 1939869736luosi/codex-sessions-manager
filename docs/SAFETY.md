@@ -35,7 +35,7 @@ These operations are intended to inspect or report information without modifying
 | `doctor` | `inspect_root` | Diagnose root structure and compatibility |
 | `verify` | `verify_sessions` | Report remaining files, indexes, SQLite rows, and warnings |
 | `trash-list` | `list_trash` | List trash entries |
-| `plan-delete` | — | Build a read-only explicit-ID delete plan; no MCP tool in T7-P1 |
+| `plan-delete` / `preview-plan` | — | Build and re-preview read-only explicit-ID delete plan audit files; no MCP tool |
 
 `doctor` and `inspect_root` are read-only diagnostics. They are intended to detect Codex storage changes, missing files, SQLite table availability, trash state, and global-state warnings.
 
@@ -58,7 +58,11 @@ Without `--yes` or `confirm=true`, destructive operations return a preview and d
 
 Permanent delete remains the default delete mode for compatibility. However, `delete` without `--yes` only prints a preview.
 
-`plan-delete` is stricter than a delete preview: it is read-only, accepts only explicit session IDs, never writes a plan file, never executes deletion, and reports `executionSupported=false`. By default it selects only seed IDs. The include flags (`--include-children`, `--include-subagents`, `--include-descendants`, `--include-family`) only change the planned `selectedIds`; they do not authorize or execute a write. `--include-family` is high risk and side/fork sessions remain ambiguous available includes.
+`plan-delete` is stricter than a delete preview: it is read-only, accepts only explicit session IDs, never executes deletion, and reports `executionSupported=false`. By default it selects only seed IDs. The include flags (`--include-children`, `--include-subagents`, `--include-descendants`, `--include-family`) only change the planned `selectedIds`; they do not authorize or execute a write. `--include-family` is high risk and side/fork sessions remain ambiguous available includes.
+
+`plan-delete --write-plan FILE` may write a stable `codex-sessions-delete-plan.v1` audit file. That file is not authorization, not a preview token, not a delete confirmation, and not accepted by any delete execution command. It must contain only metadata: selected IDs, included/rejected IDs, available includes, warnings, broken relations, missing surfaces, surface counts, root fingerprint, plan hash, scan timestamp, and exact-key global-state path/rule/shape/byteEstimate. It must not contain transcript bodies, prompt text, or full global-state values.
+
+`preview-plan <plan-file>` is read-only. It rescans the root, compares root realpath, `session_index`, `history`, global-state, state SQLite, logs SQLite mtime/size/parseability, selected surface counts, family edges, and exact-key paths. If any comparison differs, it returns `stale=true` and refuses to produce a current delete preview from the old plan.
 
 For routine cleanup, prefer recoverable trash deletion:
 

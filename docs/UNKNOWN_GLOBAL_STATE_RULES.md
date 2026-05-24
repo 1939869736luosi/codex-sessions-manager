@@ -81,9 +81,11 @@ Preview must not print prompt text, full object values, or the full global-state
 
 The current CLI and MCP do not issue a preview token or cryptographically bind one preview command to a later confirmed command. The confirmed command rescans the selected root and refuses if `.codex-global-state.json` changes again inside that confirmed command before its write, cannot be parsed, or cannot be protected by rollback.
 
-`audit-root`, `preview-root`, and `plan-delete` must remain read-only. Their results are not deletion recommendations. They must not become a shortcut for deleting unknown global-state refs.
+`audit-root`, `preview-root`, `plan-delete`, and `preview-plan` must remain read-only. Their results are not deletion recommendations. They must not become a shortcut for deleting unknown global-state refs.
 
-`plan-delete` may show exact-key global-state metadata for selected explicit session IDs, but it must show only path, rule id, value shape, and byte estimate. It must not print prompt text or full object values, and it must keep unknown global-state refs as warnings only.
+`plan-delete` may show exact-key global-state metadata for selected explicit session IDs, and `plan-delete --write-plan` may persist it in a plan file, but both surfaces must show only path, rule id, value shape, and byte estimate. They must not print prompt text or full object values, and they must keep unknown global-state refs as warnings only.
+
+Plan files are audit materials only. They are not authorization, preview tokens, or delete confirmations. `preview-plan` must re-scan the root and mark the plan stale if root identity, surface mtime/size/parseability, selected surface counts, family edges, or exact-key paths differ.
 
 ## Write Refusal Rules
 
@@ -126,7 +128,7 @@ CLI and MCP should use the same rule:
 - without confirmation, show preview only;
 - with confirmation, remove only known refs and promoted exact-key refs;
 - keep all other unknown refs as warnings;
-- never call unknown refs "safe to delete" just because they appear in `audit-root`, `preview-root`, or `plan-delete`.
+- never call unknown refs "safe to delete" just because they appear in `audit-root`, `preview-root`, `plan-delete`, or `preview-plan`.
 
 Human-facing wording should say:
 

@@ -6,6 +6,7 @@ import type {
   DeleteValidationItem,
   DoctorReport,
   PlanDeleteResult,
+  PreviewPlanResult,
   ProjectSummary,
   RootDeletePreview,
   RootDeletePreviewCandidate,
@@ -683,10 +684,10 @@ export function formatPlanDelete(plan: PlanDeleteResult): string {
     : [];
 
   return [
-    "只读 plan-delete（T7-P1）",
-    "未执行删除；这不是删除确认；不会生成 plan file。",
+    `只读 plan-delete（${plan.schemaVersion ?? "T7-P1"}）`,
+    "未执行删除；这不是删除确认；plan file 只是审计材料，不是授权或 preview token。",
     "family 不默认递归包含；side/fork 只作为 ambiguous available include 输出。",
-    "T7-P1 不支持执行能力：executionSupported=false，不能用本输出执行 delete-plan。",
+    "T7-P1 不支持执行能力；T7-P2 仍然 executionSupported=false，不能用本输出执行 delete-plan。",
     "",
     `readOnly: ${plan.readOnly}`,
     `executionSupported: ${plan.executionSupported}`,
@@ -726,6 +727,28 @@ export function formatPlanDelete(plan: PlanDeleteResult): string {
       : ["-"]),
     ...rejected,
     ...warnings,
+  ].join("\n");
+}
+
+export function formatPreviewPlan(preview: PreviewPlanResult): string {
+  const staleLines = preview.stale
+    ? ["", "stale: true（拒绝把旧 plan 当当前 preview）", ...preview.staleReasons.map((reason) => `- ${reason}`)]
+    : ["", "stale: false"];
+  const rejectedLines = preview.rejectedIds.length
+    ? ["", "rejectedIds:", ...preview.rejectedIds.map((item) => `- ${item.sessionId}: ${item.reason}`)]
+    : [];
+
+  return [
+    "只读 preview-plan",
+    "未执行删除；plan file 是审计材料，不是授权、不是 preview token、不是删除确认。",
+    `schema: ${preview.planSchemaVersion}`,
+    `planHash: ${preview.planHash ?? "-"}`,
+    `selectedIds: ${preview.selectedIds.join(", ") || "-"}`,
+    `deletableSelectedIds: ${preview.deletableSelectedIds.join(", ") || "-"}`,
+    ...staleLines,
+    ...rejectedLines,
+    "",
+    preview.deletePreview ? formatPreview(preview.deletePreview) : "delete preview: refused because plan is stale",
   ].join("\n");
 }
 

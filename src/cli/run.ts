@@ -15,6 +15,7 @@ import {
   validateDeletion,
 } from "../core/delete.js";
 import { buildSessionFamilyQuery } from "../core/family.js";
+import { previewDeletePlan, readDeletePlanFile, writeDeletePlanFile } from "../core/plan-file.js";
 import { buildPlanDelete } from "../core/plan-delete.js";
 import { listProjectSummaries } from "../core/project.js";
 import { filterSessions, resolveSessions } from "../core/query.js";
@@ -42,6 +43,7 @@ import {
   formatGroupedList,
   formatList,
   formatPlanDelete,
+  formatPreviewPlan,
   formatPreview,
   formatProjects,
   formatRootDeletePreview,
@@ -68,6 +70,7 @@ type CommandName =
   | "preview-root"
   | "export"
   | "plan-delete"
+  | "preview-plan"
   | "delete"
   | "trash-list"
   | "restore"
@@ -110,9 +113,10 @@ Usage:
   codex-sessions audit-root [--root PATH] [--json] [--limit N] [--status STATUS...] [--source SOURCE...] [--all]
   codex-sessions preview-root [--root PATH] [--json] [--limit N] [--status STATUS...] [--source SOURCE...] [--all]
   codex-sessions export <session-id> [--root PATH] [--output FILE] [--json]
-  codex-sessions plan-delete <session-id...> [--root PATH] [--json]
+  codex-sessions plan-delete <session-id...> [--root PATH] [--json] [--write-plan FILE]
                             [--include-children] [--include-subagents]
                             [--include-descendants] [--include-family]
+  codex-sessions preview-plan <plan-file> [--root PATH] [--json]
   codex-sessions delete <session-id...> [--root PATH] [--json] [--yes] [--trash]
   codex-sessions trash-list [--root PATH] [--json]
   codex-sessions restore <trash-id-or-session-id> [--root PATH] [--json] [--yes]
@@ -131,7 +135,8 @@ Notes:
   - audit-root 只读扫描整个 root 的疑似残留，默认 limit=50
   - audit-root 多个 --status 或 --source 为 OR；同时使用 status 和 source 时为 AND
   - preview-root 只读批量预览 audit-root 筛出的候选，不删除、不递归处理 family
-  - plan-delete 是只读删除计划：只接受 explicit session IDs，不执行删除，不写 plan file，不支持 --yes
+  - plan-delete 是只读删除计划：只接受 explicit session IDs，不执行删除，可用 --write-plan 写审计 plan file，不支持 --yes
+  - preview-plan 只读重扫 root 并检查 stale；plan file 是审计材料，不是授权、不是 preview token、不是删除确认
   - plan-delete include flags 只影响 selectedIds；family 不默认递归包含，--include-family 为高风险只读计划
   - plan-delete side/fork 仅作为 ambiguous available include 输出；当前没有 side/fork 专用 include flags
   - global-state exact-key 只支持 P11 两个路径；delete 预览只显示 path/rule/shape/bytes，不打印 prompt 或完整 value
@@ -189,6 +194,7 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
       model: { type: "string", multiple: true },
       limit: { type: "string" },
       output: { type: "string" },
+      "write-plan": { type: "string" },
       "group-by": { type: "string" },
       "updated-after": { type: "string" },
       "updated-before": { type: "string" },
@@ -457,7 +463,33 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
         includeDescendants: values["include-descendants"],
         includeFamily: values["include-family"],
       });
+      if (values["write-plan"]) {
+        const planFile = await writeDeletePlanFile(values["write-plan"], scan, plan);
+        io.stdout(
+          asJson
+            ? JSON.stringify({ planFile: values["write-plan"], ...planFile }, null, 2)
+            : `${formatPlanDelete(planFile)}\n\nplan file written: ${values["write-plan"]}`,
+        );
+        return 0;
+      }
+
       io.stdout(asJson ? JSON.stringify(plan, null, 2) : formatPlanDelete(plan));
+      return 0;
+    }
+
+    case "preview-plan": {
+      if (rest.length !== 1) {
+        throw new Error("preview-plan 需要 1 个 plan-file。");
+      }
+      if (values.yes) {
+        throw new Error("preview-plan 不支持 --yes；plan file 不是删除确认。");
+      }
+      if (values.trash) {
+        throw new Error("preview-plan 不支持 --trash；它始终只读，不执行删除。");
+      }
+      const planFile = await readDeletePlanFile(rest[0]);
+      const preview = await previewDeletePlan(scan, planFile);
+      io.stdout(asJson ? JSON.stringify(preview, null, 2) : formatPreviewPlan(preview));
       return 0;
     }
 
