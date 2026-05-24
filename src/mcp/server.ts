@@ -49,7 +49,7 @@ export function createServer(): McpServer {
   const server = new McpServer(
     {
       name: "codex-sessions",
-      version: "0.3.3",
+      version: "0.4.0",
     },
     {
       capabilities: { logging: {} },

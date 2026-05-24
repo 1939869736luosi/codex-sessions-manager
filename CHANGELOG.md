@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.0
+
+### Added
+
+- Added read-only `plan-delete` for explicit session IDs, producing a relationship-aware delete plan without executing deletion.
+- Added `plan-delete --write-plan FILE` to write `codex-sessions-delete-plan.v1` audit files for later review.
+- Added `preview-plan <plan-file>` to re-scan the current Codex root and report whether a saved plan is stale before showing any current delete preview.
+- Added plan metadata including `planHash`, root fingerprint, selected session snapshot, selected surface counts, family edges, and exact-key global-state path metadata.
+- Added stale detection for plan previews across root identity, key surface mtime/size/parseability, selected surface counts, family edges, and exact-key paths.
+
+### Safety
+
+- `plan-delete` and `preview-plan` are read-only. They do not delete, restore, purge, clean up, rewrite indexes, or modify global state.
+- Plan files are audit materials only. They are not authorization, not preview tokens, not delete confirmations, and not accepted by any delete execution command.
+- Active sessions are rejected from delete plans, and include flags only change read-only plan selection.
+- This release does not add delete-by-plan, MCP plan tools, preview tokens, `--force`, sourceKind-based delete execution, side/fork-specific include flags, or release/cleanup automation.
+- This release does not complete advanced family/sourceKind deletion orchestration; actual deletion remains a separate explicit-ID preview plus explicit confirmation flow.
+
 ## 0.3.3
 
 ### Added
