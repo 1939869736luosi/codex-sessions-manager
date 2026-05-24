@@ -104,6 +104,8 @@ If the `codex-sessions` MCP server is available in the current agent session, us
 - `preview_root_delete` (read-only root delete preview; never deletes and never recommends deletion)
 - `export_session_backup`
 - `preview_delete_sessions`
+- `plan_delete_sessions` (read-only delete planning; cannot execute deletion)
+- `preview_delete_plan` (read-only plan-file / inline-plan stale check; cannot execute deletion)
 - `delete_sessions` (without `confirm=true`, returns preview only; with `confirm=true`, executes after the caller has reviewed the intended scope; pass `trash=true` for recoverable deletion; P11 exact-key global-state refs follow the same preview/confirm safety model)
 - `list_trash`
 - `restore_sessions` (requires `confirm=true`)

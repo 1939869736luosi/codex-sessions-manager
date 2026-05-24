@@ -42,6 +42,7 @@ Prefer MCP tools when the `codex-sessions` MCP server is available:
 
 - `inspect_root`
 - `list_sessions`
+- `summarize_sources` (read-only source summary)
 - `list_projects`
 - `get_session`
 - `get_session_family` (read-only session family inspection)
@@ -50,6 +51,8 @@ Prefer MCP tools when the `codex-sessions` MCP server is available:
 - `preview_root_delete` (read-only root delete preview; never deletes and never recommends deletion)
 - `export_session_backup`
 - `preview_delete_sessions`
+- `plan_delete_sessions` (read-only delete planning; cannot execute deletion)
+- `preview_delete_plan` (read-only plan-file / inline-plan stale check; cannot execute deletion)
 - `delete_sessions` (without `confirm=true`, returns preview only; with `confirm=true`, executes after the caller has reviewed the intended scope; pass `trash=true` for recoverable deletion; P11 exact-key global-state refs use the same preview/confirm safety model)
 - `list_trash`
 - `restore_sessions` (requires `confirm=true`)
@@ -60,9 +63,13 @@ Prefer MCP tools when the `codex-sessions` MCP server is available:
 
 Use CLI only when MCP is unavailable or blocked.
 
+For source-aware listing, pass `sourceKind`, `source`, `threadSource`, `agentRole`, `agentNickname`, `modelProvider`, or `model` to `list_sessions`. Use `summarize_sources` for a read-only count by `sourceKind`, raw `source`, `thread_source`, `model_provider`, `model`, and `agent_role`.
+
 For Codex `/side` conversations, treat the parent thread and side child thread as separate sessions. Do not assume parent operations include side child transcripts. If the user wants both handled, identify the child session IDs first and include them in the preview or confirmed operation. If family output reports a broken relationship warning, tell the user the relationship record exists but the related session may be missing files, index rows, or full session records.
 
 Use `get_session_family` first when the request mentions parent, child, `/side`, `/fork`, subagent, or family impact. It is read-only and does not select related sessions for write operations. It supports `mode: full | children | parents | subagents | impact` and optional `sourceKind`. `impact` is not deletion advice and not a delete preview. Human CLI output is compact by default; use `--full`, JSON, or MCP output when the full raw `source` field is needed.
+
+For read-only delete planning through MCP, use `plan_delete_sessions` for explicit-ID plans or sourceKind candidate plans, and `preview_delete_plan` for plan-file / inline-plan stale checks. These tools are read-only, do not create preview tokens, and cannot execute delete-by-plan.
 
 For session titles, treat `displayTitle` as the default user-facing title. It prefers `session_index.jsonl.thread_name`, which is usually closest to Codex UI search. When showing one session in detail, include `indexTitle`, `sqliteTitle`, `firstUserMessage`, `titleSource`, `titleMismatch`, and `titleCandidates` if the tool returns them. Human-readable CLI output may shorten long title fields and timeline previews; use JSON/MCP output for full values.
 
@@ -73,6 +80,10 @@ Prefer the installed CLI:
 ```bash
 codex-sessions doctor --root <path-to-codex-root>
 codex-sessions list --root <path-to-codex-root> --limit 20
+codex-sessions list --root <path-to-codex-root> --source-kind cli --model-provider openai
+codex-sessions list --root <path-to-codex-root> --source mcp --thread-source mcp
+codex-sessions sources --root <path-to-codex-root>
+codex-sessions sources --root <path-to-codex-root> --json
 codex-sessions projects --root <path-to-codex-root>
 codex-sessions show <session-id> --root <path-to-codex-root>
 codex-sessions family <session-id> --root <path-to-codex-root>
@@ -97,6 +108,15 @@ codex-sessions preview-root --root <path-to-codex-root> --status global-state-ex
 codex-sessions preview-root --root <path-to-codex-root> --source global-state-unknown --limit 20
 codex-sessions preview-root --root <path-to-codex-root> --source global-state-exact-key --limit 20
 codex-sessions export <session-id> --root <path-to-codex-root> --output ./backup.json
+codex-sessions plan-delete <session-id...> --root <path-to-codex-root>
+codex-sessions plan-delete <session-id...> --root <path-to-codex-root> --include-children
+codex-sessions plan-delete <session-id...> --root <path-to-codex-root> --include-subagents
+codex-sessions plan-delete <session-id...> --root <path-to-codex-root> --include-descendants
+codex-sessions plan-delete <session-id...> --root <path-to-codex-root> --include-family --json
+codex-sessions plan-delete <session-id...> --root <path-to-codex-root> --write-plan /tmp/codex-delete-plan.json --json
+codex-sessions plan-delete --root <path-to-codex-root> --source-kind subagent --limit 20 --json
+codex-sessions plan-delete --root <path-to-codex-root> --source-kind mcp --status archived --limit 20 --json
+codex-sessions preview-plan /tmp/codex-delete-plan.json --root <path-to-codex-root> --json
 codex-sessions delete <session-id> --root <path-to-codex-root>
 codex-sessions delete <session-id> --root <path-to-codex-root> --trash
 codex-sessions delete <session-id> --root <path-to-codex-root> --trash --yes
@@ -123,6 +143,10 @@ Examples:
 ```bash
 node dist/cli/index.js doctor --root <path-to-codex-root>
 node dist/cli/index.js list --root <path-to-codex-root> --limit 20
+node dist/cli/index.js list --root <path-to-codex-root> --source-kind cli --model-provider openai
+node dist/cli/index.js list --root <path-to-codex-root> --source mcp --thread-source mcp
+node dist/cli/index.js sources --root <path-to-codex-root>
+node dist/cli/index.js sources --root <path-to-codex-root> --json
 node dist/cli/index.js projects --root <path-to-codex-root>
 node dist/cli/index.js show <session-id> --root <path-to-codex-root>
 node dist/cli/index.js family <session-id> --root <path-to-codex-root>
@@ -147,6 +171,15 @@ node dist/cli/index.js preview-root --root <path-to-codex-root> --status global-
 node dist/cli/index.js preview-root --root <path-to-codex-root> --source global-state-unknown --limit 20
 node dist/cli/index.js preview-root --root <path-to-codex-root> --source global-state-exact-key --limit 20
 node dist/cli/index.js export <session-id> --root <path-to-codex-root> --output ./backup.json
+node dist/cli/index.js plan-delete <session-id...> --root <path-to-codex-root>
+node dist/cli/index.js plan-delete <session-id...> --root <path-to-codex-root> --include-children
+node dist/cli/index.js plan-delete <session-id...> --root <path-to-codex-root> --include-subagents
+node dist/cli/index.js plan-delete <session-id...> --root <path-to-codex-root> --include-descendants
+node dist/cli/index.js plan-delete <session-id...> --root <path-to-codex-root> --include-family --json
+node dist/cli/index.js plan-delete <session-id...> --root <path-to-codex-root> --write-plan /tmp/codex-delete-plan.json --json
+node dist/cli/index.js plan-delete --root <path-to-codex-root> --source-kind subagent --limit 20 --json
+node dist/cli/index.js plan-delete --root <path-to-codex-root> --source-kind mcp --status archived --limit 20 --json
+node dist/cli/index.js preview-plan /tmp/codex-delete-plan.json --root <path-to-codex-root> --json
 node dist/cli/index.js delete <session-id> --root <path-to-codex-root>
 node dist/cli/index.js delete <session-id> --root <path-to-codex-root> --trash
 node dist/cli/index.js delete <session-id> --root <path-to-codex-root> --trash --yes
