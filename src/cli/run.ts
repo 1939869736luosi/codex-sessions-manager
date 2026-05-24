@@ -118,7 +118,7 @@ Usage:
 Notes:
   - 默认根目录是 ~/.codex
   - delete 未带 --yes 时只展示预览，不执行删除
-  - 真正删除前应先单独预览，再显式加 --yes；family / impact 不能替代 delete preview
+  - 真正删除前应先单独预览供检查，再显式加 --yes；当前没有 preview token；family / impact 不能替代 delete preview
   - family 只读查看 parent / child / side / fork / subagent 关系，不会自动递归处理
   - family --impact 只读查看关系影响，不执行删除，不是删除建议，也不生成 --yes
   - audit 只读检查官方 UI 删除或归档后本地还剩哪些记录
@@ -126,7 +126,7 @@ Notes:
   - audit-root 多个 --status 或 --source 为 OR；同时使用 status 和 source 时为 AND
   - preview-root 只读批量预览 audit-root 筛出的候选，不删除、不递归处理 family
   - global-state exact-key 只支持 P11 两个路径；delete 预览只显示 path/rule/shape/bytes，不打印 prompt 或完整 value
-  - 删除 exact-key 必须先看 delete 预览，再加 --yes；audit-root / preview-root 不能当作删除确认
+  - 删除 exact-key 应先看 delete 预览，再加 --yes；audit-root / preview-root 不能当作删除确认
   - 其它 unknown global-state 只报警，不会因为路径相似、全文命中或 root 扫描候选而删除
   - audit-root/preview-root --status 可选: absent | clean | present | partial | broken-family | risky-global-state | db-only | index-only | partial-residue | global-state-exact-key | global-state-unknown | shell-snapshot-residue | index-residue | sqlite-residue | missing-parent-edge | missing-child-edge
   - audit-root/preview-root --source 可选: rollout-files | shell-snapshots | session-index | history | sqlite | global-state-known | global-state-exact-key | global-state-unknown | thread-spawn-edges

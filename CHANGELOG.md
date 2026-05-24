@@ -1,9 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.3.3
 
 ### Added
 
+- Added packaged safety rules for P11/P12 exact-key global-state cleanup in `docs/UNKNOWN_GLOBAL_STATE_RULES.md`.
 - Added separate title metadata fields: `displayTitle`, `indexTitle`, `sqliteTitle`, `firstUserMessage`, `titleSource`, `titleMismatch`, and `titleCandidates`.
 - Updated list/search behavior to use the Codex UI-searchable `displayTitle` by default while keeping detail output explicit about mismatched title sources.
 - Shortened long title metadata and timeline previews in human-readable `show` output; use `show --json` for full values.
@@ -21,6 +22,11 @@
 
 ### Changed
 
+- Synchronized package and trash manifest tool versions.
+- Synchronized MCP server metadata version.
+- Ensured built CLI and MCP bin files are executable after local builds.
+- Clarified preview/confirmation wording: confirmed deletes rescan and protect the current write, but no preview token binds a prior preview to a later confirmation.
+- Generalized the unknown global-state rules document so it no longer contains local machine paths, dates, or live local counts.
 - Updated public positioning now that Codex Desktop includes archived-chat delete: the project is described as a local residue audit, verification, and cleanup tool rather than a replacement for ordinary Desktop deletion.
 - Synchronized README, README.zh-CN, Skill, example Skill, CLI help, and MCP descriptions with the new family inspection, session audit, root residue scan, root preview, and explicit preview-before-confirmation guidance.
 - Changed human-readable family output from wide table rows to compact blocks; default output shortens long text and points to `--full`, `--json`, or MCP for full fields, while `--full` expands complete titles and raw source values as blocks.
@@ -28,6 +34,7 @@
 
 ### Fixed
 
+- Ensured the P11/P12 safety rules document is included in npm package contents.
 - Clarified audit output for valid session IDs that have no local record or residue, reporting them as `absent` instead of `clean`.
 - Avoided truncating large CLI output by letting stdout flush before process exit.
 

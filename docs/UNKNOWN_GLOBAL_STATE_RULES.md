@@ -2,7 +2,7 @@
 
 This document records the P11 rule boundary and the P12 implementation for `.codex-global-state.json` references.
 
-P12 promotes only two exact-key patterns after preview and explicit confirmation. All other unknown global-state refs remain warnings and are not deletable by the tool.
+P12 promotes only two exact-key patterns for explicit-session delete preview and explicit confirmation. All other unknown global-state refs remain warnings and are not deletable by the tool.
 
 ## Current Behavior
 
@@ -23,18 +23,18 @@ The current unknown scanner:
 - records a string value only when the whole value is a session-shaped UUID;
 - does not treat a UUID embedded inside longer text as a ref.
 
-## Observed Local Shapes
+## Observed Shape Classes
 
-A read-only check of the current local `/Users/luosi/.codex/.codex-global-state.json` on 2026-05-24 showed these unknown shapes:
+Read-only checks of Codex `.codex-global-state.json` files can show these unknown shape classes:
 
-| Pattern | Count | Shape | P11 classification |
-|---|---:|---|---|
-| `$.electron-persisted-atom-state.prompt-history.<session-id>` | 112 | Object key, value is an array | Promote to exact-key candidate for P12 |
-| `$.electron-persisted-atom-state.heartbeat-thread-permissions-by-id.<session-id>` | 124 | Object key, value is an object with `approvalPolicy`, `approvalsReviewer`, `sandboxPolicy` | Promote to exact-key candidate for P12 |
-| `$.electron-persisted-atom-state.prompt-history.<session-id>[n]` | 6 | Array value is a UUID-shaped string | Keep unknown |
-| `$.electron-local-remote-control-installation-id` | 1 | String value is UUID-shaped | Keep unknown |
+| Pattern | Shape | P11 classification |
+|---|---|---|
+| `$.electron-persisted-atom-state.prompt-history.<session-id>` | Object key, value is an array | Promote to exact-key candidate for P12 |
+| `$.electron-persisted-atom-state.heartbeat-thread-permissions-by-id.<session-id>` | Object key, value is an object with `approvalPolicy`, `approvalsReviewer`, `sandboxPolicy` | Promote to exact-key candidate for P12 |
+| `$.electron-persisted-atom-state.prompt-history.<session-id>[n]` | Array value is a UUID-shaped string | Keep unknown |
+| `$.electron-local-remote-control-installation-id` | String value is UUID-shaped | Keep unknown |
 
-The root scan also showed `audit-root --status global-state-unknown --source global-state-unknown` returning 57 candidates, and `preview-root --source global-state-unknown` returning 72 matching candidates before the display limit. These are candidates for review, not deletion lists.
+Root scan counts vary by machine and over time. `audit-root` and `preview-root` results are candidates for review, not deletion lists.
 
 ## Promoted Exact-Key Candidates
 
@@ -64,12 +64,11 @@ These shapes must not be deleted by P12:
 
 The reason is simple: these values may be installation ids, prompt content, app settings, or future Codex state unrelated to a deleted session.
 
-## Required Preview Before Writes
+## Explicit-Session Preview Before Writes
 
-Before any P12 write can remove an exact-key candidate, the preview must show:
+Before any P12 write can remove an exact-key candidate, run the explicit-session delete preview and inspect the affected surfaces. Preview output must show:
 
 - the target session id;
-- the root path and global-state file path;
 - each exact JSON path to remove;
 - the rule id, for example `electronPromptHistoryByThreadId` or `heartbeatThreadPermissionsById`;
 - the value shape, such as `array(20)` or `object(3)`;
@@ -79,6 +78,8 @@ Before any P12 write can remove an exact-key candidate, the preview must show:
 - whether the command is only a preview or a confirmed write.
 
 Preview must not print prompt text, full object values, or the full global-state file.
+
+The current CLI and MCP do not issue a preview token or cryptographically bind one preview command to a later confirmed command. The confirmed command rescans the selected root and refuses if `.codex-global-state.json` changes again inside that confirmed command before its write, cannot be parsed, or cannot be protected by rollback.
 
 `audit-root` and `preview-root` must remain read-only. Their results are not deletion recommendations. They must not become a shortcut for deleting unknown global-state refs.
 
@@ -128,7 +129,7 @@ CLI and MCP should use the same rule:
 Human-facing wording should say:
 
 - "unknown global-state refs are warnings";
-- "these exact-key refs can be removed only after preview and explicit confirmation";
+- "these exact-key refs are shown in explicit-session preview and removed only by explicit confirmation";
 - "root candidates are not deletion recommendations";
 - "a clean result cannot be claimed while unknown refs remain";
 - "prompt contents and full global-state values are not printed".
@@ -164,7 +165,7 @@ P12 is implemented through these focused changes:
 
 4. Confirmed exact-key deletion.
    - Only exact property deletion.
-   - Preview-first behavior unchanged.
+   - Explicit-session preview behavior unchanged.
    - Snapshot before write.
    - Refuse on changed, unreadable, or unparsable global-state.
 

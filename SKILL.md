@@ -103,7 +103,7 @@ If the `codex-sessions` MCP server is available in the current agent session, us
 - `preview_root_delete` (read-only root delete preview; never deletes and never recommends deletion)
 - `export_session_backup`
 - `preview_delete_sessions`
-- `delete_sessions` (requires a separate preview, then `confirm=true` to execute; pass `trash=true` for recoverable deletion; P11 exact-key global-state refs follow the same preview/confirm rule)
+- `delete_sessions` (without `confirm=true`, returns preview only; with `confirm=true`, executes after the caller has reviewed the intended scope; pass `trash=true` for recoverable deletion; P11 exact-key global-state refs follow the same preview/confirm safety model)
 - `list_trash`
 - `restore_sessions` (requires `confirm=true`)
 - `purge_trash` (requires `confirm=true`)
@@ -264,12 +264,12 @@ The `--yes` examples above are execution examples, not first-step recommendation
 - `family --impact` and MCP `mode=impact` show relationship impact only. Do not present them as deletion advice or a delete preview, do not generate `--yes`, and do not change delete behavior.
 - `thread_spawn_edges` is a generic parent/child edge table, not a subagent-only table. `/side`, `/fork`, subagent, MCP, exec, VS Code, CLI, and unknown sessions may all appear as child threads.
 - Classify child type from the child session's own `sourceKind`, raw `source`, `thread_source`, `agent_role`, `agent_nickname`, and `agent_path`. A child can have multiple labels, such as both `subagent` and `side/fork`; use `childTypeLabels` and `relationshipLabels` when available instead of collapsing it to one identity.
-- Parent deletion does not automatically process children. Child deletion does not automatically process parents. Real deletion still requires a separate preview and explicit confirmation.
+- Parent deletion does not automatically process children. Child deletion does not automatically process parents. Real deletion should use a separate preview and explicit confirmation.
 - `audit_session` and CLI `audit` are read-only. They report local residue after official UI delete/archive actions and must not rewrite files, SQLite, shell snapshots, or global state.
 - `audit_root` and CLI `audit-root` are read-only. They scan for likely residue candidates across a Codex root and must not delete, rewrite, or select parent/child sessions automatically.
 - `audit_root` / `audit-root` status and source filters only narrow displayed candidates. Multiple statuses or multiple sources use OR; combining status and source uses AND. A matching candidate is not a deletion list entry or deletion recommendation; it still needs per-session audit or read-only preview before any cleanup decision.
 - `preview_root_delete` and CLI `preview-root` are read-only. They reuse `audit-root` filters to build a batch delete preview, but do not delete, do not rewrite JSONL, SQLite, shell snapshots, or global state, do not accept `--yes`, do not recommend deleting any session, and do not recursively select parent, child, or family sessions.
-- A `preview-root` result is not a deletion recommendation. Actual deletion requires a separate explicit-ID delete preview and then user-confirmed `delete ... --yes`.
+- A `preview-root` result is not a deletion recommendation. Actual deletion should use a separate explicit-ID delete preview for review and then user-confirmed `delete ... --yes`.
 - Delete previews warn when selected sessions have unselected parent, child, or family sessions, and when relationship edges point at missing sessions or missing file/index surfaces.
 - CLI `delete` without `--yes` is preview-only.
 - MCP `delete_sessions` without `confirm=true` is preview-only.
@@ -288,10 +288,10 @@ The `--yes` examples above are execution examples, not first-step recommendation
 - `cleanup-index` and `cleanup-stale` rewrite `session_index.jsonl` and `history.jsonl`. They do not delete raw files or SQLite rows, but they still require `--yes`.
 - MCP `cleanup_session_indexes` and `cleanup_stale_indexes` require `confirm=true` to rewrite JSONL indexes.
 - Global-state cleanup is limited to known structured keys plus the two P11 exact-key paths: `$.electron-persisted-atom-state.prompt-history.<session-id>` and `$.electron-persisted-atom-state.heartbeat-thread-permissions-by-id.<session-id>`.
-- P11 exact-key refs are removable only through explicit-ID delete preview followed by `--yes` or MCP `confirm=true`. Preview must show path, rule id, shape, byte estimate, affected surfaces, family warnings, and confirmation requirement. Do not print prompt contents or full global-state values.
+- P11 exact-key refs are removable only through explicit-ID delete with explicit confirmation (`--yes` or MCP `confirm=true`) after preview review. Preview must show path, rule id, shape, byte estimate, affected surfaces, family warnings, and confirmation requirement. Do not print prompt contents or full global-state values.
 - `export_session_backup`, CLI `export`, and trash bundles are recovery data, not previews. They may include full exact-key global-state values, including prompt-history content, so do not print them back to the user unless explicitly requested for recovery.
 - Unknown global-state references outside those exact-key rules are warnings only. Do not edit or delete unknown keys automatically. Refuse cleanup when an ID matches only ineligible unknown global-state refs.
-- The confirmed delete command rescans the root. If global-state changes again inside that confirmed command before the write, cannot be parsed, or lacks snapshot/rollback protection, refuse the write and tell the user to rerun preview.
+- The current CLI/MCP does not use a preview token. The confirmed delete command rescans the root. If global-state changes again inside that confirmed command before the write, cannot be parsed, or lacks snapshot/rollback protection, refuse the write and tell the user to rerun preview.
 - If `audit`, `audit-root`, `preview-root`, `verify`, `doctor`, or `inspect_root` reports warnings, tell the user. Do not claim the root is fully clean.
 - Do not output chat content when reporting audit, doctor, verify, or global-state warnings.
 

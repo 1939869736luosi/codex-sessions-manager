@@ -30,7 +30,7 @@ import type {
   TrashRestoreResult,
 } from "./types.js";
 
-const TOOL_VERSION = "0.3.1";
+const TOOL_VERSION = "0.3.3";
 const TRASH_DIR_NAME = ".codex-sessions-trash";
 
 function getTrashDir(rootPath: string): string {

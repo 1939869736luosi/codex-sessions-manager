@@ -621,6 +621,30 @@ describe("cli", () => {
     expect(`${readme}\n${safety}`).not.toContain("cleanup-global-state");
   });
 
+  it("keeps package delivery metadata aligned", async () => {
+    const packageJson = JSON.parse(await readFile("package.json", "utf8")) as {
+      version: string;
+      files: string[];
+    };
+    const packageLock = JSON.parse(await readFile("package-lock.json", "utf8")) as {
+      version: string;
+      packages: Record<string, { version?: string }>;
+    };
+    const trashSource = await readFile("src/core/trash.ts", "utf8");
+    const mcpServerSource = await readFile("src/mcp/server.ts", "utf8");
+    const unknownRules = await readFile("docs/UNKNOWN_GLOBAL_STATE_RULES.md", "utf8");
+
+    expect(packageJson.files).toContain("docs/UNKNOWN_GLOBAL_STATE_RULES.md");
+    expect(packageJson).toHaveProperty("scripts.build", expect.stringContaining("chmod +x dist/cli/index.js dist/mcp/server.js"));
+    expect(packageLock.version).toBe(packageJson.version);
+    expect(packageLock.packages[""].version).toBe(packageJson.version);
+    expect(trashSource).toContain(`const TOOL_VERSION = "${packageJson.version}"`);
+    expect(mcpServerSource).toContain(`version: "${packageJson.version}"`);
+    expect(unknownRules).not.toContain("/Users/");
+    expect(unknownRules).not.toContain("2026-");
+    expect(unknownRules).toContain("do not issue a preview token");
+  });
+
   it("deletes sessions when --yes is passed", async () => {
     const capture = createIo();
     const exitCode = await runCli(["delete", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--yes"], capture.io);

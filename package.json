@@ -1,6 +1,6 @@
 {
   "name": "codex-sessions-manager",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Audit and clean local Codex session leftovers: list, export, delete, trash, restore, verify, and cleanup — via CLI or MCP server.",
   "type": "module",
   "bin": {
@@ -13,6 +13,7 @@
     "README.zh-CN.md",
     "CHANGELOG.md",
     "docs/SAFETY.md",
+    "docs/UNKNOWN_GLOBAL_STATE_RULES.md",
     "SKILL.md",
     "agents/openai.yaml",
     "examples/codex-sessions-manager.SKILL.md",
@@ -34,7 +35,7 @@
   },
   "license": "Apache-2.0",
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "build": "rm -rf dist && tsc -p tsconfig.json && chmod +x dist/cli/index.js dist/mcp/server.js",
     "cli": "node dist/cli/index.js",
     "mcp": "node dist/mcp/server.js",
     "test": "vitest run"

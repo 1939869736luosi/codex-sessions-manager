@@ -126,7 +126,7 @@ Add to your MCP config:
 
 18 tools exposed: `inspect_root`, `list_sessions`, `summarize_sources`, `list_projects`, `get_session`, `get_session_family`, `audit_session`, `audit_root`, `preview_root_delete`, `export_session_backup`, `preview_delete_sessions`, `delete_sessions`, `list_trash`, `restore_sessions`, `purge_trash`, `cleanup_session_indexes`, `cleanup_stale_indexes`, `verify_sessions`.
 
-`summarize_sources`, `get_session_family`, `audit_session`, `audit_root`, and `preview_root_delete` are read-only and do not need confirmation. `get_session_family` accepts `mode: full | children | parents | subagents | impact` plus optional `sourceKind`; `impact` is relationship context, not deletion advice and not a delete preview. All destructive tools require `confirm: true` after a separate preview. Without confirmation, delete and cleanup tools return previews only.
+`summarize_sources`, `get_session_family`, `audit_session`, `audit_root`, and `preview_root_delete` are read-only and do not need confirmation. `get_session_family` accepts `mode: full | children | parents | subagents | impact` plus optional `sourceKind`; `impact` is relationship context, not deletion advice and not a delete preview. Destructive tools require explicit confirmation. Without confirmation, delete and cleanup tools return previews only.
 
 ## CLI Reference
 
@@ -197,7 +197,7 @@ Important source limits:
 - `source=mcp` means the thread was recorded with that source. It is not a log of every MCP tool call inside the conversation.
 - `model_provider` is only displayed and filtered here. This tool does not repair provider identity or rewrite provider history.
 
-Use `preview-root` when you want a read-only batch delete preview for the same candidates `audit-root` would select. It reuses the same status/source filters and conservative default `--limit 50`, then summarizes what a read-only preview would touch across rollout files, shell snapshots, `session_index`, `history`, SQLite, known global-state refs, P11 exact-key global-state refs, unknown global-state refs, and `thread_spawn_edges`. It does not delete, does not rewrite JSONL, SQLite, shell snapshots, or global-state, does not accept `--yes`, does not recommend deleting any session, and does not recursively add parent, child, or family sessions. A `preview-root` result is not a deletion recommendation; it only shows what would be touched if you later choose explicit `delete` commands. Actual deletion still requires a separate explicit-ID `delete` preview and then a separate `delete ... --yes` command.
+Use `preview-root` when you want a read-only batch delete preview for the same candidates `audit-root` would select. It reuses the same status/source filters and conservative default `--limit 50`, then summarizes what a read-only preview would touch across rollout files, shell snapshots, `session_index`, `history`, SQLite, known global-state refs, P11 exact-key global-state refs, unknown global-state refs, and `thread_spawn_edges`. It does not delete, does not rewrite JSONL, SQLite, shell snapshots, or global-state, does not accept `--yes`, does not recommend deleting any session, and does not recursively add parent, child, or family sessions. A `preview-root` result is not a deletion recommendation; it only shows what would be touched if you later choose explicit `delete` commands. Actual deletion should use a separate explicit-ID `delete` preview for review, followed by an explicitly confirmed `delete ... --yes` command.
 
 ### P11 exact-key global-state cleanup
 
@@ -218,7 +218,7 @@ codex-sessions delete <session-id> --root <path-to-codex-root> --yes
 codex-sessions delete <session-id> --root <path-to-codex-root> --trash --yes
 ```
 
-MCP follows the same rule: call `preview_delete_sessions`, inspect the exact paths, then call `delete_sessions` with `confirm=true` only when the preview matches. The confirmed command rescans the root and refuses if the global-state file changes again before its write, cannot be parsed, or cannot be protected by rollback.
+MCP follows the same safety model: call `preview_delete_sessions` to inspect the exact paths, then call `delete_sessions` with `confirm=true` only when the preview matches your intended scope. There is no preview token binding the preview call to the confirmed call. The confirmed command rescans the root and refuses if the global-state file changes again inside that confirmed command before its write, cannot be parsed, or cannot be protected by rollback.
 
 Use `family` before deleting a parent or child session. Parent and child sessions are independent sessions with their own IDs. Deleting a parent does not delete children, and deleting a child does not delete its parent. Delete previews and audits warn when relationship records point at missing sessions or missing file/index surfaces. To process multiple related sessions, put every intended session ID into the preview/delete command explicitly. The tool never recurses into parent or child sessions automatically.
 
@@ -232,7 +232,7 @@ Family modes are all read-only:
 - `family <id> --impact` shows what parent, child, family member, missing parent/child, and missing file/index/thread risks would remain if you later choose to process only this session. It groups `selected`, `unselected parents`, `unselected children`, `unselected family members`, `missing relations`, and `missing surfaces`. It does not delete anything, does not recommend deletion, and does not generate `--yes`.
 - `family <id> --full` keeps full raw `source` and full titles in block output instead of a wide table. JSON output and MCP always keep complete fields.
 
-Use `--source-kind subagent|mcp|vscode|cli|exec|unknown` with family modes when you only want matching family nodes. Default human output is compact and may shorten long text; use `--full`, `family --json`, or MCP `get_session_family` when exact raw fields matter. Actual deletion still requires a separate explicit-ID preview and explicit confirmation.
+Use `--source-kind subagent|mcp|vscode|cli|exec|unknown` with family modes when you only want matching family nodes. Default human output is compact and may shorten long text; use `--full`, `family --json`, or MCP `get_session_family` when exact raw fields matter. Actual deletion should still use a separate explicit-ID preview and explicit confirmation.
 
 ## Session Titles
 

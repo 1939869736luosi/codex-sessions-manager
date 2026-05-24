@@ -194,7 +194,7 @@ codex-sessions verify <session-id...> [--json]
 - `source=mcp` 表示这个 thread 的来源是 mcp，不是每一次 MCP 工具调用日志。
 - `model_provider` 这里只做显示和筛选，不修复 provider 身份，也不改写历史。
 
-如果想对 `audit-root` 选出的候选做批量删除预览，用 `preview-root`。它复用同一套 `status/source` 筛选和保守默认 `--limit 50`，汇总展示只读预览会碰到哪些位置：rollout 文件、shell snapshots、`session_index`、`history`、SQLite、已知 global-state 引用、P11 exact-key global-state 引用、未知 global-state 引用和 `thread_spawn_edges`。它只读，不删除，不改写 JSONL、SQLite、shell snapshot 或 global-state，不接受 `--yes`，也不会自动递归加入 parent、child 或 family session。`preview-root` 的结果不等于“这些都该删”，也不会建议删除任何 session；它只说明如果之后你明确运行 delete，会碰到什么。真正删除仍然必须先跑单独的明确 ID `delete` 预览，再单独运行 `delete ... --yes`。
+如果想对 `audit-root` 选出的候选做批量删除预览，用 `preview-root`。它复用同一套 `status/source` 筛选和保守默认 `--limit 50`，汇总展示只读预览会碰到哪些位置：rollout 文件、shell snapshots、`session_index`、`history`、SQLite、已知 global-state 引用、P11 exact-key global-state 引用、未知 global-state 引用和 `thread_spawn_edges`。它只读，不删除，不改写 JSONL、SQLite、shell snapshot 或 global-state，不接受 `--yes`，也不会自动递归加入 parent、child 或 family session。`preview-root` 的结果不等于“这些都该删”，也不会建议删除任何 session；它只说明如果之后你明确运行 delete，会碰到什么。真正删除应先跑单独的明确 ID `delete` 预览供检查，再单独运行显式确认的 `delete ... --yes`。
 
 ### P11 exact-key global-state 清理
 
@@ -215,7 +215,7 @@ codex-sessions delete <session-id> --root <path-to-codex-root> --yes
 codex-sessions delete <session-id> --root <path-to-codex-root> --trash --yes
 ```
 
-MCP 规则相同：先调用 `preview_delete_sessions`，确认 exact path 后，再调用 `delete_sessions` 并设置 `confirm=true`。确认命令会重新扫描 root；如果 global-state 文件在这次确认命令内部、写入前又发生变化，或文件无法解析、没有可回滚保护，写操作会拒绝。
+MCP 规则相同：先调用 `preview_delete_sessions` 检查 exact path，再在确认符合预期时调用 `delete_sessions` 并设置 `confirm=true`。当前没有 preview token，也不会把某一次 preview 调用和后续 confirm 调用强绑定。确认命令会重新扫描 root；如果 global-state 文件在这次确认命令内部、写入前又发生变化，或文件无法解析、没有可回滚保护，写操作会拒绝。
 
 删除 parent 或 child 前先看 `family`。parent 和 child 是不同 session，各自有自己的 ID。删除 parent 不等于删除 child，删除 child 也不等于删除 parent。删除预览和 audit 会提示关系记录指向缺失 session，或相关 session 缺文件/索引。要一起处理多个相关 session，需要把每个 session ID 明确放进预览或删除命令。工具不会自动递归处理 parent 或 child。
 

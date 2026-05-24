@@ -49,7 +49,7 @@ export function createServer(): McpServer {
   const server = new McpServer(
     {
       name: "codex-sessions",
-      version: "0.3.2",
+      version: "0.3.3",
     },
     {
       capabilities: { logging: {} },
@@ -390,7 +390,7 @@ export function createServer(): McpServer {
     "delete_sessions",
     {
       description:
-        "Delete explicit Codex sessions across files, JSONL indexes, SQLite, known global-state refs, and the two P11 exact-key global-state refs only. Pass trash=true to move them to recoverable trash. Requires confirm=true after a separate preview; otherwise returns a preview only. Unknown global-state refs outside the exact-key rules remain warnings, and unknown-only cleanup is refused. This tool never recursively adds parent, child, or family sessions.",
+        "Delete explicit Codex sessions across files, JSONL indexes, SQLite, known global-state refs, and the two P11 exact-key global-state refs only. Pass trash=true to move them to recoverable trash. Without confirm=true this returns a preview only; with confirm=true it executes after the caller has reviewed the intended scope. There is no preview token binding a prior preview call to the confirmed call. Unknown global-state refs outside the exact-key rules remain warnings, and unknown-only cleanup is refused. This tool never recursively adds parent, child, or family sessions.",
       outputSchema: TOOL_OUTPUT_SCHEMA,
       inputSchema: z.object({
         sessionIds: z.array(z.string()).min(1),

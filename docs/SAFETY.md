@@ -167,7 +167,7 @@ codex-sessions delete <session-id> --root <path-to-codex-root>
 codex-sessions delete <session-id> --root <path-to-codex-root> --yes
 ```
 
-For MCP, use `preview_delete_sessions` first, then `delete_sessions` with `confirm=true` only after reviewing the exact paths. Use `trash=true` when recoverability is needed.
+For MCP, use `preview_delete_sessions` to inspect exact paths, then use `delete_sessions` with `confirm=true` only after reviewing the intended scope. There is no preview token binding a prior preview call to the confirmed call. Use `trash=true` when recoverability is needed.
 
 Before any confirmed write, the tool must have a snapshot or equivalent rollback path. The confirmed command rescans the root and refuses if `.codex-global-state.json` changes again before the write, cannot be parsed, cannot be read, or cannot be rolled back.
 
