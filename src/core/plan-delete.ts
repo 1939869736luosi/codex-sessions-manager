@@ -184,6 +184,15 @@ function collectSurfaceCounts(scan: ScanResult, selectedSessions: SessionEntry[]
   return buildDeletePreview(scan, selectedSessions).totals;
 }
 
+function collectCandidateSessions(scan: ScanResult, options: NonNullable<PlanDeleteOptions["candidateSource"]>): SessionEntry[] {
+  const statusSet = new Set(options.statuses);
+  const sourceKindSet = new Set(options.sourceKinds);
+  return scan.sessions
+    .filter((session) => sourceKindSet.has(session.sourceKind))
+    .filter((session) => statusSet.size === 0 || statusSet.has(session.kind))
+    .slice(0, options.limit);
+}
+
 export function buildPlanDelete(
   scan: ScanResult,
   seedSessionIds: string[],
@@ -194,10 +203,20 @@ export function buildPlanDelete(
   const seedSessionsById = new Map(seeds.map((session) => [session.id, session]));
   const candidateSessionsById = new Map([...knownSessionsById, ...seedSessionsById]);
   const selectedIds = new Set<string>();
+  const candidateIds = new Set<string>();
   const includedIds: PlanDeleteIncludedId[] = [];
   const rejectedIds: PlanDeleteRejectedId[] = [];
   for (const seed of seeds) {
     addIncluded(selectedIds, includedIds, rejectedIds, candidateSessionsById, seed.id, "seed");
+  }
+
+  const sourceCandidates = options.candidateSource ? collectCandidateSessions(scan, options.candidateSource) : [];
+  for (const candidate of sourceCandidates) {
+    if (candidate.kind === "active") {
+      rejectIfActive(rejectedIds, candidate.id, candidate.kind);
+    } else {
+      candidateIds.add(candidate.id);
+    }
   }
 
   const seedFamilies = seeds.map((session) => buildSessionFamily(scan, session));
@@ -251,6 +270,12 @@ export function buildPlanDelete(
       .filter((family) => family.familyMembers.length > 1)
       .map((family) => `family 不默认递归包含：${family.current.sessionId} 还有 related sessions 可在 availableIncludes 查看。`),
     options.includeFamily ? "高风险：--include-family 会纳入 connected family；T7-P1 仍然只读且不支持执行。" : null,
+    options.candidateSource
+      ? "sourceKind candidate plan 只列出 candidateIds，不写入 selectedIds，不是删除确认、不是授权、不是 preview token。"
+      : null,
+    options.candidateSource
+      ? "sourceKind 是筛选维度，不是删除授权；mcp/vscode/exec 等分类只保留原始来源语义，不能推导为可安全批量删除。"
+      : null,
   ].filter((value): value is string => Boolean(value)));
 
   return {
@@ -258,6 +283,15 @@ export function buildPlanDelete(
     executionSupported: false,
     seedSessionIds: seeds.map((session) => session.id),
     selectedIds: uniqueSorted(selectedIds),
+    ...(options.candidateSource ? {
+      candidateIds: uniqueSorted(candidateIds),
+      candidateSource: {
+        type: "sourceKind" as const,
+        sourceKinds: options.candidateSource.sourceKinds,
+        statuses: options.candidateSource.statuses,
+        limit: options.candidateSource.limit,
+      },
+    } : {}),
     includedIds,
     availableIncludes: {
       parents: seedFamilies.flatMap((family) => family.parents.filter((node) => !selectedIds.has(node.sessionId) && !rejectedIds.some((item) => item.sessionId === node.sessionId)).map((node) => toAvailableInclude(node, "parent"))),

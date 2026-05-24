@@ -35,7 +35,7 @@ These operations are intended to inspect or report information without modifying
 | `doctor` | `inspect_root` | Diagnose root structure and compatibility |
 | `verify` | `verify_sessions` | Report remaining files, indexes, SQLite rows, and warnings |
 | `trash-list` | `list_trash` | List trash entries |
-| `plan-delete` / `preview-plan` | — | Build and re-preview read-only explicit-ID delete plan audit files; no MCP tool |
+| `plan-delete` / `preview-plan` | — | Build and re-preview read-only explicit-ID delete plan audit files; sourceKind candidate mode lists `candidateIds` only; no MCP tool |
 
 `doctor` and `inspect_root` are read-only diagnostics. They are intended to detect Codex storage changes, missing files, SQLite table availability, trash state, and global-state warnings.
 
@@ -58,7 +58,11 @@ Without `--yes` or `confirm=true`, destructive operations return a preview and d
 
 Permanent delete remains the default delete mode for compatibility. However, `delete` without `--yes` only prints a preview.
 
-`plan-delete` is stricter than a delete preview: it is read-only, accepts only explicit session IDs, never executes deletion, and reports `executionSupported=false`. By default it selects only seed IDs. The include flags (`--include-children`, `--include-subagents`, `--include-descendants`, `--include-family`) only change the planned `selectedIds`; they do not authorize or execute a write. `--include-family` is high risk and side/fork sessions remain ambiguous available includes.
+`plan-delete` is stricter than a delete preview: it is read-only, never executes deletion, and reports `executionSupported=false`. Explicit session IDs can enter `selectedIds`; by default only seed IDs are selected. The include flags (`--include-children`, `--include-subagents`, `--include-descendants`, `--include-family`) only change the planned `selectedIds`; they do not authorize or execute a write. `--include-family` is high risk and side/fork sessions remain ambiguous available includes.
+
+`plan-delete --source-kind KIND --limit N` is a read-only candidate plan, not a deletion plan. `--limit` is mandatory and capped at 50. Repeated `--source-kind` and repeated `--status` use OR. Root-level `sourceKind=unknown` is rejected because unknown source sessions must be reviewed by explicit session ID. Candidate matches are reported as `candidateIds`, never `selectedIds`; active/current matches remain `rejectedIds`. This output is not authorization, not a preview token, not a delete confirmation, and not accepted by any delete execution command. `--write-plan` is intentionally unsupported for sourceKind candidate plans in this release.
+
+`sourceKind` is only a filter dimension. `mcp` means thread source, not a record of each MCP tool call; `vscode` is the raw Codex thread source label, not proof of the VS Code IDE; `exec` does not imply execution logs are safe to batch-delete. Root-level sourceKind candidate plans must not inherit candidates from `audit-root` or `preview-root` as deletion recommendations.
 
 `plan-delete --write-plan FILE` may write a stable `codex-sessions-delete-plan.v1` audit file. That file is not authorization, not a preview token, not a delete confirmation, and not accepted by any delete execution command. It must contain only metadata: selected IDs, included/rejected IDs, available includes, warnings, broken relations, missing surfaces, surface counts, root fingerprint, plan hash, scan timestamp, and exact-key global-state path/rule/shape/byteEstimate. It must not contain transcript bodies, prompt text, or full global-state values.
 

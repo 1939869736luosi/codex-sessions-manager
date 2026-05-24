@@ -270,6 +270,52 @@ describe("core integration", () => {
     ]);
   });
 
+  it("builds sourceKind candidate plans without selecting candidates for deletion", async () => {
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const plan = buildPlanDelete(scan, [], {
+      candidateSource: {
+        sourceKinds: ["subagent"],
+        statuses: ["archived"],
+        limit: 20,
+      },
+    });
+
+    expect(plan.readOnly).toBe(true);
+    expect(plan.executionSupported).toBe(false);
+    expect(plan.seedSessionIds).toEqual([]);
+    expect(plan.selectedIds).toEqual([]);
+    expect(plan.includedIds).toEqual([]);
+    expect(plan.candidateIds).toEqual([FIXTURE_IDS.ARCHIVED_ID]);
+    expect(plan.candidateSource).toEqual({
+      type: "sourceKind",
+      sourceKinds: ["subagent"],
+      statuses: ["archived"],
+      limit: 20,
+    });
+    expect(plan.rejectedIds).toEqual([]);
+    expect(plan.warnings).toEqual(expect.arrayContaining([
+      expect.stringContaining("sourceKind candidate plan"),
+      expect.stringContaining("sourceKind 是筛选维度，不是删除授权"),
+    ]));
+  });
+
+  it("keeps active sourceKind candidates rejected and out of selectedIds", async () => {
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const plan = buildPlanDelete(scan, [], {
+      candidateSource: {
+        sourceKinds: ["cli"],
+        statuses: ["active"],
+        limit: 20,
+      },
+    });
+
+    expect(plan.selectedIds).toEqual([]);
+    expect(plan.candidateIds).toEqual([]);
+    expect(plan.rejectedIds).toEqual([
+      { sessionId: FIXTURE_IDS.ACTIVE_ID, reason: "active-session-refused-by-default" },
+    ]);
+  });
+
   it("rejects active related sessions instead of offering them as available includes", async () => {
     const activeChildFile = path.join(
       path.dirname(fixture.paths.activeSessionFile),

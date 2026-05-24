@@ -83,6 +83,8 @@ The current CLI and MCP do not issue a preview token or cryptographically bind o
 
 `audit-root`, `preview-root`, `plan-delete`, and `preview-plan` must remain read-only. Their results are not deletion recommendations. They must not become a shortcut for deleting unknown global-state refs.
 
+`plan-delete --source-kind ... --limit ...` is only a candidate listing surface. It reports `candidateIds`, never `selectedIds`, and root-level `sourceKind=unknown` must be rejected so unknown-source sessions are reviewed by explicit session ID. A sourceKind candidate result must not inherit `audit-root` or `preview-root` candidates as deletion suggestions, and it must not be used to decide that unknown global-state refs are safe.
+
 `plan-delete` may show exact-key global-state metadata for selected explicit session IDs, and `plan-delete --write-plan` may persist it in a plan file, but both surfaces must show only path, rule id, value shape, and byte estimate. They must not print prompt text or full object values, and they must keep unknown global-state refs as warnings only.
 
 Plan files are audit materials only. They are not authorization, preview tokens, or delete confirmations. `preview-plan` must re-scan the root and mark the plan stale if root identity, surface mtime/size/parseability, selected surface counts, family edges, or exact-key paths differ.

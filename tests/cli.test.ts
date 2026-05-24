@@ -354,6 +354,59 @@ describe("cli", () => {
     }
   });
 
+  it("prints sourceKind plan-delete candidate JSON only when limit is explicit", async () => {
+    const capture = createIo();
+    const exitCode = await runCli(["plan-delete", "--root", fixture.rootDir, "--source-kind", "subagent", "--status", "archived", "--limit", "20", "--json"], capture.io);
+    const result = JSON.parse(capture.stdout.join("\n")) as {
+      readOnly: boolean;
+      executionSupported: boolean;
+      seedSessionIds: string[];
+      selectedIds: string[];
+      candidateIds: string[];
+      candidateSource: { type: string; sourceKinds: string[]; statuses: string[]; limit: number };
+    };
+
+    expect(exitCode).toBe(0);
+    expect(result.readOnly).toBe(true);
+    expect(result.executionSupported).toBe(false);
+    expect(result.seedSessionIds).toEqual([]);
+    expect(result.selectedIds).toEqual([]);
+    expect(result.candidateIds).toEqual([FIXTURE_IDS.ARCHIVED_ID]);
+    expect(result.candidateSource).toEqual({
+      type: "sourceKind",
+      sourceKinds: ["subagent"],
+      statuses: ["archived"],
+      limit: 20,
+    });
+
+    await expect(runCli(["plan-delete", "--root", fixture.rootDir, "--source-kind", "subagent"], createIo().io))
+      .rejects.toThrow("plan-delete --source-kind 需要显式 --limit");
+  });
+
+  it("rejects unsafe sourceKind candidate plan options", async () => {
+    await expect(runCli(["plan-delete", "--root", fixture.rootDir, "--source-kind", "subagent", "--limit", "51"], createIo().io))
+      .rejects.toThrow("--limit 最大为 50");
+    await expect(runCli(["plan-delete", "--root", fixture.rootDir, "--source-kind", "unknown", "--limit", "20"], createIo().io))
+      .rejects.toThrow("unknown sourceKind must be reviewed by explicit session ID");
+    await expect(runCli(["plan-delete", "--root", fixture.rootDir, "--source-kind", "subagent", "--limit", "20", "--yes"], createIo().io))
+      .rejects.toThrow("plan-delete 不支持 --yes");
+    await expect(runCli(["plan-delete", "--root", fixture.rootDir, "--source-kind", "subagent", "--limit", "20", "--trash"], createIo().io))
+      .rejects.toThrow("plan-delete 不支持 --trash");
+  });
+
+  it("rejects writing sourceKind candidate plan files because they are not delete authorization", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-source-plan-"));
+    const planPath = path.join(tempDir, "source-plan.json");
+
+    try {
+      await expect(runCli(["plan-delete", "--root", fixture.rootDir, "--source-kind", "subagent", "--limit", "20", "--write-plan", planPath], createIo().io))
+        .rejects.toThrow("--write-plan 暂不支持 sourceKind candidate plan");
+      await expect(readFile(planPath, "utf8")).rejects.toThrow();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("documents plan-delete plan-file support without execution options", () => {
     const help = getHelpText();
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added read-only `plan-delete --source-kind ... --limit ...` candidate plans that list `candidateIds` without turning them into delete-selected IDs.
+
+### Safety
+
+- SourceKind candidate plans require an explicit limit capped at 50, reject root-level `sourceKind=unknown`, reject active/current candidates into `rejectedIds`, and intentionally do not support `--write-plan` or any delete execution path.
+
 ## 0.4.0
 
 ### Added

@@ -20,7 +20,7 @@ import { buildPlanDelete } from "../core/plan-delete.js";
 import { listProjectSummaries } from "../core/project.js";
 import { filterSessions, resolveSessions } from "../core/query.js";
 import { scanCodexRoot } from "../core/scan.js";
-import { summarizeSources } from "../core/sources.js";
+import { parseSourceKind, summarizeSources } from "../core/sources.js";
 import { readSessionTimeline } from "../core/timeline.js";
 import {
   listTrashEntries,
@@ -30,6 +30,7 @@ import {
   summarizeTrashDuplicateSessions,
   trashEntryMatches,
 } from "../core/trash.js";
+import type { SessionKind } from "../core/types.js";
 import {
   formatAudit,
   formatBackup,
@@ -116,6 +117,8 @@ Usage:
   codex-sessions plan-delete <session-id...> [--root PATH] [--json] [--write-plan FILE]
                             [--include-children] [--include-subagents]
                             [--include-descendants] [--include-family]
+  codex-sessions plan-delete --source-kind KIND [--source-kind KIND...] --limit N
+                            [--status STATUS...] [--root PATH] [--json]
   codex-sessions preview-plan <plan-file> [--root PATH] [--json]
   codex-sessions delete <session-id...> [--root PATH] [--json] [--yes] [--trash]
   codex-sessions trash-list [--root PATH] [--json]
@@ -135,7 +138,9 @@ Notes:
   - audit-root 只读扫描整个 root 的疑似残留，默认 limit=50
   - audit-root 多个 --status 或 --source 为 OR；同时使用 status 和 source 时为 AND
   - preview-root 只读批量预览 audit-root 筛出的候选，不删除、不递归处理 family
-  - plan-delete 是只读删除计划：只接受 explicit session IDs，不执行删除，可用 --write-plan 写审计 plan file，不支持 --yes
+  - plan-delete 是只读删除计划：explicit session IDs 会进入 selectedIds；sourceKind root-level 模式只输出 candidateIds，不是授权
+  - plan-delete --source-kind 必须显式 --limit（最大 50），拒绝 unknown；可重复 --source-kind/--status 使用 OR
+  - plan-delete --source-kind 暂不支持 --write-plan；candidateIds 需人工复核后再显式 ID 预览
   - preview-plan 只读重扫 root 并检查 stale；plan file 是审计材料，不是授权、不是 preview token、不是删除确认
   - plan-delete include flags 只影响 selectedIds；family 不默认递归包含，--include-family 为高风险只读计划
   - plan-delete side/fork 仅作为 ambiguous available include 输出；当前没有 side/fork 专用 include flags
@@ -156,6 +161,35 @@ Notes:
 
 function normalizeOptionValues(value: string | string[] | undefined): string[] {
   return Array.isArray(value) ? value : value ? [value] : [];
+}
+
+const PLAN_DELETE_CANDIDATE_LIMIT_MAX = 50;
+
+function parsePlanDeleteLimit(value: string | undefined): number {
+  if (!value) {
+    throw new Error("plan-delete --source-kind 需要显式 --limit，且最大为 50。");
+  }
+  const limit = Number(value);
+  if (!Number.isInteger(limit) || limit <= 0) {
+    throw new Error("plan-delete --source-kind 的 --limit 必须是 1 到 50 的整数。");
+  }
+  if (limit > PLAN_DELETE_CANDIDATE_LIMIT_MAX) {
+    throw new Error("plan-delete --source-kind 的 --limit 最大为 50。");
+  }
+  return limit;
+}
+
+function parsePlanDeleteStatuses(values: string[]): SessionKind[] {
+  const statuses = values.length > 0 ? values : ["active", "archived", "db-only", "stale"];
+  return statuses.map((value) => {
+    if (value === "active" || value === "archived" || value === "db-only" || value === "stale") {
+      return value;
+    }
+    if (value === "all") {
+      throw new Error("plan-delete --source-kind 不支持 --status all；省略 --status 表示全部状态候选。");
+    }
+    throw new Error("plan-delete --source-kind --status 可选: active | archived | db-only | stale");
+  });
 }
 
 async function writeBackupFile(outputPath: string, payload: unknown): Promise<void> {
@@ -432,14 +466,50 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
     }
 
     case "plan-delete": {
-      if (rest.length === 0) {
-        throw new Error("plan-delete 至少需要 1 个 session-id。");
-      }
       if (values.yes) {
         throw new Error("plan-delete 不支持 --yes；它始终只读，不执行删除。");
       }
       if (values.trash) {
         throw new Error("plan-delete 不支持 --trash；它不会执行或生成可执行删除计划。");
+      }
+      if (rest.length === 0 && sourceKindValues.length > 0) {
+        if (values["write-plan"]) {
+          throw new Error("--write-plan 暂不支持 sourceKind candidate plan；candidateIds 不是删除授权，请改用 JSON 输出人工复核后再显式 ID 预览。");
+        }
+        if (
+          sourceValues.length > 0 ||
+          values.all ||
+          values.query ||
+          values.project ||
+          values.children ||
+          values.parents ||
+          values.subagents ||
+          values.impact ||
+          values["include-children"] ||
+          values["include-subagents"] ||
+          values["include-descendants"] ||
+          values["include-family"]
+        ) {
+          throw new Error("plan-delete --source-kind candidate plan 只支持 --source-kind、--status、--limit、--root、--json。");
+        }
+        const limit = parsePlanDeleteLimit(values.limit);
+        const sourceKinds = sourceKindValues.map(parseSourceKind);
+        if (sourceKinds.includes("unknown")) {
+          throw new Error("unknown sourceKind must be reviewed by explicit session ID；不支持 root-level unknown candidate plan。");
+        }
+        const statuses = parsePlanDeleteStatuses(statusValues);
+        const plan = buildPlanDelete(scan, [], {
+          candidateSource: {
+            sourceKinds,
+            statuses,
+            limit,
+          },
+        });
+        io.stdout(asJson ? JSON.stringify(plan, null, 2) : formatPlanDelete(plan));
+        return 0;
+      }
+      if (rest.length === 0) {
+        throw new Error("plan-delete 至少需要 1 个 session-id。");
       }
       if (
         sourceKindValues.length > 0 ||

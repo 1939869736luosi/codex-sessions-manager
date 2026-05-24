@@ -177,6 +177,8 @@ codex-sessions plan-delete <session-id...> --root <path-to-codex-root> --include
 codex-sessions plan-delete <session-id...> --root <path-to-codex-root> --include-descendants
 codex-sessions plan-delete <session-id...> --root <path-to-codex-root> --include-family --json
 codex-sessions plan-delete <session-id...> --root <path-to-codex-root> --write-plan /tmp/codex-delete-plan.json --json
+codex-sessions plan-delete --root <path-to-codex-root> --source-kind subagent --limit 20 --json
+codex-sessions plan-delete --root <path-to-codex-root> --source-kind mcp --status archived --limit 20 --json
 codex-sessions preview-plan /tmp/codex-delete-plan.json --root <path-to-codex-root> --json
 codex-sessions delete <session-id...> --root <path-to-codex-root>
 codex-sessions delete <session-id...> --root <path-to-codex-root> --yes
@@ -246,6 +248,8 @@ node dist/cli/index.js plan-delete <session-id...> --root <path-to-codex-root> -
 node dist/cli/index.js plan-delete <session-id...> --root <path-to-codex-root> --include-descendants
 node dist/cli/index.js plan-delete <session-id...> --root <path-to-codex-root> --include-family --json
 node dist/cli/index.js plan-delete <session-id...> --root <path-to-codex-root> --write-plan /tmp/codex-delete-plan.json --json
+node dist/cli/index.js plan-delete --root <path-to-codex-root> --source-kind subagent --limit 20 --json
+node dist/cli/index.js plan-delete --root <path-to-codex-root> --source-kind mcp --status archived --limit 20 --json
 node dist/cli/index.js preview-plan /tmp/codex-delete-plan.json --root <path-to-codex-root> --json
 node dist/cli/index.js delete <session-id...> --root <path-to-codex-root>
 node dist/cli/index.js delete <session-id...> --root <path-to-codex-root> --yes
@@ -287,8 +291,10 @@ The `--yes` examples above are execution examples, not first-step recommendation
 - `audit_root` / `audit-root` status and source filters only narrow displayed candidates. Multiple statuses or multiple sources use OR; combining status and source uses AND. A matching candidate is not a deletion list entry or deletion recommendation; it still needs per-session audit or read-only preview before any cleanup decision.
 - `preview_root_delete` and CLI `preview-root` are read-only. They reuse `audit-root` filters to build a batch delete preview, but do not delete, do not rewrite JSONL, SQLite, shell snapshots, or global state, do not accept `--yes`, do not recommend deleting any session, and do not recursively select parent, child, or family sessions.
 - A `preview-root` result is not a deletion recommendation. Actual deletion should use a separate explicit-ID delete preview for review and then user-confirmed `delete ... --yes`.
-- CLI `plan-delete` is read-only and has no MCP equivalent. It accepts only explicit session IDs, never source/status root-level selection, and never executes deletion. JSON output must include `readOnly: true` and `executionSupported: false`.
+- CLI `plan-delete` is read-only and has no MCP equivalent. Explicit session IDs can enter `selectedIds`; sourceKind root-level candidate mode can only enter `candidateIds`. It never executes deletion. JSON output must include `readOnly: true` and `executionSupported: false`.
 - `plan-delete` selects only seed IDs by default. `--include-children`, `--include-subagents`, `--include-descendants`, and `--include-family` only affect plan selection; `--include-family` is high risk and must be described as such. Side/fork sessions are ambiguous `availableIncludes`; do not invent side/fork include flags.
+- `plan-delete --source-kind KIND --limit N` is a T7-P3 read-only candidate plan only. `--limit` is required and capped at 50. Repeated `--source-kind` and repeated `--status` use OR. `sourceKind=unknown` root-level plans are rejected; unknown sessions require explicit session ID review. Active/current candidates must remain `rejectedIds`, never `selectedIds` or `candidateIds`. `--write-plan` is intentionally unsupported for sourceKind candidate plans in this release.
+- `sourceKind` is only a filtering dimension and is not deletion authorization. `mcp` is the thread source, not per-tool-call provenance; `vscode` is the raw Codex thread source label, not proof of the VS Code IDE; `exec` does not imply execution logs are safe to batch-delete.
 - `plan-delete --write-plan FILE` writes a `codex-sessions-delete-plan.v1` audit file only. It includes root fingerprint, `planHash`, `scanTimestamp`, selected surface counts, family edges, and exact-key paths. It must not include transcript bodies, prompt text, or full global-state values.
 - `preview-plan <plan-file>` is read-only. It rescans the root and reports stale when root realpath, session_index/history/global-state/sqlite mtime/size/parseability, selected surface counts, family edges, or exact-key paths differ. If stale, do not treat it as the current delete preview.
 - A `plan-delete` result or plan file is not deletion confirmation, not authorization, not a preview token, and not a substitute for a separate explicit-ID delete preview and explicit user confirmation.

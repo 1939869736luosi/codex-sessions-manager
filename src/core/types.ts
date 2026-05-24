@@ -655,6 +655,13 @@ export interface PlanDeleteOptions {
   includeSubagents?: boolean;
   includeDescendants?: boolean;
   includeFamily?: boolean;
+  candidateSource?: PlanDeleteCandidateSource;
+}
+
+export interface PlanDeleteCandidateSource {
+  sourceKinds: SourceKind[];
+  statuses: SessionKind[];
+  limit: number;
 }
 
 export interface PlanDeleteSurfaceCounts {
@@ -678,6 +685,13 @@ export interface PlanDeleteResult {
   executionSupported: false;
   seedSessionIds: string[];
   selectedIds: string[];
+  candidateIds?: string[];
+  candidateSource?: {
+    type: "sourceKind";
+    sourceKinds: SourceKind[];
+    statuses: SessionKind[];
+    limit: number;
+  };
   includedIds: PlanDeleteIncludedId[];
   availableIncludes: {
     parents: PlanDeleteAvailableInclude[];

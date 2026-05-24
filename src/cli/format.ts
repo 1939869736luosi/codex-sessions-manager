@@ -682,17 +682,24 @@ export function formatPlanDelete(plan: PlanDeleteResult): string {
   const rejected = plan.rejectedIds.length
     ? ["", "rejectedIds:", ...plan.rejectedIds.map((item) => `- ${item.sessionId}: ${item.reason}`)]
     : [];
+  const candidateSource = plan.candidateSource
+    ? [
+        `candidateSource: ${plan.candidateSource.type}; sourceKind=${plan.candidateSource.sourceKinds.join(",")}; status=${plan.candidateSource.statuses.join(",")}; limit=${plan.candidateSource.limit}`,
+        `candidateIds: ${plan.candidateIds?.join(", ") || "-"}`,
+      ]
+    : ["candidateSource: -", "candidateIds: -"];
 
   return [
     `只读 plan-delete（${plan.schemaVersion ?? "T7-P1"}）`,
     "未执行删除；这不是删除确认；plan file 只是审计材料，不是授权或 preview token。",
     "family 不默认递归包含；side/fork 只作为 ambiguous available include 输出。",
-    "T7-P1 不支持执行能力；T7-P2 仍然 executionSupported=false，不能用本输出执行 delete-plan。",
+    "T7-P1 不支持执行能力；T7-P2 仍然 executionSupported=false；T7-P3 sourceKind candidate plan 只列 candidateIds，不会写入 selectedIds，不能用本输出执行 delete-plan。",
     "",
     `readOnly: ${plan.readOnly}`,
     `executionSupported: ${plan.executionSupported}`,
     `seedSessionIds: ${plan.seedSessionIds.join(", ") || "-"}`,
     `selectedIds: ${plan.selectedIds.join(", ") || "-"}`,
+    ...candidateSource,
     "includedIds:",
     ...(plan.includedIds.length ? plan.includedIds.map((item) => `- ${item.sessionId}: ${item.reason}`) : ["-"]),
     "",
