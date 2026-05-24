@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import Database from "better-sqlite3";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { createServer } from "../src/mcp/server.js";
 import { validateDeletion } from "../src/core/delete.js";
+import { buildDeletePlanFile, writeDeletePlanFile } from "../src/core/plan-file.js";
+import { buildPlanDelete } from "../src/core/plan-delete.js";
 import { resolveSessions } from "../src/core/query.js";
 import { scanCodexRoot } from "../src/core/scan.js";
 import { createFixture, FIXTURE_IDS, writeExactGlobalStateFixture, type Fixture } from "./helpers/fixture.js";
@@ -428,6 +431,273 @@ describe("mcp server", () => {
       });
       expect(result.structuredContent).toHaveProperty("warnings");
       await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("builds explicit-ID read-only delete plans through MCP without execution affordances", async () => {
+    const { client, server } = await createConnectedClient();
+
+    try {
+      const tools = await client.listTools();
+      const planTool = tools.tools.find((tool) => tool.name === "plan_delete_sessions");
+      expect(planTool?.annotations?.readOnlyHint).toBe(true);
+      expect(JSON.stringify(planTool?.inputSchema)).not.toContain("confirm");
+      expect(JSON.stringify(planTool?.inputSchema)).not.toContain("trash");
+      expect(JSON.stringify(planTool?.inputSchema)).not.toContain("force");
+
+      const result = await client.callTool({
+        name: "plan_delete_sessions",
+        arguments: {
+          root: fixture.rootDir,
+          sessionIds: [FIXTURE_IDS.ARCHIVED_ID],
+        },
+      });
+
+      const plan = result.structuredContent?.plan as {
+        readOnly: boolean;
+        executionSupported: boolean;
+        seedSessionIds: string[];
+        selectedIds: string[];
+        candidateIds?: string[];
+        includedIds: Array<{ sessionId: string; reason: string }>;
+        planHash?: string;
+        previewToken?: string;
+      };
+      expect(plan).toMatchObject({
+        readOnly: true,
+        executionSupported: false,
+        seedSessionIds: [FIXTURE_IDS.ARCHIVED_ID],
+        selectedIds: [FIXTURE_IDS.ARCHIVED_ID],
+        includedIds: [{ sessionId: FIXTURE_IDS.ARCHIVED_ID, reason: "seed" }],
+      });
+      expect(plan.candidateIds).toBeUndefined();
+      expect(plan.planHash).toBeUndefined();
+      expect(plan.previewToken).toBeUndefined();
+      expect(result.structuredContent).toMatchObject({ readOnly: true, executionSupported: false });
+      await expect(readFile(fixture.paths.archivedSessionFile, "utf8")).resolves.toContain("archived assistant output");
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("applies MCP plan_delete_sessions include flags with the same read-only selection semantics", async () => {
+    const { client, server } = await createConnectedClient();
+
+    try {
+      const result = await client.callTool({
+        name: "plan_delete_sessions",
+        arguments: {
+          root: fixture.rootDir,
+          sessionIds: [FIXTURE_IDS.ACTIVE_ID],
+          includeChildren: true,
+          includeSubagents: true,
+          includeDescendants: true,
+          includeFamily: true,
+        },
+      });
+
+      const plan = result.structuredContent?.plan as {
+        selectedIds: string[];
+        includedIds: Array<{ sessionId: string; reason: string }>;
+        rejectedIds: Array<{ sessionId: string; reason: string }>;
+        warnings: string[];
+      };
+      expect(plan.selectedIds).toEqual([FIXTURE_IDS.ARCHIVED_ID]);
+      expect(plan.includedIds).toEqual([
+        { sessionId: FIXTURE_IDS.ARCHIVED_ID, reason: "include-children" },
+      ]);
+      expect(plan.rejectedIds).toEqual([
+        { sessionId: FIXTURE_IDS.ACTIVE_ID, reason: "active-session-refused-by-default" },
+      ]);
+      expect(plan.warnings).toEqual(expect.arrayContaining([expect.stringContaining("--include-family")]));
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("builds sourceKind candidate plans through MCP with candidateIds only", async () => {
+    const { client, server } = await createConnectedClient();
+
+    try {
+      const result = await client.callTool({
+        name: "plan_delete_sessions",
+        arguments: {
+          root: fixture.rootDir,
+          sourceKind: "subagent",
+          status: "archived",
+          limit: 20,
+        },
+      });
+
+      const plan = result.structuredContent?.plan as {
+        readOnly: boolean;
+        executionSupported: boolean;
+        seedSessionIds: string[];
+        selectedIds: string[];
+        candidateIds: string[];
+        candidateSource: { type: string; sourceKinds: string[]; statuses: string[]; limit: number };
+        includedIds: unknown[];
+      };
+      expect(plan).toMatchObject({
+        readOnly: true,
+        executionSupported: false,
+        seedSessionIds: [],
+        selectedIds: [],
+        candidateIds: [FIXTURE_IDS.ARCHIVED_ID],
+        candidateSource: { type: "sourceKind", sourceKinds: ["subagent"], statuses: ["archived"], limit: 20 },
+        includedIds: [],
+      });
+      expect(result.structuredContent).toMatchObject({ readOnly: true, executionSupported: false });
+
+      const activeResult = await client.callTool({
+        name: "plan_delete_sessions",
+        arguments: {
+          root: fixture.rootDir,
+          sourceKind: "cli",
+          status: "active",
+          limit: 20,
+        },
+      });
+      const activePlan = activeResult.structuredContent?.plan as {
+        selectedIds: string[];
+        candidateIds: string[];
+        rejectedIds: Array<{ sessionId: string; reason: string }>;
+      };
+      expect(activePlan.selectedIds).toEqual([]);
+      expect(activePlan.candidateIds).toEqual([]);
+      expect(activePlan.rejectedIds).toEqual([
+        { sessionId: FIXTURE_IDS.ACTIVE_ID, reason: "active-session-refused-by-default" },
+      ]);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("rejects unsafe MCP sourceKind candidate plan inputs", async () => {
+    const { client, server } = await createConnectedClient();
+
+    try {
+      const unknown = await client.callTool({
+        name: "plan_delete_sessions",
+        arguments: {
+          root: fixture.rootDir,
+          sourceKind: "unknown",
+          limit: 20,
+        },
+      });
+      expect(unknown.isError).toBe(true);
+      expect(unknown.content[0]).toMatchObject({
+        type: "text",
+        text: expect.stringContaining("unknown sourceKind must be reviewed by explicit session ID"),
+      });
+
+      const missingLimit = await client.callTool({
+        name: "plan_delete_sessions",
+        arguments: {
+          root: fixture.rootDir,
+          sourceKind: "subagent",
+        },
+      });
+      expect(missingLimit.isError).toBe(true);
+      expect(missingLimit.content[0]).toMatchObject({
+        type: "text",
+        text: expect.stringContaining("plan_delete_sessions sourceKind candidate mode requires explicit limit"),
+      });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("previews delete plan files through MCP as read-only and suppresses stale delete previews", async () => {
+    const { client, server } = await createConnectedClient();
+
+    try {
+      const planPath = path.join(fixture.rootDir, "delete-plan.json");
+      const scan = await scanCodexRoot(fixture.rootDir);
+      const plan = buildPlanDelete(scan, [FIXTURE_IDS.ARCHIVED_ID]);
+      const planFile = await writeDeletePlanFile(planPath, scan, plan);
+
+      const currentResult = await client.callTool({
+        name: "preview_delete_plan",
+        arguments: {
+          root: fixture.rootDir,
+          planFile: planPath,
+        },
+      });
+      const currentPreview = currentResult.structuredContent?.preview as {
+        readOnly: boolean;
+        executionSupported: boolean;
+        stale: boolean;
+        deletePreview: unknown;
+      };
+      expect(currentResult.structuredContent).toMatchObject({ readOnly: true, executionSupported: false });
+      expect(currentPreview.readOnly).toBe(true);
+      expect(currentPreview.executionSupported).toBe(false);
+      expect(currentPreview.stale).toBe(false);
+      expect(currentPreview.deletePreview).toBeTruthy();
+
+      await writeFile(fixture.paths.history, `${await readFile(fixture.paths.history, "utf8")}\n`, "utf8");
+
+      const staleResult = await client.callTool({
+        name: "preview_delete_plan",
+        arguments: {
+          root: fixture.rootDir,
+          plan: planFile,
+        },
+      });
+      const stalePreview = staleResult.structuredContent?.preview as {
+        readOnly: boolean;
+        stale: boolean;
+        staleReasons: string[];
+        deletePreview: unknown;
+      };
+      expect(staleResult.structuredContent).toMatchObject({ readOnly: true, executionSupported: false });
+      expect(stalePreview.readOnly).toBe(true);
+      expect(stalePreview.stale).toBe(true);
+      expect(stalePreview.staleReasons.length).toBeGreaterThan(0);
+      expect(stalePreview.deletePreview).toBeNull();
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("does not expose MCP delete-by-plan or plan preview write semantics", async () => {
+    const { client, server } = await createConnectedClient();
+
+    try {
+      const tools = await client.listTools();
+      expect(tools.tools.map((tool) => tool.name)).not.toContain("delete_sessions_by_plan");
+      const previewTool = tools.tools.find((tool) => tool.name === "preview_delete_plan");
+      expect(previewTool?.annotations?.readOnlyHint).toBe(true);
+      const schemaText = JSON.stringify(previewTool?.inputSchema);
+      expect(schemaText).not.toContain("confirm");
+      expect(schemaText).not.toContain("trash");
+      expect(schemaText).not.toContain("yes");
+      expect(schemaText).not.toContain("force");
+
+      const scan = await scanCodexRoot(fixture.rootDir);
+      const inlinePlan = await buildDeletePlanFile(scan, buildPlanDelete(scan, [FIXTURE_IDS.ARCHIVED_ID]));
+      const invalidPreview = await client.callTool({
+        name: "preview_delete_plan",
+        arguments: {
+          root: fixture.rootDir,
+          plan: inlinePlan,
+          confirm: true,
+        },
+      });
+      expect(invalidPreview.isError).toBe(true);
+      expect(invalidPreview.content[0]).toMatchObject({
+        type: "text",
+        text: expect.stringContaining("Unrecognized key"),
+      });
     } finally {
       await client.close();
       await server.close();

@@ -123,9 +123,9 @@ codex-sessions verify <session-id>
 }
 ```
 
-暴露 18 个工具：`inspect_root`、`list_sessions`、`summarize_sources`、`list_projects`、`get_session`、`get_session_family`、`audit_session`、`audit_root`、`preview_root_delete`、`export_session_backup`、`preview_delete_sessions`、`delete_sessions`、`list_trash`、`restore_sessions`、`purge_trash`、`cleanup_session_indexes`、`cleanup_stale_indexes`、`verify_sessions`。
+暴露 20 个工具：`inspect_root`、`list_sessions`、`summarize_sources`、`list_projects`、`get_session`、`get_session_family`、`audit_session`、`audit_root`、`preview_root_delete`、`export_session_backup`、`preview_delete_sessions`、`plan_delete_sessions`、`preview_delete_plan`、`delete_sessions`、`list_trash`、`restore_sessions`、`purge_trash`、`cleanup_session_indexes`、`cleanup_stale_indexes`、`verify_sessions`。
 
-`summarize_sources`、`get_session_family`、`audit_session`、`audit_root` 和 `preview_root_delete` 是只读工具，不需要确认。`get_session_family` 支持 `mode: full | children | parents | subagents | impact`，也支持可选 `sourceKind`；`impact` 只是关系上下文，不是删除建议，也不是 delete preview。所有破坏性操作需要先单独 preview，再传 `confirm: true`；不确认时，delete 和 cleanup 工具只返回预览。
+`summarize_sources`、`get_session_family`、`audit_session`、`audit_root`、`preview_root_delete`、`plan_delete_sessions` 和 `preview_delete_plan` 是只读工具，不需要确认。`get_session_family` 支持 `mode: full | children | parents | subagents | impact`，也支持可选 `sourceKind`；`impact` 只是关系上下文，不是删除建议，也不是 delete preview。`plan_delete_sessions` 对齐 CLI `plan-delete`：explicit ID 可生成只读 `selectedIds`，include flags 也只读；sourceKind candidate mode 必须传 `sourceKind + limit`，且只返回 `candidateIds`。`preview_delete_plan` 对齐 CLI `preview-plan`；stale plan 会返回 `stale=true`，不产生当前 `deletePreview`。所有破坏性操作需要先单独 preview，再传 `confirm: true`；不确认时，delete 和 cleanup 工具只返回预览。
 
 ## CLI 命令
 
@@ -199,15 +199,19 @@ codex-sessions verify <session-id...> [--json]
 
 如果想对 `audit-root` 选出的候选做批量删除预览，用 `preview-root`。它复用同一套 `status/source` 筛选和保守默认 `--limit 50`，汇总展示只读预览会碰到哪些位置：rollout 文件、shell snapshots、`session_index`、`history`、SQLite、已知 global-state 引用、P11 exact-key global-state 引用、未知 global-state 引用和 `thread_spawn_edges`。它只读，不删除，不改写 JSONL、SQLite、shell snapshot 或 global-state，不接受 `--yes`，也不会自动递归加入 parent、child 或 family session。`preview-root` 的结果不等于“这些都该删”，也不会建议删除任何 session；它只说明如果之后你明确运行 delete，会碰到什么。真正删除应先跑单独的明确 ID `delete` 预览供检查，再单独运行显式确认的 `delete ... --yes`。
 
-如果已经有明确 session ID，并且想在任何删除预览或写操作前先做更安全的关系感知计划，用 `plan-delete`。它只读，JSON 里会标明 `readOnly: true` 和 `executionSupported: false`，本版本也没有 MCP tool。默认只选择 seed IDs。相关 parent、child、subagent、descendant、family member，以及 `/side`/`/fork` 这类 ambiguous session，会出现在 `availableIncludes` 或 warning 里。`--include-children`、`--include-subagents`、`--include-descendants` 和 `--include-family` 只改变 `selectedIds`，不会执行删除；其中 `--include-family` 风险最高，会给出强提醒。exact-key global-state 只显示 path、rule、shape 和 byteEstimate 元数据；unknown global-state 仍然只是 warning-only。
+如果已经有明确 session ID，并且想在任何删除预览或写操作前先做更安全的关系感知计划，用 `plan-delete`。它只读，JSON 里会标明 `readOnly: true` 和 `executionSupported: false`，也可通过只读 MCP `plan_delete_sessions` 调用。默认只选择 seed IDs。相关 parent、child、subagent、descendant、family member，以及 `/side`/`/fork` 这类 ambiguous session，会出现在 `availableIncludes` 或 warning 里。`--include-children`、`--include-subagents`、`--include-descendants` 和 `--include-family` 只改变 `selectedIds`，不会执行删除；其中 `--include-family` 风险最高，会给出强提醒。exact-key global-state 只显示 path、rule、shape 和 byteEstimate 元数据；unknown global-state 仍然只是 warning-only。
 
 T7-P3 新增一个保守的 root-level source 候选形式：`plan-delete --source-kind subagent --limit 20 [--status archived] [--json]`。`--source-kind` 可重复，OR 语义；`--status` 也可重复，OR 语义。`--limit` 必填，最大 50。root-level `sourceKind=unknown` 会被拒绝；unknown 会话必须用 explicit session ID 人工复核。这个模式只写 `candidateIds`，绝不写 `selectedIds`，active/current 命中会留在 `rejectedIds`。它只是候选列表：`sourceKind` 是筛选维度，不是删除授权。`mcp` 只表示 thread source，不代表每次 MCP tool call；`vscode` 是 Codex 原始标签，不等同 VS Code IDE；`exec` 不代表执行日志可安全批量删除。本版本故意不支持 sourceKind candidate plan 的 `--write-plan`。
+
+MCP `plan_delete_sessions` 支持同样的 sourceKind candidate 语义：传 `sourceKind`、必填 `limit` 和可选 `status`；`selectedIds` 保持为空，命中只进入 `candidateIds`；root-level `unknown` 拒绝，active/current 命中进入 `rejectedIds`。MCP 不支持 `writePlan`，不会生成 preview token，也不能执行删除。
 
 `plan-delete --write-plan FILE` 会写出稳定的 `codex-sessions-delete-plan.v1` JSON 审计文件。文件包含 `scanTimestamp`、`planHash`、root fingerprint、selected surface counts、family edges 和 exact-key global-state paths。它不能包含 transcript 正文、prompt text 或完整 global-state values；exact-key global-state 条目只限 path/rule/shape/byteEstimate 元数据。plan file 只是审计材料，不是授权、不是 preview token、不是删除确认，也不能传给任何删除执行命令。
 
 `preview-plan <plan-file>` 会只读重扫 root，并把 plan 和当前状态做比较。它检查 root realpath、`session_index`、`history`、`.codex-global-state.json`、state/log SQLite 的 mtime/size/parseability、selected surface counts、family edges 和 exact-key paths。只要有差异，就返回 `stale=true`，并且不产生当前 delete preview，避免把旧 plan 当成当前预览。`preview-plan` 不接受 `--yes`、`--trash`、`--force` 或任何删除执行模式。
 
-0.4.0 还没有实现 delete-by-plan、MCP plan tools、preview token、`--force`、sourceKind-based delete execution，或高级 family/sourceKind 删除编排。真正删除仍然必须回到单独的明确 ID delete preview，并在人工确认后显式执行。
+MCP `preview_delete_plan` 接收 `planFile` 或 inline `plan` object，并复用同一套 stale detection。它只读，不接受 `confirm`、`trash`、`yes` 或 `force`；当 `stale=true` 时不会返回当前 `deletePreview`。
+
+当前仍未实现 delete-by-plan、preview token、`--force`、sourceKind-based delete execution，或高级 family/sourceKind 删除编排。真正删除仍然必须回到单独的明确 ID delete preview，并在人工确认后显式执行。
 
 ### P11 exact-key global-state 清理
 

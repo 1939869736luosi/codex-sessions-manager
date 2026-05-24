@@ -35,7 +35,7 @@ These operations are intended to inspect or report information without modifying
 | `doctor` | `inspect_root` | Diagnose root structure and compatibility |
 | `verify` | `verify_sessions` | Report remaining files, indexes, SQLite rows, and warnings |
 | `trash-list` | `list_trash` | List trash entries |
-| `plan-delete` / `preview-plan` | — | Build and re-preview read-only explicit-ID delete plan audit files; sourceKind candidate mode lists `candidateIds` only; no MCP tool |
+| `plan-delete` / `preview-plan` | `plan_delete_sessions` / `preview_delete_plan` | Build and re-preview read-only explicit-ID delete plans; sourceKind candidate mode lists `candidateIds` only; MCP never writes plan files and never executes delete-by-plan |
 
 `doctor` and `inspect_root` are read-only diagnostics. They are intended to detect Codex storage changes, missing files, SQLite table availability, trash state, and global-state warnings.
 
@@ -67,6 +67,10 @@ Permanent delete remains the default delete mode for compatibility. However, `de
 `plan-delete --write-plan FILE` may write a stable `codex-sessions-delete-plan.v1` audit file. That file is not authorization, not a preview token, not a delete confirmation, and not accepted by any delete execution command. It must contain only metadata: selected IDs, included/rejected IDs, available includes, warnings, broken relations, missing surfaces, surface counts, root fingerprint, plan hash, scan timestamp, and exact-key global-state path/rule/shape/byteEstimate. It must not contain transcript bodies, prompt text, or full global-state values.
 
 `preview-plan <plan-file>` is read-only. It rescans the root, compares root realpath, `session_index`, `history`, global-state, state SQLite, logs SQLite mtime/size/parseability, selected surface counts, family edges, and exact-key paths. If any comparison differs, it returns `stale=true` and refuses to produce a current delete preview from the old plan.
+
+MCP `plan_delete_sessions` is the read-only MCP equivalent for plan generation. Explicit `sessionIds` reuse the same include flag semantics as CLI `plan-delete`. SourceKind candidate mode requires `sourceKind` plus `limit`, rejects root-level `unknown`, returns `candidateIds` only, keeps `selectedIds` empty, and rejects active/current matches into `rejectedIds`. It does not support `writePlan`, does not create preview tokens, and does not execute deletion.
+
+MCP `preview_delete_plan` accepts either `planFile` or an inline plan object and reuses the same stale detection as CLI `preview-plan`. It does not accept `confirm`, `trash`, `yes`, `force`, or any write option. When `stale=true`, `deletePreview` is null and the old plan must not be treated as the current preview.
 
 For routine cleanup, prefer recoverable trash deletion:
 
@@ -210,3 +214,6 @@ This project does not provide:
 - automatic trash purge
 - force overwrite restore
 - automatic editing of unknown global-state keys
+- delete-by-plan execution
+- preview tokens
+- sourceKind-based delete execution

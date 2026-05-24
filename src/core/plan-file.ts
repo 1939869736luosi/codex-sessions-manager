@@ -173,7 +173,11 @@ function compareSnapshot(planned: DeletePlanSelectedSnapshot, current: DeletePla
 }
 
 export async function readDeletePlanFile(planPath: string): Promise<DeletePlanFile> {
-  const plan = JSON.parse(await readFile(planPath, "utf8")) as DeletePlanFile;
+  return parseDeletePlanObject(JSON.parse(await readFile(planPath, "utf8")));
+}
+
+export function parseDeletePlanObject(value: unknown): DeletePlanFile {
+  const plan = value as DeletePlanFile;
   if (plan.schemaVersion !== PLAN_SCHEMA_VERSION) {
     throw new Error(`不支持的 plan schema：${String(plan.schemaVersion)}`);
   }

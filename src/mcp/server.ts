@@ -20,6 +20,8 @@ import {
   validateDeletion,
 } from "../core/delete.js";
 import { buildSessionFamilyQuery, FAMILY_MODES } from "../core/family.js";
+import { parseDeletePlanObject, previewDeletePlan, readDeletePlanFile } from "../core/plan-file.js";
+import { buildPlanDelete } from "../core/plan-delete.js";
 import { groupSessionsByProject, listProjectSummaries } from "../core/project.js";
 import { filterSessions, resolveSessions } from "../core/query.js";
 import { scanCodexRoot } from "../core/scan.js";
@@ -33,16 +35,38 @@ import {
   summarizeTrashDuplicateSessions,
   trashEntryMatches,
 } from "../core/trash.js";
+import type { SessionKind, SourceKind } from "../core/types.js";
 
 const TOOL_OUTPUT_SCHEMA = z.object({}).passthrough();
 const stringOrStringArraySchema = z.union([z.string(), z.array(z.string())]);
 const sourceKindSchema = z.union([z.enum(SOURCE_KINDS), z.array(z.enum(SOURCE_KINDS))]);
+const planDeleteStatusSchema = z.union([
+  z.enum(["active", "archived", "db-only", "stale"]),
+  z.array(z.enum(["active", "archived", "db-only", "stale"])),
+]);
 
 function textResult(text: string, structuredContent?: Record<string, unknown> | undefined) {
   return {
     content: [{ type: "text" as const, text }],
     structuredContent,
   };
+}
+
+function normalizeArray<T>(value: T | T[] | undefined): T[] {
+  if (value === undefined) {
+    return [];
+  }
+  return Array.isArray(value) ? value : [value];
+}
+
+function normalizePlanDeleteLimit(limit: number | undefined): number {
+  if (limit === undefined) {
+    throw new Error("plan_delete_sessions sourceKind candidate mode requires explicit limit, maximum 50.");
+  }
+  if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
+    throw new Error("plan_delete_sessions sourceKind candidate mode limit must be an integer from 1 to 50.");
+  }
+  return limit;
 }
 
 export function createServer(): McpServer {
@@ -383,6 +407,117 @@ export function createServer(): McpServer {
       const sessions = resolveSessions(scan, sessionIds);
       const preview = buildDeletePreview(scan, sessions);
       return textResult(`Prepared delete preview for ${sessions.length} sessions.`, { preview, warnings: scan.warnings });
+    },
+  );
+
+  server.registerTool(
+    "plan_delete_sessions",
+    {
+      description:
+        "Read-only delete planning only. For explicit sessionIds it returns the same relationship-aware plan as CLI plan-delete, including optional includeChildren/includeSubagents/includeDescendants/includeFamily flags. For sourceKind + limit candidate mode it returns candidateIds only and keeps selectedIds empty. This is not deletion authorization, has executionSupported=false, creates no preview token, writes no plan file, and cannot execute delete-by-plan.",
+      outputSchema: TOOL_OUTPUT_SCHEMA,
+      inputSchema: z.object({
+        root: z.string().optional().describe("Optional explicit path to the .codex root."),
+        sessionIds: z.array(z.string()).min(1).optional().describe("Explicit session ids or unique prefixes. Required unless using sourceKind candidate mode."),
+        includeChildren: z.boolean().optional().describe("Read-only include flag matching CLI --include-children."),
+        includeSubagents: z.boolean().optional().describe("Read-only include flag matching CLI --include-subagents."),
+        includeDescendants: z.boolean().optional().describe("Read-only include flag matching CLI --include-descendants."),
+        includeFamily: z.boolean().optional().describe("High-risk read-only include flag matching CLI --include-family."),
+        sourceKind: sourceKindSchema.optional().describe("Root-level candidate mode. Requires limit, rejects unknown, and returns candidateIds only."),
+        status: planDeleteStatusSchema.optional().describe("Optional candidate statuses for sourceKind mode. Omit for all non-unknown statuses."),
+        limit: z.number().int().positive().max(50).optional().describe("Required in sourceKind candidate mode; maximum 50."),
+      }).strict(),
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({
+      root,
+      sessionIds,
+      includeChildren,
+      includeSubagents,
+      includeDescendants,
+      includeFamily,
+      sourceKind,
+      status,
+      limit,
+    }) => {
+      const sourceKinds = normalizeArray(sourceKind) as SourceKind[];
+      const statuses = normalizeArray(status) as SessionKind[];
+      if (sourceKinds.length > 0) {
+        if (sessionIds && sessionIds.length > 0) {
+          throw new Error("plan_delete_sessions sourceKind candidate mode cannot be combined with explicit sessionIds.");
+        }
+        if (includeChildren || includeSubagents || includeDescendants || includeFamily) {
+          throw new Error("plan_delete_sessions sourceKind candidate mode does not support include flags.");
+        }
+        if (sourceKinds.includes("unknown")) {
+          throw new Error("unknown sourceKind must be reviewed by explicit session ID；不支持 root-level unknown candidate plan。");
+        }
+        const scan = await scanCodexRoot(root);
+        const plan = buildPlanDelete(scan, [], {
+          candidateSource: {
+            sourceKinds,
+            statuses,
+            limit: normalizePlanDeleteLimit(limit),
+          },
+        });
+        return textResult(
+          `Prepared read-only sourceKind candidate plan with ${plan.candidateIds?.length ?? 0} candidates. No selectedIds were produced and no deletion can be executed from this plan.`,
+          { readOnly: true, executionSupported: false, plan, warnings: scan.warnings },
+        );
+      }
+
+      if (!sessionIds || sessionIds.length === 0) {
+        throw new Error("plan_delete_sessions requires explicit sessionIds unless sourceKind candidate mode is used.");
+      }
+      if (statuses.length > 0 || limit !== undefined) {
+        throw new Error("plan_delete_sessions explicit-ID mode does not support status or limit filters.");
+      }
+      const scan = await scanCodexRoot(root);
+      const plan = buildPlanDelete(scan, sessionIds, {
+        includeChildren,
+        includeSubagents,
+        includeDescendants,
+        includeFamily,
+      });
+      return textResult(
+        `Prepared read-only delete plan for ${plan.seedSessionIds.length} explicit sessions. No deletion can be executed from this plan.`,
+        { readOnly: true, executionSupported: false, plan, warnings: scan.warnings },
+      );
+    },
+  );
+
+  server.registerTool(
+    "preview_delete_plan",
+    {
+      description:
+        "Read-only preview of a codex-sessions-delete-plan.v1 audit plan file or inline plan object. It reuses CLI preview-plan stale detection. If stale=true, deletePreview is null and the old plan must not be treated as a current preview. It accepts no confirm/trash/yes/force options, creates no preview token, and cannot execute delete-by-plan.",
+      outputSchema: TOOL_OUTPUT_SCHEMA,
+      inputSchema: z.object({
+        root: z.string().optional().describe("Optional explicit path to the .codex root."),
+        planFile: z.string().optional().describe("Path to a codex-sessions-delete-plan.v1 file."),
+        plan: z.object({}).passthrough().optional().describe("Inline codex-sessions-delete-plan.v1 object, including planHash."),
+      }).strict(),
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({ root, planFile, plan }) => {
+      if ((planFile ? 1 : 0) + (plan ? 1 : 0) !== 1) {
+        throw new Error("preview_delete_plan requires exactly one of planFile or plan.");
+      }
+      const scan = await scanCodexRoot(root);
+      const deletePlan = planFile ? await readDeletePlanFile(planFile) : parseDeletePlanObject(plan);
+      const preview = await previewDeletePlan(scan, deletePlan);
+      return textResult(
+        preview.stale
+          ? "Plan is stale; no current delete preview was produced."
+          : "Prepared read-only preview for a current delete plan. No deletion was executed.",
+        { readOnly: true, executionSupported: false, preview },
+      );
     },
   );
 

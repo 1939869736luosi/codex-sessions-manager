@@ -81,13 +81,15 @@ Preview must not print prompt text, full object values, or the full global-state
 
 The current CLI and MCP do not issue a preview token or cryptographically bind one preview command to a later confirmed command. The confirmed command rescans the selected root and refuses if `.codex-global-state.json` changes again inside that confirmed command before its write, cannot be parsed, or cannot be protected by rollback.
 
-`audit-root`, `preview-root`, `plan-delete`, and `preview-plan` must remain read-only. Their results are not deletion recommendations. They must not become a shortcut for deleting unknown global-state refs.
+`audit-root`, `preview-root`, `plan-delete`, `preview-plan`, MCP `plan_delete_sessions`, and MCP `preview_delete_plan` must remain read-only. Their results are not deletion recommendations. They must not become a shortcut for deleting unknown global-state refs.
 
 `plan-delete --source-kind ... --limit ...` is only a candidate listing surface. It reports `candidateIds`, never `selectedIds`, and root-level `sourceKind=unknown` must be rejected so unknown-source sessions are reviewed by explicit session ID. A sourceKind candidate result must not inherit `audit-root` or `preview-root` candidates as deletion suggestions, and it must not be used to decide that unknown global-state refs are safe.
 
+MCP `plan_delete_sessions` follows the same sourceKind candidate boundary: `sourceKind + limit` produces `candidateIds` only, keeps `selectedIds` empty, rejects root-level `unknown`, and rejects active/current matches into `rejectedIds`. It must not support `writePlan`, preview tokens, or delete execution.
+
 `plan-delete` may show exact-key global-state metadata for selected explicit session IDs, and `plan-delete --write-plan` may persist it in a plan file, but both surfaces must show only path, rule id, value shape, and byte estimate. They must not print prompt text or full object values, and they must keep unknown global-state refs as warnings only.
 
-Plan files are audit materials only. They are not authorization, preview tokens, or delete confirmations. `preview-plan` must re-scan the root and mark the plan stale if root identity, surface mtime/size/parseability, selected surface counts, family edges, or exact-key paths differ.
+Plan files are audit materials only. They are not authorization, preview tokens, or delete confirmations. `preview-plan` and MCP `preview_delete_plan` must re-scan the root and mark the plan stale if root identity, surface mtime/size/parseability, selected surface counts, family edges, or exact-key paths differ. When stale, they must not expose a current delete preview.
 
 ## Write Refusal Rules
 
