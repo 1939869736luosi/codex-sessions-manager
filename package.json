@@ -1,6 +1,6 @@
 {
   "name": "codex-sessions-manager",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Audit and clean local Codex session leftovers: list, export, delete, trash, restore, verify, and cleanup — via CLI or MCP server.",
   "type": "module",
   "bin": {

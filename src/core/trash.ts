@@ -16,6 +16,7 @@ import {
   sumSqliteDeletionCounts,
 } from "./sqlite.js";
 import { DeleteSessionsError } from "./types.js";
+import { TOOL_VERSION } from "../version.js";
 import type {
   GlobalStateReference,
   HistoryRecord,
@@ -30,7 +31,6 @@ import type {
   TrashRestoreResult,
 } from "./types.js";
 
-const TOOL_VERSION = "0.4.0";
 const TRASH_DIR_NAME = ".codex-sessions-trash";
 
 function getTrashDir(rootPath: string): string {

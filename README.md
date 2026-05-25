@@ -30,6 +30,7 @@ npm install -g codex-sessions-manager
 
 # Check the installed package version
 codex-sessions --version
+codex-sessions-mcp --version
 
 # List recent sessions
 codex-sessions list --limit 10

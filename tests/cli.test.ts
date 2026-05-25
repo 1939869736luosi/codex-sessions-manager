@@ -889,7 +889,7 @@ describe("cli", () => {
     expect(packageLock.version).toBe(packageJson.version);
     expect(packageLock.packages[""].version).toBe(packageJson.version);
     expect(versionSource).toContain(`export const TOOL_VERSION = "${packageJson.version}"`);
-    expect(trashSource).toContain(`const TOOL_VERSION = "${packageJson.version}"`);
+    expect(trashSource).toContain("import { TOOL_VERSION } from \"../version.js\";");
     expect(mcpServerSource).toContain("version: TOOL_VERSION");
     expect(unknownRules).not.toContain("/Users/");
     expect(unknownRules).not.toContain("2026-");

@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
 ### Added
 
 - Added Codex `goals_N.sqlite` detection, doctor reporting, and `thread_goals` counting alongside `state_N.sqlite` and `logs_N.sqlite`.
+- Included `goals_N.sqlite.thread_goals` in read-only session audit, root audit, explicit delete preview, root preview, verify, backup export, recoverable trash restore conflict handling, and delete-plan root fingerprint / stale detection.
 - Added `codex-sessions --version` and `codex-sessions-mcp --version` for package-version verification without scanning a Codex root or starting the MCP stdio server.
 - Added read-only `plan-delete --source-kind ... --limit ...` candidate plans that list `candidateIds` without turning them into delete-selected IDs.
 - Added read-only MCP `plan_delete_sessions` for explicit-ID delete plans and sourceKind candidate plans.
@@ -19,7 +20,7 @@
 - SourceKind candidate plans require an explicit limit capped at 50, reject root-level `sourceKind=unknown`, reject active/current candidates into `rejectedIds`, and intentionally do not support `--write-plan` or any delete execution path.
 - MCP plan tools are read-only, return `executionSupported=false`, create no preview token, do not implement `delete_sessions_by_plan`, and do not support sourceKind delete execution.
 - `preview_delete_plan` returns no current `deletePreview` when `stale=true` and accepts no `confirm`, `trash`, `yes`, or `force` write semantics.
-- Clarified that delete-by-plan, preview tokens, sourceKind delete execution, side/fork-specific include flags, and release/cleanup automation are intentionally unsupported design boundaries, not pending bugs.
+- This release does not include delete-by-plan, preview tokens, sourceKind delete execution, side/fork automatic deletion, side/fork-specific include flags, or release/cleanup automation. These remain intentionally unsupported design boundaries, not pending bugs.
 
 ## 0.4.0
 
