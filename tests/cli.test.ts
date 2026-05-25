@@ -31,6 +31,17 @@ describe("cli", () => {
     await fixture.cleanup();
   });
 
+  it("prints the package version without scanning the Codex root", async () => {
+    const packageJson = JSON.parse(await readFile("package.json", "utf8")) as { version: string };
+    const capture = createIo();
+
+    const exitCode = await runCli(["--version", "--root", path.join(fixture.rootDir, "missing-root")], capture.io);
+
+    expect(exitCode).toBe(0);
+    expect(capture.stdout).toEqual([packageJson.version]);
+    expect(capture.stderr).toEqual([]);
+  });
+
   it("lists sessions in human-readable mode", async () => {
     const capture = createIo();
     const exitCode = await runCli(["list", "--root", fixture.rootDir], capture.io);
@@ -410,6 +421,7 @@ describe("cli", () => {
   it("documents plan-delete plan-file support without execution options", () => {
     const help = getHelpText();
 
+    expect(help).toContain("codex-sessions --version");
     expect(help).toContain("codex-sessions plan-delete <session-id...> [--root PATH] [--json] [--write-plan FILE]");
     expect(help).toContain("codex-sessions preview-plan <plan-file> [--root PATH] [--json]");
     expect(help).toContain("--include-children");
@@ -869,14 +881,16 @@ describe("cli", () => {
     };
     const trashSource = await readFile("src/core/trash.ts", "utf8");
     const mcpServerSource = await readFile("src/mcp/server.ts", "utf8");
+    const versionSource = await readFile("src/version.ts", "utf8");
     const unknownRules = await readFile("docs/UNKNOWN_GLOBAL_STATE_RULES.md", "utf8");
 
     expect(packageJson.files).toContain("docs/UNKNOWN_GLOBAL_STATE_RULES.md");
     expect(packageJson).toHaveProperty("scripts.build", expect.stringContaining("chmod +x dist/cli/index.js dist/mcp/server.js"));
     expect(packageLock.version).toBe(packageJson.version);
     expect(packageLock.packages[""].version).toBe(packageJson.version);
+    expect(versionSource).toContain(`export const TOOL_VERSION = "${packageJson.version}"`);
     expect(trashSource).toContain(`const TOOL_VERSION = "${packageJson.version}"`);
-    expect(mcpServerSource).toContain(`version: "${packageJson.version}"`);
+    expect(mcpServerSource).toContain("version: TOOL_VERSION");
     expect(unknownRules).not.toContain("/Users/");
     expect(unknownRules).not.toContain("2026-");
     expect(unknownRules).toContain("do not issue a preview token");

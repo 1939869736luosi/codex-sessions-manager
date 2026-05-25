@@ -38,6 +38,8 @@ codex-sessions
 codex-sessions-mcp
 ```
 
+Check the installed version with `codex-sessions --version`. The MCP bin also supports `codex-sessions-mcp --version` for packaging or install verification without starting the stdio server.
+
 For local development, build the repository first:
 
 ```bash

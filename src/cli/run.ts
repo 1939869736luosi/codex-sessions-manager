@@ -57,6 +57,7 @@ import {
   formatTrashRestoreResult,
   formatVerifyResult,
 } from "./format.js";
+import { TOOL_VERSION } from "../version.js";
 
 type CommandName =
   | "scan"
@@ -96,6 +97,7 @@ export function getHelpText(): string {
   return `codex-sessions
 
 Usage:
+  codex-sessions --version
   codex-sessions list [--root PATH] [--json] [--query TEXT] [--status KIND] [--limit N]
                      [--project TEXT] [--group-by project]
                      [--updated-after DATE] [--updated-before DATE]
@@ -234,9 +236,15 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
       "updated-before": { type: "string" },
       "created-after": { type: "string" },
       "created-before": { type: "string" },
+      version: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
   });
+
+  if (values.version) {
+    io.stdout(TOOL_VERSION);
+    return 0;
+  }
 
   if (values.help || positionals.length === 0) {
     io.stdout(getHelpText());

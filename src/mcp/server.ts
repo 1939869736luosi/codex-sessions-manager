@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
+import { realpathSync } from "node:fs";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -36,6 +37,7 @@ import {
   trashEntryMatches,
 } from "../core/trash.js";
 import type { SessionKind, SourceKind } from "../core/types.js";
+import { TOOL_VERSION } from "../version.js";
 
 const TOOL_OUTPUT_SCHEMA = z.object({}).passthrough();
 const stringOrStringArraySchema = z.union([z.string(), z.array(z.string())]);
@@ -73,7 +75,7 @@ export function createServer(): McpServer {
   const server = new McpServer(
     {
       name: "codex-sessions",
-      version: "0.4.0",
+      version: TOOL_VERSION,
     },
     {
       capabilities: { logging: {} },
@@ -755,9 +757,26 @@ export async function startServer(): Promise<void> {
   console.error("codex-sessions MCP server running on stdio");
 }
 
-const isEntrypoint = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+export function getMcpVersionText(): string {
+  return TOOL_VERSION;
+}
+
+export function isMcpEntrypoint(entryPath: string | undefined, moduleUrl: string): boolean {
+  if (!entryPath) {
+    return false;
+  }
+
+  return realpathSync(entryPath) === realpathSync(fileURLToPath(moduleUrl));
+}
+
+const isEntrypoint = isMcpEntrypoint(process.argv[1], import.meta.url);
 
 if (isEntrypoint) {
+  if (process.argv.includes("--version")) {
+    console.log(getMcpVersionText());
+    process.exit(0);
+  }
+
   startServer().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);

@@ -28,6 +28,9 @@
 # 全局安装
 npm install -g codex-sessions-manager
 
+# 查看已安装包版本
+codex-sessions --version
+
 # 列出最近的会话
 codex-sessions list --limit 10
 

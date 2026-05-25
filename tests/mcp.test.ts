@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import Database from "better-sqlite3";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
-import { createServer } from "../src/mcp/server.js";
+import { createServer, getMcpVersionText, isMcpEntrypoint } from "../src/mcp/server.js";
 import { validateDeletion } from "../src/core/delete.js";
 import { buildDeletePlanFile, writeDeletePlanFile } from "../src/core/plan-file.js";
 import { buildPlanDelete } from "../src/core/plan-delete.js";
@@ -35,6 +37,27 @@ describe("mcp server", () => {
   it("creates the codex-sessions MCP server instance", () => {
     const server = createServer();
     expect(server).toBeDefined();
+  });
+
+  it("prints the package version for the MCP bin version flag", async () => {
+    const packageJson = JSON.parse(await readFile("package.json", "utf8")) as { version: string };
+
+    expect(getMcpVersionText()).toBe(packageJson.version);
+  });
+
+  it("recognizes symlinked MCP bin paths as the entrypoint", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-mcp-entrypoint-"));
+    const targetPath = path.join(tempDir, "server.js");
+    const symlinkPath = path.join(tempDir, "codex-sessions-mcp");
+
+    try {
+      await writeFile(targetPath, "", "utf8");
+      await symlink(targetPath, symlinkPath);
+
+      expect(isMcpEntrypoint(symlinkPath, pathToFileURL(targetPath).href)).toBe(true);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("lists sessions by project and updated range", async () => {

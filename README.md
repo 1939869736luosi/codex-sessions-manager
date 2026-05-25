@@ -28,6 +28,9 @@ Codex Desktop's built-in delete is the right first stop for ordinary archived-ch
 # Install globally
 npm install -g codex-sessions-manager
 
+# Check the installed package version
+codex-sessions --version
+
 # List recent sessions
 codex-sessions list --limit 10
 

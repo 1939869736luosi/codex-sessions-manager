@@ -5,6 +5,7 @@
 ### Added
 
 - Added Codex `goals_N.sqlite` detection, doctor reporting, and `thread_goals` counting alongside `state_N.sqlite` and `logs_N.sqlite`.
+- Added `codex-sessions --version` and `codex-sessions-mcp --version` for package-version verification without scanning a Codex root or starting the MCP stdio server.
 - Added read-only `plan-delete --source-kind ... --limit ...` candidate plans that list `candidateIds` without turning them into delete-selected IDs.
 - Added read-only MCP `plan_delete_sessions` for explicit-ID delete plans and sourceKind candidate plans.
 - Added read-only MCP `preview_delete_plan` for plan files or inline plan objects, reusing CLI `preview-plan` stale detection.
