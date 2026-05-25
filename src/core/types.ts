@@ -1,5 +1,37 @@
 export type SessionKind = "active" | "archived" | "db-only" | "stale";
 export type SourceKind = "subagent" | "mcp" | "vscode" | "cli" | "exec" | "unknown";
+export type OfficialCodexSourceKind =
+  | "cli"
+  | "vscode"
+  | "exec"
+  | "appServer"
+  | "subAgent"
+  | "subAgentReview"
+  | "subAgentCompact"
+  | "subAgentThreadSpawn"
+  | "subAgentOther"
+  | "unknown";
+export type ThreadSourceKind = "user" | "subagent" | "memory_consolidation";
+export type SourceEvidenceField = "source" | "thread_source" | "agent_role" | "agent_nickname" | "agent_path" | "source_json";
+export type SourceInferenceConfidence = "exact" | "derived" | "unknown";
+
+export interface SourceEvidence {
+  field: SourceEvidenceField;
+  value: string;
+  coarseSourceKind: SourceKind;
+  officialSourceKind: OfficialCodexSourceKind | null;
+  reason: string;
+}
+
+export interface SourceInfo {
+  sourceKind: SourceKind;
+  rawSource: string | null;
+  rawThreadSource: string | null;
+  officialSourceKind: OfficialCodexSourceKind | null;
+  threadSourceKind: ThreadSourceKind | null;
+  inferenceConfidence: SourceInferenceConfidence;
+  evidence: SourceEvidence[];
+}
 
 export interface CodexRootPaths {
   rootPath: string;
@@ -38,6 +70,7 @@ export interface ThreadRow {
   modelProvider: string | null;
   cwd: string | null;
   sourceKind: SourceKind;
+  sourceInfo: SourceInfo;
   source: string | null;
   threadSource: string | null;
   agentRole: string | null;
@@ -100,6 +133,7 @@ export interface SessionEntry {
   cwd: string | null;
   rolloutPath: string | null;
   sourceKind: SourceKind;
+  sourceInfo: SourceInfo;
   source: string | null;
   threadSource: string | null;
   agentRole: string | null;

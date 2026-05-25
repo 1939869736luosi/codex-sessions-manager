@@ -10,6 +10,7 @@
 - Added read-only `plan-delete --source-kind ... --limit ...` candidate plans that list `candidateIds` without turning them into delete-selected IDs.
 - Added read-only MCP `plan_delete_sessions` for explicit-ID delete plans and sourceKind candidate plans.
 - Added read-only MCP `preview_delete_plan` for plan files or inline plan objects, reusing CLI `preview-plan` stale detection.
+- Added a source metadata compatibility layer (`sourceInfo`) while preserving the stable coarse `sourceKind` API and delete safety semantics. Official Codex source-kind metadata is output-only and is not a new filter or delete authorization path.
 
 ### Changed
 

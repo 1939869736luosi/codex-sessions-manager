@@ -1,4 +1,13 @@
-import type { SessionEntry, SourceKind, SourceSummary, SourceSummaryRow } from "./types.js";
+import type {
+  OfficialCodexSourceKind,
+  SessionEntry,
+  SourceEvidence,
+  SourceInfo,
+  SourceKind,
+  SourceSummary,
+  SourceSummaryRow,
+  ThreadSourceKind,
+} from "./types.js";
 
 export const SOURCE_KINDS = ["subagent", "mcp", "vscode", "cli", "exec", "unknown"] as const satisfies readonly SourceKind[];
 
@@ -63,6 +72,50 @@ function normalizeKnownKind(value: string | null): SourceKind | null {
   return null;
 }
 
+function evidence(
+  field: SourceEvidence["field"],
+  value: string | null,
+  coarseSourceKind: SourceKind,
+  officialSourceKind: OfficialCodexSourceKind | null,
+  reason: string,
+): SourceEvidence | null {
+  const trimmed = value?.trim();
+  return trimmed ? { field, value: trimmed, coarseSourceKind, officialSourceKind, reason } : null;
+}
+
+function parseThreadSourceKind(value: string | null): ThreadSourceKind | null {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "user" || normalized === "subagent" || normalized === "memory_consolidation") {
+    return normalized;
+  }
+  return null;
+}
+
+function officialKindFromRawSource(value: string | null): OfficialCodexSourceKind | null {
+  const normalized = value?.trim();
+  if (!normalized) return null;
+  const lower = normalized.toLowerCase();
+  if (lower === "cli") return "cli";
+  if (lower === "vscode") return "vscode";
+  if (lower === "exec") return "exec";
+  if (lower === "mcp") return "appServer";
+  if (lower === "unknown") return "unknown";
+  return null;
+}
+
+function officialKindFromSourceJson(sourceObject: Record<string, unknown> | null): OfficialCodexSourceKind | null {
+  const subAgent = sourceObject?.sub_agent ?? sourceObject?.subagent;
+  if (!subAgent || typeof subAgent !== "object" || Array.isArray(subAgent)) {
+    return null;
+  }
+  const keys = Object.keys(subAgent as Record<string, unknown>).map((key) => key.toLowerCase());
+  if (keys.includes("review")) return "subAgentReview";
+  if (keys.includes("compact")) return "subAgentCompact";
+  if (keys.includes("thread_spawn")) return "subAgentThreadSpawn";
+  if (keys.length > 0) return "subAgentOther";
+  return "subAgent";
+}
+
 export function parseSourceKind(value: string): SourceKind {
   const normalized = value.trim().toLowerCase();
   if (SOURCE_KINDS.includes(normalized as SourceKind)) {
@@ -73,17 +126,69 @@ export function parseSourceKind(value: string): SourceKind {
 }
 
 export function deriveSourceKind(metadata: SourceMetadata): SourceKind {
-  const sourceObject = parseJsonObject(metadata.source);
+  return deriveSourceInfo(metadata).sourceKind;
+}
 
-  if (
-    hasSubagentSignal(sourceObject) ||
-    normalizeKnownKind(metadata.source) === "subagent" ||
-    Boolean(metadata.agentRole || metadata.agentNickname || metadata.agentPath)
-  ) {
-    return "subagent";
+export function deriveSourceInfo(metadata: SourceMetadata): SourceInfo {
+  const sourceObject = parseJsonObject(metadata.source);
+  const officialFromJson = officialKindFromSourceJson(sourceObject);
+  const officialFromRaw = officialKindFromRawSource(metadata.source);
+  const officialSourceKind = officialFromJson ?? officialFromRaw;
+  const threadSourceKind = parseThreadSourceKind(metadata.threadSource);
+  const knownSource = normalizeKnownKind(metadata.source);
+  const knownThreadSource = normalizeKnownKind(metadata.threadSource);
+  const evidenceItems: SourceEvidence[] = [];
+
+  if (officialFromJson || hasSubagentSignal(sourceObject)) {
+    evidenceItems.push({
+      field: "source_json",
+      value: metadata.source ?? "",
+      coarseSourceKind: "subagent",
+      officialSourceKind: officialFromJson ?? "subAgent",
+      reason: "source JSON contains official sub_agent evidence",
+    });
   }
 
-  return normalizeKnownKind(metadata.source) ?? normalizeKnownKind(metadata.threadSource) ?? "unknown";
+  if (knownSource) {
+    const item = evidence("source", metadata.source, knownSource, officialFromRaw, "raw source matches a stable sourceKind");
+    if (item) evidenceItems.push(item);
+  }
+
+  if (knownThreadSource) {
+    const item = evidence("thread_source", metadata.threadSource, knownThreadSource, null, "thread_source matches a local stable sourceKind");
+    if (item) evidenceItems.push(item);
+  } else if (threadSourceKind) {
+    const item = evidence(
+      "thread_source",
+      metadata.threadSource,
+      threadSourceKind === "subagent" ? "subagent" : "unknown",
+      null,
+      "thread_source is official analytics metadata, not the primary source field",
+    );
+    if (item) evidenceItems.push(item);
+  }
+
+  for (const [field, value] of [
+    ["agent_role", metadata.agentRole],
+    ["agent_nickname", metadata.agentNickname],
+    ["agent_path", metadata.agentPath],
+  ] as const) {
+    const item = evidence(field, value, "subagent", officialSourceKind, `${field} is present as subagent evidence`);
+    if (item) evidenceItems.push(item);
+  }
+
+  const hasSubagent = evidenceItems.some((item) => item.coarseSourceKind === "subagent");
+  const sourceKind = hasSubagent ? "subagent" : knownSource ?? knownThreadSource ?? "unknown";
+
+  return {
+    sourceKind,
+    rawSource: metadata.source,
+    rawThreadSource: metadata.threadSource,
+    officialSourceKind,
+    threadSourceKind,
+    inferenceConfidence: sourceKind === "unknown" ? "unknown" : officialSourceKind || knownSource ? "exact" : "derived",
+    evidence: evidenceItems,
+  };
 }
 
 function emptySourceKindCounts(): Record<SourceKind, number> {

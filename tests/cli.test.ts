@@ -667,6 +667,46 @@ describe("cli", () => {
     expect(output).toContain("subagent");
     expect(output).toContain("sub2api");
     expect(output).not.toContain(FIXTURE_IDS.ACTIVE_ID);
+
+    const json = createIo();
+    const jsonExitCode = await runCli(
+      [
+        "list",
+        "--root",
+        fixture.rootDir,
+        "--source-kind",
+        "subagent",
+        "--source",
+        "side",
+        "--thread-source",
+        "side",
+        "--agent-role",
+        "subagent",
+        "--agent-nickname",
+        "helper",
+        "--model-provider",
+        "sub2api",
+        "--model",
+        "gpt-5.4",
+        "--json",
+      ],
+      json.io,
+    );
+    const result = JSON.parse(json.stdout.join("\n")) as {
+      sessions: Array<{
+        sourceKind: string;
+        source: string | null;
+        threadSource: string | null;
+        sourceInfo?: { sourceKind: string; rawSource: string | null; rawThreadSource: string | null };
+      }>;
+    };
+
+    expect(jsonExitCode).toBe(0);
+    expect(result.sessions[0].sourceInfo).toMatchObject({
+      sourceKind: result.sessions[0].sourceKind,
+      rawSource: result.sessions[0].source,
+      rawThreadSource: result.sessions[0].threadSource,
+    });
   });
 
   it("summarizes session sources from the cli", async () => {

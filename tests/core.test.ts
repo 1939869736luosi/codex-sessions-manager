@@ -172,6 +172,106 @@ describe("core integration", () => {
     );
   });
 
+  it("derives sourceInfo without changing stable sourceKind", async () => {
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const active = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID])[0];
+    const archived = resolveSessions(scan, [FIXTURE_IDS.ARCHIVED_ID])[0];
+
+    expect(active.sourceKind).toBe("cli");
+    expect(active.sourceInfo).toMatchObject({
+      sourceKind: "cli",
+      rawSource: "cli",
+      rawThreadSource: "cli",
+      officialSourceKind: "cli",
+      threadSourceKind: null,
+      inferenceConfidence: "exact",
+    });
+    expect(active.sourceInfo.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ field: "source", value: "cli", coarseSourceKind: "cli", officialSourceKind: "cli" }),
+      ]),
+    );
+
+    expect(archived.sourceKind).toBe("subagent");
+    expect(archived.sourceInfo.sourceKind).toBe("subagent");
+    expect(archived.sourceInfo.evidence.some((item) => item.coarseSourceKind === "subagent")).toBe(true);
+  });
+
+  it("maps official subagent source variants as metadata without changing coarse sourceKind", async () => {
+    const db = new Database(fixture.paths.sqlite);
+    db.prepare("update threads set source = ?, thread_source = ?, agent_role = null, agent_nickname = null, agent_path = null where id = ?").run(
+      JSON.stringify({ sub_agent: { thread_spawn: { parent_thread_id: FIXTURE_IDS.ACTIVE_ID, depth: 1 } } }),
+      "subagent",
+      FIXTURE_IDS.ARCHIVED_ID,
+    );
+    db.close();
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const archived = resolveSessions(scan, [FIXTURE_IDS.ARCHIVED_ID])[0];
+
+    expect(archived.sourceKind).toBe("subagent");
+    expect(archived.sourceInfo).toMatchObject({
+      sourceKind: "subagent",
+      officialSourceKind: "subAgentThreadSpawn",
+      threadSourceKind: "subagent",
+    });
+  });
+
+  it.each([
+    ["review", "subAgentReview"],
+    ["compact", "subAgentCompact"],
+    ["other_kind", "subAgentOther"],
+  ] as const)("maps official subagent %s source metadata", async (subAgentKey, officialSourceKind) => {
+    const db = new Database(fixture.paths.sqlite);
+    db.prepare("update threads set source = ?, thread_source = null, agent_role = null, agent_nickname = null, agent_path = null where id = ?").run(
+      JSON.stringify({ sub_agent: { [subAgentKey]: { parent_thread_id: FIXTURE_IDS.ACTIVE_ID } } }),
+      FIXTURE_IDS.ARCHIVED_ID,
+    );
+    db.close();
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const archived = resolveSessions(scan, [FIXTURE_IDS.ARCHIVED_ID])[0];
+
+    expect(archived.sourceKind).toBe("subagent");
+    expect(archived.sourceInfo.officialSourceKind).toBe(officialSourceKind);
+  });
+
+  it("maps internal mcp source to official appServer metadata without changing coarse sourceKind", async () => {
+    const db = new Database(fixture.paths.sqlite);
+    db.prepare("update threads set source = ?, thread_source = null, agent_role = null, agent_nickname = null, agent_path = null where id = ?").run(
+      "mcp",
+      FIXTURE_IDS.ARCHIVED_ID,
+    );
+    db.close();
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const archived = resolveSessions(scan, [FIXTURE_IDS.ARCHIVED_ID])[0];
+
+    expect(archived.sourceKind).toBe("mcp");
+    expect(archived.sourceInfo).toMatchObject({
+      sourceKind: "mcp",
+      rawSource: "mcp",
+      officialSourceKind: "appServer",
+      threadSourceKind: null,
+    });
+  });
+
+  it("keeps unknown sourceInfo explicit for sessions without source evidence", async () => {
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const stale = resolveSessions(scan, [FIXTURE_IDS.STALE_ID])[0];
+
+    expect(stale.sourceKind).toBe("unknown");
+    expect(stale.sourceInfo).toMatchObject({
+      sourceKind: "unknown",
+      rawSource: null,
+      rawThreadSource: null,
+      officialSourceKind: null,
+      threadSourceKind: null,
+      inferenceConfidence: "unknown",
+      evidence: [],
+    });
+  });
+
   it("reports invalid date filters clearly", async () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     expect(() => filterSessions(scan, { updatedAfter: "not-a-date" })).toThrow("updatedAfter 不是有效日期");

@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 
-import { deriveSourceKind } from "./sources.js";
+import { deriveSourceInfo } from "./sources.js";
 import type { SqliteDeletionCounts, SqliteTableInspection, ThreadRow, ThreadSpawnEdgeRow } from "./types.js";
 
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -243,6 +243,7 @@ function mapThreadRow(row: Record<string, unknown>): ThreadRow {
   const agentRole = stringOrNull(row.agent_role);
   const agentNickname = stringOrNull(row.agent_nickname);
   const agentPath = stringOrNull(row.agent_path);
+  const sourceInfo = deriveSourceInfo({ source, threadSource, agentRole, agentNickname, agentPath });
 
   return {
     id: String(row.id ?? ""),
@@ -255,7 +256,8 @@ function mapThreadRow(row: Record<string, unknown>): ThreadRow {
     model: row.model ? String(row.model) : null,
     modelProvider: stringOrNull(row.model_provider),
     cwd: row.cwd ? String(row.cwd) : null,
-    sourceKind: deriveSourceKind({ source, threadSource, agentRole, agentNickname, agentPath }),
+    sourceKind: sourceInfo.sourceKind,
+    sourceInfo,
     source,
     threadSource,
     agentRole,

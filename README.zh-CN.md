@@ -253,6 +253,8 @@ MCP 规则相同：先调用 `preview_delete_sessions` 检查 exact path，再�
 
 可以给 family 视图加 `--source-kind subagent|mcp|vscode|cli|exec|unknown`，只看匹配成员。默认人类输出会保持紧凑，长文本可能缩短；需要完整原始字段时，用 `--full`、`family --json` 或 MCP `get_session_family`。真正删除仍然必须单独跑明确 ID 预览，并显式确认。
 
+T8-P2 增加 source metadata compatibility layer。稳定的 `sourceKind` 字段仍然保持粗粒度兼容分类（`subagent`、`mcp`、`vscode`、`cli`、`exec`、`unknown`）。JSON 输出还可能包含 `sourceInfo`，记录 raw `source`、raw `thread_source`、可可靠派生时的官方 Codex v2 source-kind metadata、thread-source analytics metadata 和简明 evidence。这只用于观测：不改变 filters、delete preview、plan-delete selection、MCP planning 或删除授权。尤其是内部 raw `mcp` 会报告为稳定 `sourceKind=mcp` 和官方 metadata `appServer`；它不是 individual MCP tool-call 的证明。
+
 ## 标题怎么看
 
 Codex 本地会话可能同时有多个标题：

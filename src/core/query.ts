@@ -1,4 +1,4 @@
-import { parseSourceKind } from "./sources.js";
+import { deriveSourceInfo, parseSourceKind } from "./sources.js";
 import type { ScanResult, SessionEntry, SessionKind, SourceKind } from "./types.js";
 import { matchesProject } from "./project.js";
 
@@ -259,6 +259,13 @@ export function resolveSessions(scan: ScanResult, sessionIds: string[]): Session
 
     if (residualExact || residualPrefixed.length === 1) {
       const id = residualExact ?? residualPrefixed[0];
+      const sourceInfo = deriveSourceInfo({
+        source: null,
+        threadSource: null,
+        agentRole: null,
+        agentNickname: null,
+        agentPath: null,
+      });
       return {
         id,
         displayTitle: id,
@@ -280,7 +287,8 @@ export function resolveSessions(scan: ScanResult, sessionIds: string[]): Session
         modelProvider: null,
         cwd: null,
         rolloutPath: null,
-        sourceKind: "unknown",
+        sourceKind: sourceInfo.sourceKind,
+        sourceInfo,
         source: null,
         threadSource: null,
         agentRole: null,

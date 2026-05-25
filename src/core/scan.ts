@@ -10,6 +10,7 @@ import {
 import { deriveProjectIdentity } from "./project.js";
 import { resolveCodexRoot } from "./root.js";
 import { scanShellSnapshots } from "./shell-snapshots.js";
+import { deriveSourceInfo } from "./sources.js";
 import { scanThreadSpawnEdges, scanThreads } from "./sqlite.js";
 import type {
   GlobalStateReference,
@@ -271,6 +272,13 @@ function buildSession(
     rolloutPath: thread?.rolloutPath ?? null,
     fileTargets,
   });
+  const sourceInfo = thread?.sourceInfo ?? deriveSourceInfo({
+    source: null,
+    threadSource: null,
+    agentRole: null,
+    agentNickname: null,
+    agentPath: null,
+  });
 
   return {
     id,
@@ -286,7 +294,8 @@ function buildSession(
     modelProvider: thread?.modelProvider ?? null,
     cwd: thread?.cwd ?? null,
     rolloutPath: thread?.rolloutPath ?? null,
-    sourceKind: thread?.sourceKind ?? "unknown",
+    sourceKind: sourceInfo.sourceKind,
+    sourceInfo,
     source: thread?.source ?? null,
     threadSource: thread?.threadSource ?? null,
     agentRole: thread?.agentRole ?? null,

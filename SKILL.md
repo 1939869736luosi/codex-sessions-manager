@@ -131,6 +131,8 @@ For time filters, pass `updatedAfter`, `updatedBefore`, `createdAfter`, or `crea
 
 For source-aware listing, pass `sourceKind`, `source`, `threadSource`, `agentRole`, `agentNickname`, `modelProvider`, or `model` to `list_sessions`. Use `summarize_sources` for a read-only count by `sourceKind`, raw `source`, `thread_source`, `model_provider`, `model`, and `agent_role`.
 
+T8-P2 adds a source metadata compatibility layer. The stable `sourceKind` field remains the coarse compatibility category (`subagent`, `mcp`, `vscode`, `cli`, `exec`, `unknown`). JSON output may also include `sourceInfo` with raw `source`, raw `thread_source`, official Codex v2 source-kind metadata when reliably derived, thread-source analytics metadata, and compact evidence. This is observability only: it does not change filters, delete previews, plan-delete selection, MCP planning, or delete authorization. In particular, internal raw `mcp` is reported as stable `sourceKind=mcp` and official metadata `appServer`; it is not proof of individual MCP tool calls.
+
 For family lookups, call `get_session_family` with optional `mode: full | children | parents | subagents | impact` and optional `sourceKind`. These modes are read-only. `impact` is a relationship risk view only; it is not deletion advice, not a delete preview, and must not execute or imply confirmation.
 
 For read-only delete planning through MCP, use `plan_delete_sessions` for explicit-ID plans or sourceKind candidate plans, and `preview_delete_plan` for plan-file / inline-plan stale checks. These tools are read-only, do not create preview tokens, and cannot execute delete-by-plan.

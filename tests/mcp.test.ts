@@ -82,6 +82,7 @@ describe("mcp server", () => {
         titleSource: string;
         titleMismatch: boolean;
         sourceKind: string;
+        sourceInfo?: { sourceKind: string };
         modelProvider: string;
       }>;
       const projects = result.structuredContent?.projectSummaries as Array<{ projectName: string; sessionCount: number }>;
@@ -93,6 +94,9 @@ describe("mcp server", () => {
         titleMismatch: true,
         sourceKind: "cli",
         modelProvider: "openai",
+      });
+      expect(sessions[0].sourceInfo).toMatchObject({
+        sourceKind: sessions[0].sourceKind,
       });
       expect(projects[0]).toMatchObject({ projectName: "demo", sessionCount: 1 });
     } finally {

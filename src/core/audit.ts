@@ -1,6 +1,7 @@
 import { buildDeletePreview } from "./delete.js";
 import { buildSessionFamily } from "./family.js";
 import { toExactKeyPreview } from "./global-state.js";
+import { deriveSourceInfo } from "./sources.js";
 import { collectSqliteDeletionTotals, collectSqliteSessionIds, sumSqliteDeletionCounts } from "./sqlite.js";
 import type {
   DeleteFamilyWarning,
@@ -82,6 +83,13 @@ function quoteShellArg(value: string): string {
 
 function emptySessionEntry(id: string): SessionEntry {
   const titleCandidates: SessionTitleCandidate[] = [{ source: "id", title: id }];
+  const sourceInfo = deriveSourceInfo({
+    source: null,
+    threadSource: null,
+    agentRole: null,
+    agentNickname: null,
+    agentPath: null,
+  });
 
   return {
     id,
@@ -104,7 +112,8 @@ function emptySessionEntry(id: string): SessionEntry {
     modelProvider: null,
     cwd: null,
     rolloutPath: null,
-    sourceKind: "unknown",
+    sourceKind: sourceInfo.sourceKind,
+    sourceInfo,
     source: null,
     threadSource: null,
     agentRole: null,
