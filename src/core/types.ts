@@ -9,6 +9,7 @@ export interface CodexRootPaths {
   historyPath: string | null;
   sqlitePath: string | null;
   logsSqlitePath: string | null;
+  goalsSqlitePath: string | null;
   globalStatePath: string | null;
   shellSnapshotsDir: string | null;
 }
@@ -165,6 +166,7 @@ export interface HistoryData {
 
 export interface SqliteScanData {
   sqlitePath: string | null;
+  goalsSqlitePath: string | null;
   threadsById: Map<string, ThreadRow>;
   threadSpawnEdges: ThreadSpawnEdgeRow[];
   warning: string | null;
@@ -724,6 +726,7 @@ export interface DeletePlanRootFingerprint {
   globalState: DeletePlanSurfaceFingerprint;
   sqlite: DeletePlanSurfaceFingerprint;
   logsSqlite: DeletePlanSurfaceFingerprint;
+  goalsSqlite: DeletePlanSurfaceFingerprint;
 }
 
 export interface DeletePlanSelectedSnapshot {
@@ -971,8 +974,11 @@ export interface DoctorReport {
     activeStatePath: string | null;
     logsCandidates: string[];
     activeLogsPath: string | null;
+    goalsCandidates: string[];
+    activeGoalsPath: string | null;
     stateTables: SqliteTableInspection[];
     logsTables: SqliteTableInspection[];
+    goalsTables: SqliteTableInspection[];
     warnings: string[];
   };
   globalState: {

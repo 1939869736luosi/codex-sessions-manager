@@ -95,6 +95,7 @@ export async function buildDeletePlanRootFingerprint(scan: ScanResult): Promise<
     }),
     sqlite: await fingerprintFile(scan.root.sqlitePath, parseSqlite, "path"),
     logsSqlite: await fingerprintFile(scan.root.logsSqlitePath, parseSqlite, "path"),
+    goalsSqlite: await fingerprintFile(scan.root.goalsSqlitePath, parseSqlite, "path"),
   };
 }
 
@@ -200,6 +201,7 @@ export async function previewDeletePlan(scan: ScanResult, plan: DeletePlanFile):
     ...compareFingerprint("global-state", plan.rootFingerprint.globalState, currentFingerprint.globalState),
     ...compareFingerprint("sqlite", plan.rootFingerprint.sqlite, currentFingerprint.sqlite),
     ...compareFingerprint("sqlite logs", plan.rootFingerprint.logsSqlite, currentFingerprint.logsSqlite),
+    ...compareFingerprint("sqlite goals", plan.rootFingerprint.goalsSqlite, currentFingerprint.goalsSqlite),
     ...compareSnapshot(plan.selectedSnapshot, buildSelectedSnapshot(scan, plan.selectedIds)),
   ];
   const stale = staleReasons.length > 0;

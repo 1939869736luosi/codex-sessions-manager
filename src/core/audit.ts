@@ -422,7 +422,7 @@ function collectRootCandidateIds(scan: ScanResult): {
   let sqliteIds: string[] = [];
 
   try {
-    sqliteIds = collectSqliteSessionIds(scan.root.sqlitePath, scan.root.logsSqlitePath);
+    sqliteIds = collectSqliteSessionIds(scan.root.sqlitePath, scan.root.logsSqlitePath, scan.root.goalsSqlitePath);
   } catch (error) {
     warnings.push(`读取 SQLite session 引用失败：${error instanceof Error ? error.message : String(error)}`);
   }
@@ -570,6 +570,7 @@ function aggregatePreviewCounts(
     scan.root.sqlitePath,
     sessions.map((session) => session.id),
     scan.root.logsSqlitePath,
+    scan.root.goalsSqlitePath,
   );
 
   return {

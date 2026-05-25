@@ -35,6 +35,6 @@ export async function exportSessionBackup(scan: ScanResult, session: SessionEntr
       ...(scan.globalState.exactKeyRefsById.get(session.id) ?? []),
     ],
     shellSnapshots,
-    sqlite: exportSqliteRecords(scan.root.sqlitePath, session.id, scan.root.logsSqlitePath),
+    sqlite: exportSqliteRecords(scan.root.sqlitePath, session.id, scan.root.logsSqlitePath, scan.root.goalsSqlitePath),
   };
 }

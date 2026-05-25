@@ -35,7 +35,7 @@ async function pathStatus(filePath: string): Promise<{ path: string; exists: boo
   }
 }
 
-async function listVersionedSqlite(rootPath: string, basename: "state" | "logs"): Promise<string[]> {
+async function listVersionedSqlite(rootPath: string, basename: "state" | "logs" | "goals"): Promise<string[]> {
   try {
     const entries = await readdir(rootPath);
     return entries
@@ -110,6 +110,7 @@ export async function inspectCodexRoot(rootArg?: string): Promise<DoctorReport> 
     trashBaseStatus,
     stateCandidates,
     logsCandidates,
+    goalsCandidates,
   ] = await Promise.all([
     pathStatus(sessionsDir),
     pathStatus(archivedSessionsDir),
@@ -120,6 +121,7 @@ export async function inspectCodexRoot(rootArg?: string): Promise<DoctorReport> 
     pathStatus(trashDir),
     listVersionedSqlite(rootPath, "state"),
     listVersionedSqlite(rootPath, "logs"),
+    listVersionedSqlite(rootPath, "goals"),
   ]);
 
   if (!sessionsStatus.readable) warnings.push("sessions/ 缺失或不可读。");
@@ -159,8 +161,10 @@ export async function inspectCodexRoot(rootArg?: string): Promise<DoctorReport> 
   const sqliteWarnings: string[] = [];
   const activeStatePath = stateCandidates[0] ?? null;
   const activeLogsPath = logsCandidates[0] ?? null;
+  const activeGoalsPath = goalsCandidates[0] ?? null;
   let stateTables: DoctorReport["sqlite"]["stateTables"] = [];
   let logsTables: DoctorReport["sqlite"]["logsTables"] = [];
+  let goalsTables: DoctorReport["sqlite"]["goalsTables"] = [];
 
   try {
     stateTables = inspectSqliteTables(activeStatePath);
@@ -174,6 +178,13 @@ export async function inspectCodexRoot(rootArg?: string): Promise<DoctorReport> 
   } catch (error) {
     sqliteWarnings.push(`logs SQLite 无法读取：${error instanceof Error ? error.message : String(error)}`);
     logsTables = inspectSqliteTables(null);
+  }
+
+  try {
+    goalsTables = inspectSqliteTables(activeGoalsPath);
+  } catch (error) {
+    sqliteWarnings.push(`goals SQLite 无法读取：${error instanceof Error ? error.message : String(error)}`);
+    goalsTables = inspectSqliteTables(null);
   }
 
   warnings.push(...sqliteWarnings);
@@ -213,8 +224,11 @@ export async function inspectCodexRoot(rootArg?: string): Promise<DoctorReport> 
       activeStatePath,
       logsCandidates,
       activeLogsPath,
+      goalsCandidates,
+      activeGoalsPath,
       stateTables,
       logsTables,
+      goalsTables,
       warnings: sqliteWarnings,
     },
     globalState: {

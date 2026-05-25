@@ -377,6 +377,7 @@ export async function scanCodexRoot(rootArg?: string): Promise<ScanResult> {
     history,
     sqlite: {
       sqlitePath: root.sqlitePath,
+      goalsSqlitePath: root.goalsSqlitePath,
       threadsById: threadsById as ScanResult["sqlite"]["threadsById"],
       threadSpawnEdges,
       warning: sqliteWarning,

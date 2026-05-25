@@ -489,7 +489,9 @@ async function appendJsonlRecords<T>(
 async function buildTrashBundle(scan: ScanResult, sessions: SessionEntry[], trashId: string): Promise<TrashBundle> {
   const preview = buildDeletePreview(scan, sessions);
   const sessionIds = sessions.map((session) => session.id);
-  const sqlite = sessions.map((session) => exportSqliteRecordsForRestore(scan.root.sqlitePath, session.id, scan.root.logsSqlitePath));
+  const sqlite = sessions.map((session) =>
+    exportSqliteRecordsForRestore(scan.root.sqlitePath, session.id, scan.root.logsSqlitePath, scan.root.goalsSqlitePath),
+  );
 
   return dedupeTrashBundle({
     manifest: {
@@ -615,12 +617,13 @@ async function assertNoRestoreConflicts(scan: ScanResult, bundle: TrashBundle): 
     }
   }
 
-  assertNoSqliteRestoreKeyConflicts(scan.root.sqlitePath, scan.root.logsSqlitePath, bundle.sqlite);
+  assertNoSqliteRestoreKeyConflicts(scan.root.sqlitePath, scan.root.logsSqlitePath, scan.root.goalsSqlitePath, bundle.sqlite);
 
   const sqliteCounts = collectSqliteDeletionCounts(
     scan.root.sqlitePath,
     bundle.manifest.sessionIds,
     scan.root.logsSqlitePath,
+    scan.root.goalsSqlitePath,
   );
   for (const sessionId of bundle.manifest.sessionIds) {
     if (sumSqliteDeletionCounts(sqliteCounts.get(sessionId) ?? {
@@ -662,6 +665,10 @@ async function captureRestoreSnapshots(scan: ScanResult, bundle: TrashBundle): P
 
   if (scan.root.logsSqlitePath) {
     paths.add(scan.root.logsSqlitePath);
+  }
+
+  if (scan.root.goalsSqlitePath) {
+    paths.add(scan.root.goalsSqlitePath);
   }
 
   return Promise.all([...paths].map((absolutePath) => captureFileSnapshot(absolutePath)));
@@ -782,7 +789,7 @@ export async function restoreTrashEntry(rootArg: string | undefined, idOrSession
       scan.root.globalStatePath ?? path.join(scan.root.rootPath, ".codex-global-state.json"),
       bundle.globalStateRefs,
     );
-    const sqliteRestore = restoreSqliteRecords(scan.root.sqlitePath, scan.root.logsSqlitePath, bundle.sqlite);
+    const sqliteRestore = restoreSqliteRecords(scan.root.sqlitePath, scan.root.logsSqlitePath, scan.root.goalsSqlitePath, bundle.sqlite);
     if (sqliteRestore.skipped.total > 0) {
       warnings.push(`SQLite 有 ${sqliteRestore.skipped.total} 条记录未恢复，详见 skippedSqliteRows。`);
     }

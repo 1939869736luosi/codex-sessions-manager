@@ -194,6 +194,12 @@ export function formatDoctor(report: DoctorReport): string {
       table.exists ? "OK" : "missing",
       table.associationColumns.join(", ") || "-",
     ]),
+    ...report.sqlite.goalsTables.map((table) => [
+      "goals",
+      table.table,
+      table.exists ? "OK" : "missing",
+      table.associationColumns.join(", ") || "-",
+    ]),
   ];
 
   return [
@@ -203,6 +209,7 @@ export function formatDoctor(report: DoctorReport): string {
     "",
     `state SQLite: ${report.sqlite.activeStatePath ?? "missing"}`,
     `logs SQLite: ${report.sqlite.activeLogsPath ?? "missing"}`,
+    `goals SQLite: ${report.sqlite.activeGoalsPath ?? "missing"}`,
     "",
     printTable(tableRows),
     "",

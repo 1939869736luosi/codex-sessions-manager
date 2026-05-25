@@ -87,8 +87,14 @@ export function buildDeletePreview(scan: ScanResult, sessions: SessionEntry[]): 
     scan.root.sqlitePath,
     sessionIds,
     scan.root.logsSqlitePath,
+    scan.root.goalsSqlitePath,
   );
-  const sqliteTotals = collectSqliteDeletionTotals(scan.root.sqlitePath, sessionIds, scan.root.logsSqlitePath);
+  const sqliteTotals = collectSqliteDeletionTotals(
+    scan.root.sqlitePath,
+    sessionIds,
+    scan.root.logsSqlitePath,
+    scan.root.goalsSqlitePath,
+  );
 
   const items: DeletePreviewItem[] = sessions.map((session) => ({
     sessionId: session.id,
@@ -211,7 +217,12 @@ export async function validateDeletion(
   ]);
   const globalStateRefs = collectGlobalStateReferencesForValidation(await readOptionalText(scan.root.globalStatePath));
   const shellSnapshotFiles = await scanShellSnapshots(scan.root.shellSnapshotsDir, scan.root.rootPath);
-  const sqliteCounts = validateSqliteDeletion(scan.root.sqlitePath, targetIds, scan.root.logsSqlitePath);
+  const sqliteCounts = validateSqliteDeletion(
+    scan.root.sqlitePath,
+    targetIds,
+    scan.root.logsSqlitePath,
+    scan.root.goalsSqlitePath,
+  );
 
   return Promise.all(
     sessions.map(async (session) => {
@@ -404,8 +415,8 @@ export async function deleteSessions(
       }
     }
 
-    if (scan.root.sqlitePath || scan.root.logsSqlitePath) {
-      deleteSessionsFromSqlite(scan.root.sqlitePath, [...targetIds], scan.root.logsSqlitePath);
+    if (scan.root.sqlitePath || scan.root.logsSqlitePath || scan.root.goalsSqlitePath) {
+      deleteSessionsFromSqlite(scan.root.sqlitePath, [...targetIds], scan.root.logsSqlitePath, scan.root.goalsSqlitePath);
     }
   } catch (error) {
     if (globalStateWritten && scan.root.globalStatePath && originalGlobalStateText !== null) {

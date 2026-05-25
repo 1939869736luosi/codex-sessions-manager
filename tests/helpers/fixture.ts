@@ -30,6 +30,7 @@ export interface Fixture {
     history: string;
     sqlite: string;
     logsSqlite: string | null;
+    goalsSqlite: string | null;
     globalState: string;
     globalStateBak: string;
     activeShellSnapshot: string;
@@ -43,6 +44,7 @@ export interface FixtureOptions {
   logsSchema?: "standard" | "missing-table" | "missing-thread-id";
   stateLogsTable?: boolean;
   threadGoals?: boolean;
+  goalsDatabase?: boolean;
 }
 
 async function writeJsonl(filePath: string, rows: unknown[]): Promise<void> {
@@ -109,6 +111,7 @@ async function createLogsDatabase(
 
 export async function createFixture(options: FixtureOptions = {}): Promise<Fixture> {
   const logsDatabase = options.logsDatabase ?? true;
+  const goalsDatabase = options.goalsDatabase ?? true;
   const stateLogsTable = options.stateLogsTable ?? false;
   const threadGoals = options.threadGoals ?? true;
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "codex-sessions-"));
@@ -131,6 +134,7 @@ export async function createFixture(options: FixtureOptions = {}): Promise<Fixtu
   const history = path.join(rootDir, "history.jsonl");
   const sqlite = path.join(rootDir, "state_5.sqlite");
   const logsSqlite = logsDatabase ? path.join(rootDir, "logs_2.sqlite") : null;
+  const goalsSqlite = goalsDatabase ? path.join(rootDir, "goals_1.sqlite") : null;
   const globalState = path.join(rootDir, ".codex-global-state.json");
   const globalStateBak = path.join(rootDir, ".codex-global-state.json.bak");
   const activeShellSnapshot = path.join(shellSnapshotsDir, `${ACTIVE_ID}.1777716371736843000.sh`);
@@ -257,7 +261,7 @@ export async function createFixture(options: FixtureOptions = {}): Promise<Fixtu
     );
   `);
 
-  if (threadGoals) {
+  if (threadGoals && !goalsSqlite) {
     db.exec(`
       create table thread_goals (
         thread_id text primary key not null references threads(id) on delete cascade,
@@ -332,7 +336,7 @@ export async function createFixture(options: FixtureOptions = {}): Promise<Fixtu
     db.prepare(
       "insert into stage1_outputs (thread_id, source_updated_at, raw_memory, rollout_summary, generated_at) values (?, 1, 'raw', 'summary', 2)",
     ).run(id);
-    if (threadGoals) {
+    if (threadGoals && !goalsSqlite) {
       db.prepare(
         "insert into thread_goals (thread_id, goal_id, objective, status, token_budget, tokens_used, time_used_seconds, created_at_ms, updated_at_ms) values (?, ?, 'objective', 'active', 1000, 0, 0, 1, 2)",
       ).run(id, `goal-${id}`);
@@ -351,6 +355,29 @@ export async function createFixture(options: FixtureOptions = {}): Promise<Fixtu
     await createLogsDatabase(logsSqlite, [ACTIVE_ID, ARCHIVED_ID], options.logsSchema);
   }
 
+  if (goalsSqlite && threadGoals) {
+    const goalsDb = new Database(goalsSqlite);
+    goalsDb.exec(`
+      create table thread_goals (
+        thread_id text primary key not null,
+        goal_id text not null,
+        objective text not null,
+        status text not null check(status in ('active', 'paused', 'budget_limited', 'complete')),
+        token_budget integer,
+        tokens_used integer not null default 0,
+        time_used_seconds integer not null default 0,
+        created_at_ms integer not null,
+        updated_at_ms integer not null
+      );
+    `);
+    const insertGoal = goalsDb.prepare(
+      "insert into thread_goals (thread_id, goal_id, objective, status, token_budget, tokens_used, time_used_seconds, created_at_ms, updated_at_ms) values (?, ?, 'objective', 'active', 1000, 0, 0, 1, 2)",
+    );
+    insertGoal.run(ACTIVE_ID, `goal-${ACTIVE_ID}`);
+    insertGoal.run(ARCHIVED_ID, `goal-${ARCHIVED_ID}`);
+    goalsDb.close();
+  }
+
   return {
     rootDir,
     cleanup: () => rm(rootDir, { recursive: true, force: true }),
@@ -363,6 +390,7 @@ export async function createFixture(options: FixtureOptions = {}): Promise<Fixtu
       history,
       sqlite,
       logsSqlite,
+      goalsSqlite,
       globalState,
       globalStateBak,
       activeShellSnapshot,

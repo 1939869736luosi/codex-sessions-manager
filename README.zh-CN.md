@@ -81,7 +81,7 @@ codex-sessions verify <session-id>
 4. 只清理已知 `.codex-global-state.json` 引用和两个 P11 exact-key 候选
 5. 删除原始 session 文件
 6. 删除 shell snapshot 文件
-7. 删除 SQLite 记录（threads、logs、spawn edges、agent jobs、dynamic tools、stage1、thread goals）
+7. 删除 SQLite 记录（threads、logs、spawn edges、agent jobs、dynamic tools、stage1、thread goals；新版 Codex 可能把 goals 放在 `goals_N.sqlite`）
 
 如果任何一步失败 → 全部回滚到原始状态。
 ```
@@ -100,6 +100,7 @@ codex-sessions verify <session-id>
 | **残留审计** | 只读报告原始 rollout 文件、shell snapshot、session_index、history、SQLite、global-state、thread edges、family 状态和断裂 parent/child 关系 |
 | **Root 残留扫描** | 不需要先知道 session ID，直接只读扫描整个 root 的疑似残留 |
 | **Root 删除预览** | 对 root 残留候选做只读批量 delete preview，不需要手工列 session ID |
+| **Codex SQLite 结构** | 识别 `state_N.sqlite`、`logs_N.sqlite` 和 `goals_N.sqlite`；`doctor`、`audit`、`verify` 和预览会统计 `goals_N.sqlite.thread_goals` |
 | **回收站 & 恢复** | 完整快照保存；恢复时检查 SQLite 主键冲突 |
 | **验证** | 报告是否还有残留文件、索引行、数据库记录 |
 | **清理索引** | 移除失效索引条目，不动原始数据 |
@@ -197,7 +198,7 @@ codex-sessions verify <session-id...> [--json]
 - `source=mcp` 表示这个 thread 的来源是 mcp，不是每一次 MCP 工具调用日志。
 - `model_provider` 这里只做显示和筛选，不修复 provider 身份，也不改写历史。
 
-如果想对 `audit-root` 选出的候选做批量删除预览，用 `preview-root`。它复用同一套 `status/source` 筛选和保守默认 `--limit 50`，汇总展示只读预览会碰到哪些位置：rollout 文件、shell snapshots、`session_index`、`history`、SQLite、已知 global-state 引用、P11 exact-key global-state 引用、未知 global-state 引用和 `thread_spawn_edges`。它只读，不删除，不改写 JSONL、SQLite、shell snapshot 或 global-state，不接受 `--yes`，也不会自动递归加入 parent、child 或 family session。`preview-root` 的结果不等于“这些都该删”，也不会建议删除任何 session；它只说明如果之后你明确运行 delete，会碰到什么。真正删除应先跑单独的明确 ID `delete` 预览供检查，再单独运行显式确认的 `delete ... --yes`。
+如果想对 `audit-root` 选出的候选做批量删除预览，用 `preview-root`。它复用同一套 `status/source` 筛选和保守默认 `--limit 50`，汇总展示只读预览会碰到哪些位置：rollout 文件、shell snapshots、`session_index`、`history`、SQLite（包含存在时的 `goals_N.sqlite.thread_goals`）、已知 global-state 引用、P11 exact-key global-state 引用、未知 global-state 引用和 `thread_spawn_edges`。它只读，不删除，不改写 JSONL、SQLite、shell snapshot 或 global-state，不接受 `--yes`，也不会自动递归加入 parent、child 或 family session。`preview-root` 的结果不等于“这些都该删”，也不会建议删除任何 session；它只说明如果之后你明确运行 delete，会碰到什么。真正删除应先跑单独的明确 ID `delete` 预览供检查，再单独运行显式确认的 `delete ... --yes`。
 
 如果已经有明确 session ID，并且想在任何删除预览或写操作前先做更安全的关系感知计划，用 `plan-delete`。它只读，JSON 里会标明 `readOnly: true` 和 `executionSupported: false`，也可通过只读 MCP `plan_delete_sessions` 调用。默认只选择 seed IDs。相关 parent、child、subagent、descendant、family member，以及 `/side`/`/fork` 这类 ambiguous session，会出现在 `availableIncludes` 或 warning 里。`--include-children`、`--include-subagents`、`--include-descendants` 和 `--include-family` 只改变 `selectedIds`，不会执行删除；其中 `--include-family` 风险最高，会给出强提醒。exact-key global-state 只显示 path、rule、shape 和 byteEstimate 元数据；unknown global-state 仍然只是 warning-only。
 
@@ -207,7 +208,7 @@ MCP `plan_delete_sessions` 支持同样的 sourceKind candidate 语义：传 `so
 
 `plan-delete --write-plan FILE` 会写出稳定的 `codex-sessions-delete-plan.v1` JSON 审计文件。文件包含 `scanTimestamp`、`planHash`、root fingerprint、selected surface counts、family edges 和 exact-key global-state paths。它不能包含 transcript 正文、prompt text 或完整 global-state values；exact-key global-state 条目只限 path/rule/shape/byteEstimate 元数据。plan file 只是审计材料，不是授权、不是 preview token、不是删除确认，也不能传给任何删除执行命令。
 
-`preview-plan <plan-file>` 会只读重扫 root，并把 plan 和当前状态做比较。它检查 root realpath、`session_index`、`history`、`.codex-global-state.json`、state/log SQLite 的 mtime/size/parseability、selected surface counts、family edges 和 exact-key paths。只要有差异，就返回 `stale=true`，并且不产生当前 delete preview，避免把旧 plan 当成当前预览。`preview-plan` 不接受 `--yes`、`--trash`、`--force` 或任何删除执行模式。
+`preview-plan <plan-file>` 会只读重扫 root，并把 plan 和当前状态做比较。它检查 root realpath、`session_index`、`history`、`.codex-global-state.json`、state/log/goals SQLite 的 mtime/size/parseability、selected surface counts、family edges 和 exact-key paths。只要有差异，就返回 `stale=true`，并且不产生当前 delete preview，避免把旧 plan 当成当前预览。`preview-plan` 不接受 `--yes`、`--trash`、`--force` 或任何删除执行模式。
 
 MCP `preview_delete_plan` 接收 `planFile` 或 inline `plan` object，并复用同一套 stale detection。它只读，不接受 `confirm`、`trash`、`yes` 或 `force`；当 `stale=true` 时不会返回当前 `deletePreview`。
 

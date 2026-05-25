@@ -1584,8 +1584,10 @@ describe("core integration", () => {
   it("inspects the root structure and reports sqlite tables plus unknown global state refs", async () => {
     const state12 = path.join(fixture.rootDir, "state_12.sqlite");
     const logs10 = path.join(fixture.rootDir, "logs_10.sqlite");
+    const goals3 = path.join(fixture.rootDir, "goals_3.sqlite");
     await writeFile(state12, await readFile(fixture.paths.sqlite));
     await writeFile(logs10, await readFile(fixture.paths.logsSqlite as string));
+    await writeFile(goals3, await readFile(fixture.paths.goalsSqlite as string));
 
     const report = await inspectCodexRoot(fixture.rootDir);
     const expectedTables = [
@@ -1606,10 +1608,16 @@ describe("core integration", () => {
     expect(report.paths.shellSnapshotsDir.readable).toBe(true);
     expect(report.sqlite.stateCandidates).toContain(fixture.paths.sqlite);
     expect(report.sqlite.logsCandidates).toContain(fixture.paths.logsSqlite);
+    expect(report.sqlite.goalsCandidates).toContain(fixture.paths.goalsSqlite);
     expect(report.sqlite.activeStatePath).toBe(state12);
     expect(report.sqlite.activeLogsPath).toBe(logs10);
+    expect(report.sqlite.activeGoalsPath).toBe(goals3);
     expect(report.sqlite.stateTables.map((table) => table.table)).toEqual(expectedTables);
     expect(report.sqlite.logsTables.map((table) => table.table)).toEqual(expectedTables);
+    expect(report.sqlite.goalsTables.find((table) => table.table === "thread_goals")).toMatchObject({
+      exists: true,
+      associationColumns: ["thread_id"],
+    });
     expect(report.sqlite.stateTables.find((table) => table.table === "threads")).toMatchObject({
       exists: true,
       associationColumns: ["id"],
@@ -1625,9 +1633,9 @@ describe("core integration", () => {
   });
 
   it("reports missing sqlite tables and association columns during root inspection", async () => {
-    const stateDb = new Database(fixture.paths.sqlite);
-    stateDb.exec("drop table thread_goals");
-    stateDb.close();
+    const goalsDb = new Database(fixture.paths.goalsSqlite as string);
+    goalsDb.exec("drop table thread_goals");
+    goalsDb.close();
 
     const logsDb = new Database(fixture.paths.logsSqlite as string);
     logsDb.exec("drop table logs; create table logs (id integer primary key autoincrement, ts integer not null);");
@@ -1635,7 +1643,7 @@ describe("core integration", () => {
 
     const report = await inspectCodexRoot(fixture.rootDir);
 
-    expect(report.sqlite.stateTables.find((table) => table.table === "thread_goals")).toMatchObject({
+    expect(report.sqlite.goalsTables.find((table) => table.table === "thread_goals")).toMatchObject({
       exists: false,
       associationColumns: [],
     });
@@ -2077,9 +2085,9 @@ describe("core integration", () => {
       const scan = await scanCodexRoot(partialFixture.rootDir);
       const sessions = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID]);
       const trashResult = await moveSessionsToTrash(scan, sessions);
-      const db = new Database(partialFixture.paths.sqlite);
-      db.exec("drop table thread_goals");
-      db.close();
+      const goalsDb = new Database(partialFixture.paths.goalsSqlite as string);
+      goalsDb.exec("drop table thread_goals");
+      goalsDb.close();
       const logsDb = new Database(partialFixture.paths.logsSqlite as string);
       logsDb.exec("drop table logs; create table logs (id integer primary key autoincrement, ts integer not null);");
       logsDb.close();

@@ -16,7 +16,12 @@ describe("sqlite core", () => {
   });
 
   it("collects deletion counts and deletes linked rows", () => {
-    const counts = collectSqliteDeletionCounts(fixture.paths.sqlite, [FIXTURE_IDS.ACTIVE_ID], fixture.paths.logsSqlite);
+    const counts = collectSqliteDeletionCounts(
+      fixture.paths.sqlite,
+      [FIXTURE_IDS.ACTIVE_ID],
+      fixture.paths.logsSqlite,
+      fixture.paths.goalsSqlite,
+    );
     expect(counts.get(FIXTURE_IDS.ACTIVE_ID)).toEqual({
       threadRows: 1,
       logRows: 1,
@@ -27,10 +32,20 @@ describe("sqlite core", () => {
       threadGoalRows: 1,
     });
 
-    const deleted = deleteSessionsFromSqlite(fixture.paths.sqlite, [FIXTURE_IDS.ACTIVE_ID], fixture.paths.logsSqlite);
+    const deleted = deleteSessionsFromSqlite(
+      fixture.paths.sqlite,
+      [FIXTURE_IDS.ACTIVE_ID],
+      fixture.paths.logsSqlite,
+      fixture.paths.goalsSqlite,
+    );
     expect(deleted.get(FIXTURE_IDS.ACTIVE_ID)?.threadRows).toBe(1);
 
-    const validation = validateSqliteDeletion(fixture.paths.sqlite, [FIXTURE_IDS.ACTIVE_ID, FIXTURE_IDS.ARCHIVED_ID], fixture.paths.logsSqlite);
+    const validation = validateSqliteDeletion(
+      fixture.paths.sqlite,
+      [FIXTURE_IDS.ACTIVE_ID, FIXTURE_IDS.ARCHIVED_ID],
+      fixture.paths.logsSqlite,
+      fixture.paths.goalsSqlite,
+    );
     expect(validation.get(FIXTURE_IDS.ACTIVE_ID)?.threadRows).toBe(0);
     expect(validation.get(FIXTURE_IDS.ACTIVE_ID)?.logRows).toBe(0);
     expect(validation.get(FIXTURE_IDS.ACTIVE_ID)?.stage1Rows).toBe(0);
@@ -44,7 +59,7 @@ describe("sqlite core", () => {
   });
 
   it("stores null assigned_thread_id instead of deleting unrelated job items", async () => {
-    deleteSessionsFromSqlite(fixture.paths.sqlite, [FIXTURE_IDS.ACTIVE_ID], fixture.paths.logsSqlite);
+    deleteSessionsFromSqlite(fixture.paths.sqlite, [FIXTURE_IDS.ACTIVE_ID], fixture.paths.logsSqlite, fixture.paths.goalsSqlite);
     const db = new Database(fixture.paths.sqlite, { readonly: true });
     const row = db
       .prepare("select assigned_thread_id from agent_job_items where item_id = ?")
@@ -56,7 +71,7 @@ describe("sqlite core", () => {
 
   it("deletes session logs from the dedicated logs database", () => {
     expect(fixture.paths.logsSqlite).not.toBeNull();
-    deleteSessionsFromSqlite(fixture.paths.sqlite, [FIXTURE_IDS.ACTIVE_ID], fixture.paths.logsSqlite);
+    deleteSessionsFromSqlite(fixture.paths.sqlite, [FIXTURE_IDS.ACTIVE_ID], fixture.paths.logsSqlite, fixture.paths.goalsSqlite);
 
     const db = new Database(fixture.paths.logsSqlite as string, { readonly: true });
     const activeLogs = db
@@ -72,7 +87,7 @@ describe("sqlite core", () => {
   });
 
   it("supports legacy state databases that still have a logs table", async () => {
-    const legacyFixture = await createFixture({ logsDatabase: false, stateLogsTable: true });
+    const legacyFixture = await createFixture({ logsDatabase: false, goalsDatabase: false, stateLogsTable: true });
 
     try {
       const counts = collectSqliteDeletionCounts(legacyFixture.paths.sqlite, [FIXTURE_IDS.ACTIVE_ID]);
@@ -87,7 +102,7 @@ describe("sqlite core", () => {
   });
 
   it("does not fail when neither state nor logs database has a logs table", async () => {
-    const noLogsFixture = await createFixture({ logsDatabase: false });
+    const noLogsFixture = await createFixture({ logsDatabase: false, goalsDatabase: false });
 
     try {
       const counts = collectSqliteDeletionCounts(noLogsFixture.paths.sqlite, [FIXTURE_IDS.ACTIVE_ID]);
@@ -147,7 +162,7 @@ describe("sqlite core", () => {
     stateDb.close();
 
     expect(() =>
-      deleteSessionsFromSqlite(fixture.paths.sqlite, [FIXTURE_IDS.ACTIVE_ID], fixture.paths.logsSqlite),
+      deleteSessionsFromSqlite(fixture.paths.sqlite, [FIXTURE_IDS.ACTIVE_ID], fixture.paths.logsSqlite, fixture.paths.goalsSqlite),
     ).toThrow("blocked delete");
 
     const logsDb = new Database(fixture.paths.logsSqlite as string, { readonly: true });
@@ -156,7 +171,7 @@ describe("sqlite core", () => {
       .get(FIXTURE_IDS.ACTIVE_ID) as { count: number };
     logsDb.close();
 
-    const validation = validateSqliteDeletion(fixture.paths.sqlite, [FIXTURE_IDS.ACTIVE_ID], fixture.paths.logsSqlite);
+    const validation = validateSqliteDeletion(fixture.paths.sqlite, [FIXTURE_IDS.ACTIVE_ID], fixture.paths.logsSqlite, fixture.paths.goalsSqlite);
     expect(activeLogs.count).toBe(1);
     expect(validation.get(FIXTURE_IDS.ACTIVE_ID)?.threadRows).toBe(1);
     expect(validation.get(FIXTURE_IDS.ACTIVE_ID)?.logRows).toBe(1);
