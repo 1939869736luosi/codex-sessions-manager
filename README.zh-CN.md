@@ -291,6 +291,7 @@ Codex Desktop 删除归档聊天时，可能已经清掉其中一部分。`audit
 
 ## 文档
 
+- [安全策略](./SECURITY.md) — 报告数据丢失、删除不完整、恢复、回滚、路径处理和本地历史泄露问题
 - [安全指南](./docs/SAFETY.md) — 删除/回收站/恢复/清除前必读
 - [更新日志](./CHANGELOG.md) — 版本记录
 - [SKILL.md](./SKILL.md) — Claude Code / Codex 的 AI 技能说明

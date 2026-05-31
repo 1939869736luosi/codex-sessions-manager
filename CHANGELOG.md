@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added `SECURITY.md` with reporting guidance for local Codex session artifacts, data loss, incomplete deletion, restore conflicts, rollback failures, path handling, and local-history exposure.
+- Linked the security policy from both English and Chinese README documentation sections.
+
 ## 0.5.1
 
 ### Added

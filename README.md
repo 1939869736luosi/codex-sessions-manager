@@ -304,6 +304,7 @@ When Codex Desktop deletes an archived chat, it may already remove some of these
 
 ## Documentation
 
+- [Security policy](./SECURITY.md) — report data-loss, incomplete-deletion, restore, rollback, path, and local-history exposure issues
 - [Safety guide](./docs/SAFETY.md) — read before delete/trash/restore/purge
 - [Changelog](./CHANGELOG.md) — release notes
 - [SKILL.md](./SKILL.md) — AI skill instructions for Claude Code / Codex
