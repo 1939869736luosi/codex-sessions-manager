@@ -9,6 +9,10 @@
 
 **codex-sessions-manager** is a local Codex session audit and cleanup tool. It works as a **Skill** (Claude Code / Codex), a **CLI**, and an **MCP server** — all sharing the same core. Use it to inspect what remains under `~/.codex`, audit leftovers after the official UI delete/archive flow, clean hidden local residues by exact session ID, and verify that deletion actually left no local orphans.
 
+It is built for safety-critical local history work: prompt/history privacy, exact-session deletion, rollback, restore conflict checks, SQLite/global-state consistency, and post-delete verification.
+
+Security reports are welcome. See [SECURITY.md](./SECURITY.md) for the supported security model and reporting path.
+
 ## Why this one?
 
 Codex Desktop's built-in delete is the right first stop for ordinary archived-chat cleanup. This tool is for the harder local cases: proving what remains after deletion, cleaning orphaned records, handling exact session IDs, and giving agents a safe way to manage local history.

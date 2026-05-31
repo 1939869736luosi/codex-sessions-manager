@@ -11,6 +11,7 @@
     "dist",
     "README.md",
     "README.zh-CN.md",
+    "SECURITY.md",
     "CHANGELOG.md",
     "docs/SAFETY.md",
     "docs/UNKNOWN_GLOBAL_STATE_RULES.md",

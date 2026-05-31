@@ -9,6 +9,10 @@
 
 **codex-sessions-manager** 是本地 Codex 会话审计和清理工具。它同时是 **Skill**（Claude Code / Codex 可直接调用）、**CLI** 和 **MCP Server**——三种形态共享同一套核心逻辑。它用来检查 `~/.codex` 里还剩什么、审计官方 UI 删除/归档后留下的本地残留、按精确 session ID 处理隐藏记录，并验证删除后是否真的没有本机孤儿记录。
 
+它面向安全敏感的本地历史管理：prompt/history 隐私、精确会话删除、失败回滚、恢复冲突检查、SQLite/global-state 一致性，以及删除后的残留验证。
+
+欢迎报告安全问题。支持边界和报告方式见 [SECURITY.md](./SECURITY.md)。
+
 ## 为什么选这个？
 
 普通归档聊天优先用 Codex Desktop 官方删除入口。这个工具面向更难的本机场景：官方删完后验残留、清理孤儿记录、按精确 session ID 处理，以及让 AI Agent 安全管理本地历史。
