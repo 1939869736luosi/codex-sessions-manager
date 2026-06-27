@@ -39,6 +39,22 @@ import {
 import type { SessionKind, SourceKind } from "../core/types.js";
 import { TOOL_VERSION } from "../version.js";
 
+const VALID_PROFILES = ["read-only", "admin"] as const;
+export type McpProfile = (typeof VALID_PROFILES)[number];
+
+export function parseProfile(argv: string[] = process.argv): McpProfile {
+  const idx = argv.indexOf("--profile");
+  if (idx === -1 || idx + 1 >= argv.length) return "read-only";
+  const val = argv[idx + 1];
+  if (!(VALID_PROFILES as readonly string[]).includes(val)) {
+    process.stderr.write(
+      `Error: invalid --profile value "${val}". Valid values: ${VALID_PROFILES.join(", ")}\n`,
+    );
+    process.exit(1);
+  }
+  return val as McpProfile;
+}
+
 const TOOL_OUTPUT_SCHEMA = z.object({}).passthrough();
 const stringOrStringArraySchema = z.union([z.string(), z.array(z.string())]);
 const sourceKindSchema = z.union([z.enum(SOURCE_KINDS), z.array(z.enum(SOURCE_KINDS))]);
@@ -71,7 +87,7 @@ function normalizePlanDeleteLimit(limit: number | undefined): number {
   return limit;
 }
 
-export function createServer(): McpServer {
+export function createServer(profile: McpProfile = "read-only"): McpServer {
   const server = new McpServer(
     {
       name: "codex-sessions",
@@ -524,6 +540,28 @@ export function createServer(): McpServer {
   );
 
   server.registerTool(
+    "list_trash",
+    {
+      description: "List recoverable Codex session trash entries.",
+      outputSchema: TOOL_OUTPUT_SCHEMA,
+      inputSchema: z.object({
+        root: z.string().optional(),
+      }),
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({ root }) => {
+      const scan = await scanCodexRoot(root);
+      const entries = await listTrashEntries(scan.root.rootPath);
+      const duplicateSessionIds = summarizeTrashDuplicateSessions(entries);
+      return textResult(`Found ${entries.length} trash entries.`, { root: scan.root, entries, duplicateSessionIds });
+    },
+  );
+
+  if (profile === "admin") {
+  server.registerTool(
     "delete_sessions",
     {
       description:
@@ -561,27 +599,6 @@ export function createServer(): McpServer {
 
       const result = await deleteSessions(scan, sessions);
       return textResult(`Deleted ${sessions.length} sessions.`, { result });
-    },
-  );
-
-  server.registerTool(
-    "list_trash",
-    {
-      description: "List recoverable Codex session trash entries.",
-      outputSchema: TOOL_OUTPUT_SCHEMA,
-      inputSchema: z.object({
-        root: z.string().optional(),
-      }),
-      annotations: {
-        readOnlyHint: true,
-        idempotentHint: true,
-      },
-    },
-    async ({ root }) => {
-      const scan = await scanCodexRoot(root);
-      const entries = await listTrashEntries(scan.root.rootPath);
-      const duplicateSessionIds = summarizeTrashDuplicateSessions(entries);
-      return textResult(`Found ${entries.length} trash entries.`, { root: scan.root, entries, duplicateSessionIds });
     },
   );
 
@@ -723,6 +740,7 @@ export function createServer(): McpServer {
       return textResult(`Cleaned ${result.staleSessionIds.length} stale session indexes.`, { result });
     },
   );
+  } // end if (profile === "admin")
 
   server.registerTool(
     "verify_sessions",
@@ -751,10 +769,11 @@ export function createServer(): McpServer {
 }
 
 export async function startServer(): Promise<void> {
-  const server = createServer();
+  const profile = parseProfile();
+  const server = createServer(profile);
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("codex-sessions MCP server running on stdio");
+  console.error(`codex-sessions MCP server running on stdio (profile: ${profile})`);
 }
 
 export function getMcpVersionText(): string {

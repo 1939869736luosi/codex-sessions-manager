@@ -7,7 +7,7 @@ import Database from "better-sqlite3";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
-import { createServer, getMcpVersionText, isMcpEntrypoint } from "../src/mcp/server.js";
+import { createServer, getMcpVersionText, isMcpEntrypoint, type McpProfile } from "../src/mcp/server.js";
 import { validateDeletion } from "../src/core/delete.js";
 import { buildDeletePlanFile, writeDeletePlanFile } from "../src/core/plan-file.js";
 import { buildPlanDelete } from "../src/core/plan-delete.js";
@@ -15,8 +15,8 @@ import { resolveSessions } from "../src/core/query.js";
 import { scanCodexRoot } from "../src/core/scan.js";
 import { createFixture, FIXTURE_IDS, writeExactGlobalStateFixture, type Fixture } from "./helpers/fixture.js";
 
-async function createConnectedClient() {
-  const server = createServer();
+async function createConnectedClient(profile: McpProfile = "admin") {
+  const server = createServer(profile);
   const client = new Client({ name: "test-client", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -1561,5 +1561,78 @@ describe("mcp server", () => {
       await client.close();
       await server.close();
     }
+  });
+});
+
+describe("mcp server --profile", () => {
+  const ADMIN_TOOLS = ["delete_sessions", "restore_sessions", "purge_trash", "cleanup_session_indexes", "cleanup_stale_indexes"];
+  const READ_ONLY_TOOLS = [
+    "inspect_root", "list_sessions", "summarize_sources", "list_projects",
+    "get_session", "get_session_family", "audit_session", "audit_root",
+    "preview_root_delete", "export_session_backup", "preview_delete_sessions",
+    "plan_delete_sessions", "preview_delete_plan", "list_trash",
+    "verify_sessions",
+  ];
+
+  it("read-only profile registers only read-only tools", async () => {
+    const { client, server } = await createConnectedClient("read-only");
+    try {
+      const { tools } = await client.listTools();
+      const toolNames = tools.map((t) => t.name);
+      for (const name of READ_ONLY_TOOLS) {
+        expect(toolNames).toContain(name);
+      }
+      for (const name of ADMIN_TOOLS) {
+        expect(toolNames).not.toContain(name);
+      }
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("admin profile registers all tools", async () => {
+    const { client, server } = await createConnectedClient("admin");
+    try {
+      const { tools } = await client.listTools();
+      const toolNames = tools.map((t) => t.name);
+      for (const name of [...READ_ONLY_TOOLS, ...ADMIN_TOOLS]) {
+        expect(toolNames).toContain(name);
+      }
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("read-only profile has 15 tools, admin has 20", async () => {
+    const { client: roClient, server: roServer } = await createConnectedClient("read-only");
+    const { client: adminClient, server: adminServer } = await createConnectedClient("admin");
+    try {
+      const roTools = await roClient.listTools();
+      const adminTools = await adminClient.listTools();
+      expect(roTools.tools.length).toBe(15);
+      expect(adminTools.tools.length).toBe(20);
+    } finally {
+      await roClient.close();
+      await roServer.close();
+      await adminClient.close();
+      await adminServer.close();
+    }
+  });
+
+  it("parseProfile returns read-only by default", async () => {
+    const { parseProfile } = await import("../src/mcp/server.js");
+    expect(parseProfile(["node", "server.js"])).toBe("read-only");
+  });
+
+  it("parseProfile returns admin when --profile admin is passed", async () => {
+    const { parseProfile } = await import("../src/mcp/server.js");
+    expect(parseProfile(["node", "server.js", "--profile", "admin"])).toBe("admin");
+  });
+
+  it("parseProfile returns read-only when --profile read-only is passed", async () => {
+    const { parseProfile } = await import("../src/mcp/server.js");
+    expect(parseProfile(["node", "server.js", "--profile", "read-only"])).toBe("read-only");
   });
 });
