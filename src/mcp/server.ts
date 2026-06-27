@@ -44,7 +44,13 @@ export type McpProfile = (typeof VALID_PROFILES)[number];
 
 export function parseProfile(argv: string[] = process.argv): McpProfile {
   const idx = argv.indexOf("--profile");
-  if (idx === -1 || idx + 1 >= argv.length) return "read-only";
+  if (idx === -1) return "read-only";
+  if (idx + 1 >= argv.length) {
+    process.stderr.write(
+      `Error: --profile requires a value. Valid values: ${VALID_PROFILES.join(", ")}\n`,
+    );
+    process.exit(1);
+  }
   const val = argv[idx + 1];
   if (!(VALID_PROFILES as readonly string[]).includes(val)) {
     process.stderr.write(
@@ -561,185 +567,185 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
   );
 
   if (profile === "admin") {
-  server.registerTool(
-    "delete_sessions",
-    {
-      description:
-        "Delete explicit Codex sessions across files, JSONL indexes, SQLite, known global-state refs, and the two P11 exact-key global-state refs only. Pass trash=true to move them to recoverable trash. Without confirm=true this returns a preview only; with confirm=true it executes after the caller has reviewed the intended scope. There is no preview token binding a prior preview call to the confirmed call. Unknown global-state refs outside the exact-key rules remain warnings, and unknown-only cleanup is refused. This tool never recursively adds parent, child, or family sessions.",
-      outputSchema: TOOL_OUTPUT_SCHEMA,
-      inputSchema: z.object({
-        sessionIds: z.array(z.string()).min(1),
-        root: z.string().optional(),
-        confirm: z.boolean().optional().describe("Must be true to execute deletion after you have inspected a separate preview. Omit or false to return preview only."),
-        trash: z.boolean().optional().describe("Move sessions to recoverable trash before deleting live surfaces. Defaults to false for permanent delete compatibility."),
-      }),
-      annotations: {
-        destructiveHint: true,
-        readOnlyHint: false,
-        idempotentHint: false,
+    server.registerTool(
+      "delete_sessions",
+      {
+        description:
+          "Delete explicit Codex sessions across files, JSONL indexes, SQLite, known global-state refs, and the two P11 exact-key global-state refs only. Pass trash=true to move them to recoverable trash. Without confirm=true this returns a preview only; with confirm=true it executes after the caller has reviewed the intended scope. There is no preview token binding a prior preview call to the confirmed call. Unknown global-state refs outside the exact-key rules remain warnings, and unknown-only cleanup is refused. This tool never recursively adds parent, child, or family sessions.",
+        outputSchema: TOOL_OUTPUT_SCHEMA,
+        inputSchema: z.object({
+          sessionIds: z.array(z.string()).min(1),
+          root: z.string().optional(),
+          confirm: z.boolean().optional().describe("Must be true to execute deletion after you have inspected a separate preview. Omit or false to return preview only."),
+          trash: z.boolean().optional().describe("Move sessions to recoverable trash before deleting live surfaces. Defaults to false for permanent delete compatibility."),
+        }),
+        annotations: {
+          destructiveHint: true,
+          readOnlyHint: false,
+          idempotentHint: false,
+        },
       },
-    },
-    async ({ sessionIds, root, confirm, trash }) => {
-      const scan = await scanCodexRoot(root);
-      const sessions = resolveSessions(scan, sessionIds);
-      if (!confirm) {
-        const preview = buildDeletePreview(scan, sessions);
-        return textResult(`Deletion was not executed. Pass confirm=true to ${trash ? "move to trash" : "delete"} ${sessions.length} sessions.`, {
-          preview,
-          warnings: scan.warnings,
-          requiresConfirmation: true,
-          action: trash ? "trash" : "delete",
-        });
-      }
-
-      if (trash) {
-        const result = await moveSessionsToTrash(scan, sessions);
-        return textResult(`Moved ${sessions.length} sessions to trash.`, { result });
-      }
-
-      const result = await deleteSessions(scan, sessions);
-      return textResult(`Deleted ${sessions.length} sessions.`, { result });
-    },
-  );
-
-  server.registerTool(
-    "restore_sessions",
-    {
-      description:
-        "Restore one trash entry by trash id or contained session id. If a session id matches multiple trash entries, confirm=true refuses it and requires an exact trash id.",
-      outputSchema: TOOL_OUTPUT_SCHEMA,
-      inputSchema: z.object({
-        id: z.string().describe("Trash id, trash id prefix, session id, or session id prefix."),
-        root: z.string().optional(),
-        confirm: z.boolean().optional(),
-      }),
-      annotations: {
-        destructiveHint: true,
-        readOnlyHint: false,
-        idempotentHint: false,
+      async ({ sessionIds, root, confirm, trash }) => {
+        const scan = await scanCodexRoot(root);
+        const sessions = resolveSessions(scan, sessionIds);
+        if (!confirm) {
+          const preview = buildDeletePreview(scan, sessions);
+          return textResult(`Deletion was not executed. Pass confirm=true to ${trash ? "move to trash" : "delete"} ${sessions.length} sessions.`, {
+            preview,
+            warnings: scan.warnings,
+            requiresConfirmation: true,
+            action: trash ? "trash" : "delete",
+          });
+        }
+  
+        if (trash) {
+          const result = await moveSessionsToTrash(scan, sessions);
+          return textResult(`Moved ${sessions.length} sessions to trash.`, { result });
+        }
+  
+        const result = await deleteSessions(scan, sessions);
+        return textResult(`Deleted ${sessions.length} sessions.`, { result });
       },
-    },
-    async ({ id, root, confirm }) => {
-      const scan = await scanCodexRoot(root);
-      if (!confirm) {
-        const entries = (await listTrashEntries(scan.root.rootPath)).filter((entry) => trashEntryMatches(entry, id));
-        const duplicateSessionIds = summarizeTrashDuplicateSessions(entries);
-        return textResult("Restore was not executed. Pass confirm=true to restore.", {
-          entries,
-          duplicateSessionIds,
-          requiresExactTrashId: entries.length > 1,
-          preflight: entries.map((entry) => ({
-            trashId: entry.trashId,
-            sessionIds: entry.sessionIds,
-            warnings: entry.rootPath === scan.root.rootPath ? [] : [`回收站记录来自不同 root：${entry.rootPath}`],
-          })),
-          requiresConfirmation: true,
-        });
-      }
-
-      const result = await restoreTrashEntry(root, id);
-      return textResult(`Restored ${result.restoredSessionIds.length} sessions.`, { result });
-    },
-  );
-
-  server.registerTool(
-    "purge_trash",
-    {
-      description:
-        "Permanently remove one trash entry without touching live sessions. If a session id matches multiple trash entries, confirm=true refuses it and requires an exact trash id.",
-      outputSchema: TOOL_OUTPUT_SCHEMA,
-      inputSchema: z.object({
-        id: z.string().describe("Trash id, trash id prefix, session id, or session id prefix."),
-        root: z.string().optional(),
-        confirm: z.boolean().optional(),
-      }),
-      annotations: {
-        destructiveHint: true,
-        readOnlyHint: false,
-        idempotentHint: false,
+    );
+  
+    server.registerTool(
+      "restore_sessions",
+      {
+        description:
+          "Restore one trash entry by trash id or contained session id. If a session id matches multiple trash entries, confirm=true refuses it and requires an exact trash id.",
+        outputSchema: TOOL_OUTPUT_SCHEMA,
+        inputSchema: z.object({
+          id: z.string().describe("Trash id, trash id prefix, session id, or session id prefix."),
+          root: z.string().optional(),
+          confirm: z.boolean().optional(),
+        }),
+        annotations: {
+          destructiveHint: true,
+          readOnlyHint: false,
+          idempotentHint: false,
+        },
       },
-    },
-    async ({ id, root, confirm }) => {
-      const scan = await scanCodexRoot(root);
-      if (!confirm) {
-        const entries = (await listTrashEntries(scan.root.rootPath)).filter((entry) => trashEntryMatches(entry, id));
-        const duplicateSessionIds = summarizeTrashDuplicateSessions(entries);
-        return textResult("Purge was not executed. Pass confirm=true to purge.", {
-          entries,
-          duplicateSessionIds,
-          requiresExactTrashId: entries.length > 1,
-          requiresConfirmation: true,
-        });
-      }
-
-      const result = await purgeTrashEntry(root, id);
-      return textResult(`Purged trash entry ${result.trashEntry.trashId}.`, { result });
-    },
-  );
-
-  server.registerTool(
-    "cleanup_session_indexes",
-    {
-      description:
-        "Remove JSONL index traces for specific sessions without deleting raw files or SQLite rows. Requires confirm=true; otherwise returns a preview only.",
-      outputSchema: TOOL_OUTPUT_SCHEMA,
-      inputSchema: z.object({
-        sessionIds: z.array(z.string()).min(1),
-        root: z.string().optional(),
-        confirm: z.boolean().optional().describe("Must be true to rewrite JSONL indexes. Omit or false to return preview only."),
-      }),
-      annotations: {
-        destructiveHint: true,
-        readOnlyHint: false,
-        idempotentHint: false,
+      async ({ id, root, confirm }) => {
+        const scan = await scanCodexRoot(root);
+        if (!confirm) {
+          const entries = (await listTrashEntries(scan.root.rootPath)).filter((entry) => trashEntryMatches(entry, id));
+          const duplicateSessionIds = summarizeTrashDuplicateSessions(entries);
+          return textResult("Restore was not executed. Pass confirm=true to restore.", {
+            entries,
+            duplicateSessionIds,
+            requiresExactTrashId: entries.length > 1,
+            preflight: entries.map((entry) => ({
+              trashId: entry.trashId,
+              sessionIds: entry.sessionIds,
+              warnings: entry.rootPath === scan.root.rootPath ? [] : [`回收站记录来自不同 root：${entry.rootPath}`],
+            })),
+            requiresConfirmation: true,
+          });
+        }
+  
+        const result = await restoreTrashEntry(root, id);
+        return textResult(`Restored ${result.restoredSessionIds.length} sessions.`, { result });
       },
-    },
-    async ({ sessionIds, root, confirm }) => {
-      const scan = await scanCodexRoot(root);
-      const sessions = resolveSessions(scan, sessionIds);
-      if (!confirm) {
-        const preview = previewCleanupSessionIndexes(scan, sessions);
-        return textResult("Cleanup was not executed. Pass confirm=true to rewrite JSONL indexes.", {
-          preview,
-          requiresConfirmation: true,
-        });
-      }
-
-      const result = await cleanupSessionIndexes(scan, sessions);
-      return textResult(`Cleaned index traces for ${sessions.length} sessions.`, { result });
-    },
-  );
-
-  server.registerTool(
-    "cleanup_stale_indexes",
-    {
-      description:
-        "Remove stale JSONL index entries that no longer have files or SQLite records. Requires confirm=true; otherwise returns a preview only.",
-      outputSchema: TOOL_OUTPUT_SCHEMA,
-      inputSchema: z.object({
-        root: z.string().optional(),
-        confirm: z.boolean().optional().describe("Must be true to rewrite JSONL indexes. Omit or false to return preview only."),
-      }),
-      annotations: {
-        destructiveHint: true,
-        readOnlyHint: false,
-        idempotentHint: false,
+    );
+  
+    server.registerTool(
+      "purge_trash",
+      {
+        description:
+          "Permanently remove one trash entry without touching live sessions. If a session id matches multiple trash entries, confirm=true refuses it and requires an exact trash id.",
+        outputSchema: TOOL_OUTPUT_SCHEMA,
+        inputSchema: z.object({
+          id: z.string().describe("Trash id, trash id prefix, session id, or session id prefix."),
+          root: z.string().optional(),
+          confirm: z.boolean().optional(),
+        }),
+        annotations: {
+          destructiveHint: true,
+          readOnlyHint: false,
+          idempotentHint: false,
+        },
       },
-    },
-    async ({ root, confirm }) => {
-      const scan = await scanCodexRoot(root);
-      if (!confirm) {
-        const preview = previewCleanupStaleIndexes(scan);
-        return textResult("Cleanup was not executed. Pass confirm=true to rewrite JSONL indexes.", {
-          preview,
-          requiresConfirmation: true,
-        });
-      }
-
-      const result = await cleanupStaleIndexes(scan);
-      return textResult(`Cleaned ${result.staleSessionIds.length} stale session indexes.`, { result });
-    },
-  );
+      async ({ id, root, confirm }) => {
+        const scan = await scanCodexRoot(root);
+        if (!confirm) {
+          const entries = (await listTrashEntries(scan.root.rootPath)).filter((entry) => trashEntryMatches(entry, id));
+          const duplicateSessionIds = summarizeTrashDuplicateSessions(entries);
+          return textResult("Purge was not executed. Pass confirm=true to purge.", {
+            entries,
+            duplicateSessionIds,
+            requiresExactTrashId: entries.length > 1,
+            requiresConfirmation: true,
+          });
+        }
+  
+        const result = await purgeTrashEntry(root, id);
+        return textResult(`Purged trash entry ${result.trashEntry.trashId}.`, { result });
+      },
+    );
+  
+    server.registerTool(
+      "cleanup_session_indexes",
+      {
+        description:
+          "Remove JSONL index traces for specific sessions without deleting raw files or SQLite rows. Requires confirm=true; otherwise returns a preview only.",
+        outputSchema: TOOL_OUTPUT_SCHEMA,
+        inputSchema: z.object({
+          sessionIds: z.array(z.string()).min(1),
+          root: z.string().optional(),
+          confirm: z.boolean().optional().describe("Must be true to rewrite JSONL indexes. Omit or false to return preview only."),
+        }),
+        annotations: {
+          destructiveHint: true,
+          readOnlyHint: false,
+          idempotentHint: false,
+        },
+      },
+      async ({ sessionIds, root, confirm }) => {
+        const scan = await scanCodexRoot(root);
+        const sessions = resolveSessions(scan, sessionIds);
+        if (!confirm) {
+          const preview = previewCleanupSessionIndexes(scan, sessions);
+          return textResult("Cleanup was not executed. Pass confirm=true to rewrite JSONL indexes.", {
+            preview,
+            requiresConfirmation: true,
+          });
+        }
+  
+        const result = await cleanupSessionIndexes(scan, sessions);
+        return textResult(`Cleaned index traces for ${sessions.length} sessions.`, { result });
+      },
+    );
+  
+    server.registerTool(
+      "cleanup_stale_indexes",
+      {
+        description:
+          "Remove stale JSONL index entries that no longer have files or SQLite records. Requires confirm=true; otherwise returns a preview only.",
+        outputSchema: TOOL_OUTPUT_SCHEMA,
+        inputSchema: z.object({
+          root: z.string().optional(),
+          confirm: z.boolean().optional().describe("Must be true to rewrite JSONL indexes. Omit or false to return preview only."),
+        }),
+        annotations: {
+          destructiveHint: true,
+          readOnlyHint: false,
+          idempotentHint: false,
+        },
+      },
+      async ({ root, confirm }) => {
+        const scan = await scanCodexRoot(root);
+        if (!confirm) {
+          const preview = previewCleanupStaleIndexes(scan);
+          return textResult("Cleanup was not executed. Pass confirm=true to rewrite JSONL indexes.", {
+            preview,
+            requiresConfirmation: true,
+          });
+        }
+  
+        const result = await cleanupStaleIndexes(scan);
+        return textResult(`Cleaned ${result.staleSessionIds.length} stale session indexes.`, { result });
+      },
+    );
   } // end if (profile === "admin")
 
   server.registerTool(

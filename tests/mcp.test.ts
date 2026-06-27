@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -1652,5 +1652,19 @@ describe("mcp server --profile", () => {
   it("parseProfile returns read-only when --profile read-only is passed", async () => {
     const { parseProfile } = await import("../src/mcp/server.js");
     expect(parseProfile(["node", "server.js", "--profile", "read-only"])).toBe("read-only");
+  });
+
+  it("parseProfile exits with code 1 when --profile is passed without a value", async () => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => { throw new Error("exit"); });
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const { parseProfile } = await import("../src/mcp/server.js");
+    try {
+      expect(() => parseProfile(["node", "server.js", "--profile"])).toThrow("exit");
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("--profile requires a value"));
+    } finally {
+      exitSpy.mockRestore();
+      stderrSpy.mockRestore();
+    }
   });
 });

@@ -22,8 +22,8 @@
 
 | 依赖 | 状态 | 说明 |
 |---|---|---|
-| T9/0.5.2 发布 | **未发布** | sqlite_home resolver、.jsonl.zst 安全处理、memories watch、compressed rollout。代码在本地工作树，未 bump version/未 npm publish |
-| 0.5.2 作为 base | **阻塞** | v0.6.0 应基于 0.5.2 而非 0.5.1，否则会丢失兼容修复 |
+| T9/0.5.2 发布 | ✅ git 已发布 | `3282e40`，tag `v0.5.2` 已推送；npm publish 待用户手动执行 |
+| 0.5.2 作为 base | ✅ 已解除 | v0.6.0 基于 0.5.2 构建，commit 链完整 |
 
 ### 执行进度
 
@@ -48,9 +48,11 @@
 | 14. examples/ 死链指向 skills/ 规范路径 | ✅ 完成 | `6d5ca26` |
 | 15. 加防漂移 guard 测试（root==skills 三类文档字节一致） | ✅ 完成 | `6d5ca26` |
 | 16. 加 read-only callTool 被拒行为测试 | ✅ 完成 | `6d5ca26` |
+| 17. 修 `--profile` 缺值静默降级 bug + 测试 | ✅ 完成 | `a9055d6` |
+| 18. admin block 缩进修正 | ✅ 完成 | `a9055d6` |
 
-**实际状态**: 代码 + 文档全部完成，204 测试通过（含 1 个 profile 行为测试 + 防漂移 guard）。
-**当前阻塞**: 仅剩 npm publish（git/tag 已推送 `62da801`，tag `v0.6.0`）。0.5.2 与 0.6.0 的 npm publish 需用户手动 `npm login` 后执行，0.6.0 必须排在 0.5.2 之后。
+**实际状态**: 代码 + 文档全部完成，205 测试通过。tag `v0.6.0` 已重打到 `a9055d6`。
+**当前阻塞**: 仅剩 npm publish。需用户 `npm login` 后先发 0.5.2 再发 0.6.0。
 
 ### 产品定位更新（rev4）
 
@@ -449,44 +451,45 @@ adapters/factory-droid/
 
 ### MCP profile 验收
 
-- [ ] `codex-sessions-mcp` 无参数 → 默认 read-only，注册 15 个 tools
-- [ ] `codex-sessions-mcp --profile read-only` → 注册 15 个 tools
-- [ ] `codex-sessions-mcp --profile admin` → 注册全部 20 个 tools
-- [ ] read-only profile 不暴露 `delete_sessions` / `restore_sessions` / `purge_trash` / `cleanup_session_indexes` / `cleanup_stale_indexes`
-- [ ] `codex-sessions-mcp --profile invalid` → 非零退出，stderr 输出错误信息
-- [ ] `codex-sessions-mcp --version` → 输出版本号，不启动 MCP stdio server
+- [x] `codex-sessions-mcp` 无参数 → 默认 read-only，注册 15 个 tools
+- [x] `codex-sessions-mcp --profile read-only` → 注册 15 个 tools
+- [x] `codex-sessions-mcp --profile admin` → 注册全部 20 个 tools
+- [x] read-only profile 不暴露 `delete_sessions` / `restore_sessions` / `purge_trash` / `cleanup_session_indexes` / `cleanup_stale_indexes`
+- [x] `codex-sessions-mcp --profile invalid` → 非零退出，stderr 输出错误信息
+- [x] `codex-sessions-mcp --profile`（缺值） → 非零退出，stderr 输出错误信息
+- [x] `codex-sessions-mcp --version` → 输出版本号，不启动 MCP stdio server
 
 ### Skill 包验收
 
-- [ ] skill 目录自包含：`SKILL.md` + `docs/SKILL_DETAIL.md` + `docs/SAFETY.md` 在同一目录下
-- [ ] SKILL.md 精简到 ~80-100 行
-- [ ] SKILL.md 中对 `docs/` 的引用路径正确（相对路径）
-- [ ] `npm pack --dry-run` 输出包含完整 skill 目录和 adapters 目录内容
-- [ ] README 不能说"全局 MCP 是推荐方式"
+- [x] skill 目录自包含：`SKILL.md` + `docs/SKILL_DETAIL.md` + `docs/SAFETY.md` 在同一目录下
+- [x] SKILL.md 精简到 ~80-100 行（实际 90 行）
+- [x] SKILL.md 中对 `docs/` 的引用路径正确（相对路径）
+- [x] `npm pack --dry-run` 输出包含完整 skill 目录和 adapters 目录内容
+- [x] README 不能说"全局 MCP 是推荐方式"
 
 ### Adapters 验收
 
-- [ ] `adapters/amp/mcp.json` 存在且只使用 `--profile read-only`
-- [ ] `adapters/amp/mcp.json` 的 `includeTools` 不包含任何 admin-only tool
-- [ ] `adapters/amp/README.md` 说明安装步骤
-- [ ] `adapters/claude-code/README.md` 包含 skill 安装路径和 MCP 配置示例
-- [ ] `adapters/codex/README.md` 包含 AGENTS.md 推荐片段
-- [ ] `adapters/cursor/README.md` 包含 `.cursor/mcp.json` 配置示例
-- [ ] `adapters/factory-droid/README.md` 包含 `droid mcp add` 示例
-- [ ] 所有 adapter README 不能暗示该生态是 CSM 的主架构
+- [x] `adapters/amp/mcp.json` 存在且只使用 `--profile read-only`
+- [x] `adapters/amp/mcp.json` 的 `includeTools` 不包含任何 admin-only tool
+- [x] `adapters/amp/README.md` 说明安装步骤
+- [x] `adapters/claude-code/README.md` 包含 skill 安装路径和 MCP 配置示例
+- [x] `adapters/codex/README.md` 包含 AGENTS.md 推荐片段
+- [x] `adapters/cursor/README.md` 包含 `.cursor/mcp.json` 配置示例
+- [x] `adapters/factory-droid/README.md` 包含 `droid mcp add` 示例
+- [x] 所有 adapter README 不能暗示该生态是 CSM 的主架构
 
 ### docs 安全语义验收
 
-- [ ] 文档明确说明 `verify` 是 logical live-surface verification，不是 byte-forensic cleanup
-- [ ] 文档明确说明 `verify` 不检查：SQLite WAL、SQLite free pages、app/terminal logs、backups、exports、trash bundles、filesystem slack
-- [ ] 文档明确说明 logs-only residue 不属于普通 delete 语义
-- [ ] 文档明确说明 rollback 是 best-effort，不是 crash-safe transaction
+- [x] 文档明确说明 `verify` 是 logical live-surface verification，不是 byte-forensic cleanup
+- [x] 文档明确说明 `verify` 不检查：SQLite WAL、SQLite free pages、app/terminal logs、backups、exports、trash bundles、filesystem slack
+- [x] 文档明确说明 logs-only residue 不属于普通 delete 语义
+- [x] 文档明确说明 rollback 是 best-effort，不是 crash-safe transaction
 
 ### Migration 验收
 
-- [ ] CHANGELOG 包含 deliberate MCP exposure change 说明
-- [ ] README 包含 migration note：MCP 默认从 20 tools 变为 15 tools（read-only profile）
-- [ ] 现有 MCP 用户升级后如需全部 tools，文档指引使用 `--profile admin`
+- [x] CHANGELOG 包含 deliberate MCP exposure change 说明
+- [x] README 包含 migration note：MCP 默认从 20 tools 变为 15 tools（read-only profile）
+- [x] 现有 MCP 用户升级后如需全部 tools，文档指引使用 `--profile admin`
 
 ## 实施顺序
 
