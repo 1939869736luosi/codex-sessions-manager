@@ -1,0 +1,6 @@
+{
+  "codex-sessions": {
+    "command": "codex-sessions-mcp",
+    "args": ["--profile", "read-only"]
+  }
+}

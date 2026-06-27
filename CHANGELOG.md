@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.0
+
+### Breaking Changes
+
+- **MCP default profile changed**: MCP server now defaults to `read-only` profile (15 tools). Destructive tools (`delete_sessions`, `restore_sessions`, `purge_trash`, `cleanup_session_indexes`, `cleanup_stale_indexes`) require `--profile admin`. This is a deliberate safety change. Existing users who relied on all 20 tools being available by default must add `--profile admin` to their MCP config args.
+
+### Added
+
+- `--profile read-only|admin` flag for MCP server. Invalid values exit with code 1.
+- Self-contained skill directory at `skills/codex-sessions-manager/` with SKILL.md, docs/SKILL_DETAIL.md, and docs/SAFETY.md.
+- Ecosystem adapters in `adapters/` for Amp, Claude Code, OpenAI Codex, Cursor, and Factory Droid.
+- Detailed tool reference at `skills/codex-sessions-manager/docs/SKILL_DETAIL.md` with full CLI/MCP parameter documentation.
+
+### Changed
+
+- SKILL.md slimmed from 390 lines to ~90 lines (routing file only). Full reference moved to SKILL_DETAIL.md.
+- README restructured: "Use with AI Agents" section now prioritizes CLI > Skill > MCP (optional), with ecosystem adapter table.
+- Architecture is now CLI-first. MCP is optional/advanced, not the primary interface.
+
 ## 0.5.2
 
 ### Added

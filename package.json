@@ -1,6 +1,6 @@
 {
   "name": "codex-sessions-manager",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "description": "Audit and clean local Codex session leftovers: list, export, delete, trash, restore, verify, and cleanup — via CLI or MCP server.",
   "type": "module",
   "bin": {
@@ -16,6 +16,8 @@
     "docs/SAFETY.md",
     "docs/UNKNOWN_GLOBAL_STATE_RULES.md",
     "SKILL.md",
+    "skills/codex-sessions-manager",
+    "adapters",
     "agents/openai.yaml",
     "examples/codex-sessions-manager.SKILL.md",
     "LICENSE"

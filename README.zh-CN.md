@@ -119,24 +119,66 @@ codex-sessions verify <session-id>
 | **会话家族** | 只读查看 parent、child、ancestor、descendant、sibling、subagent、`/fork`、`/side` 和 impact；人类输出默认使用短 `source` 标签，`--full` 显示更完整 |
 | **子对话感知** | 父会话和子会话仍是独立 session；删除、导出、验证都不会自动递归 |
 
-## 给 AI Agent 用（MCP）
+## 给 AI Agent 用
 
-加到你的 MCP 配置：
+### 1. CLI（通用，所有生态）
+
+任何能执行 shell 命令的 AI agent 都可以直接使用：
+
+```bash
+codex-sessions list --limit 10
+codex-sessions audit <session-id>
+codex-sessions delete <session-id>   # 不加 --yes 只做预览
+```
+
+适用于 Amp、Claude Code、Codex、Cursor、Factory Droid 及任何有 shell 权限的 agent。
+
+### 2. Skill（Claude Code、Amp）
+
+复制自包含的 skill 目录获得更完整的 agent 集成：
+
+```bash
+# Claude Code
+mkdir -p ~/.claude/skills/codex-sessions-manager
+cp -r skills/codex-sessions-manager/* ~/.claude/skills/codex-sessions-manager/
+
+# Amp
+mkdir -p .agents/skills/codex-sessions-manager
+cp -r skills/codex-sessions-manager/* .agents/skills/codex-sessions-manager/
+```
+
+### 3. MCP（可选，进阶）
+
+需要结构化 JSON 响应时使用：
 
 ```json
 {
   "mcpServers": {
     "codex-sessions": {
       "command": "codex-sessions-mcp",
-      "args": []
+      "args": ["--profile", "read-only"]
     }
   }
 }
 ```
 
-暴露 20 个工具：`inspect_root`、`list_sessions`、`summarize_sources`、`list_projects`、`get_session`、`get_session_family`、`audit_session`、`audit_root`、`preview_root_delete`、`export_session_backup`、`preview_delete_sessions`、`plan_delete_sessions`、`preview_delete_plan`、`delete_sessions`、`list_trash`、`restore_sessions`、`purge_trash`、`cleanup_session_indexes`、`cleanup_stale_indexes`、`verify_sessions`。
+默认 **read-only** profile（15 个工具）。需要破坏性操作时使用 `--profile admin`（20 个工具）。
 
-`summarize_sources`、`get_session_family`、`audit_session`、`audit_root`、`preview_root_delete`、`plan_delete_sessions` 和 `preview_delete_plan` 是只读工具，不需要确认。`get_session_family` 支持 `mode: full | children | parents | subagents | impact`，也支持可选 `sourceKind`；`impact` 只是关系上下文，不是删除建议，也不是 delete preview。`plan_delete_sessions` 对齐 CLI `plan-delete`：explicit ID 可生成只读 `selectedIds`，include flags 也只读；sourceKind candidate mode 必须传 `sourceKind + limit`，且只返回 `candidateIds`。`preview_delete_plan` 对齐 CLI `preview-plan`；stale plan 会返回 `stale=true`，不产生当前 `deletePreview`。所有破坏性操作需要先单独 preview，再传 `confirm: true`；不确认时，delete 和 cleanup 工具只返回预览。
+### 4. 生态适配器
+
+各平台的具体配置指南在 `adapters/` 目录下：
+
+| 平台 | 适配器 | 核心特性 |
+|------|--------|----------|
+| Amp | [`adapters/amp/`](adapters/amp/) | Skill 内 `mcp.json` 延迟加载 |
+| Claude Code | [`adapters/claude-code/`](adapters/claude-code/) | Skill 目录 + MCP 配置 |
+| OpenAI Codex | [`adapters/codex/`](adapters/codex/) | AGENTS.md 片段 + CLI 模板 |
+| Cursor | [`adapters/cursor/`](adapters/cursor/) | `.cursor/mcp.json` 示例 |
+| Factory Droid | [`adapters/factory-droid/`](adapters/factory-droid/) | `droid mcp add` 一行接入 |
+
+### 升级说明（v0.5.x → v0.6.0）
+
+MCP 默认从 20 个工具缩减为 15 个（read-only profile）。如需全部工具，在 MCP 配置中添加 `--profile admin`。这是刻意的安全改动，不是 regression。
 
 ## CLI 命令
 
@@ -304,7 +346,9 @@ SQLite 可以在 `~/.codex` 顶层，也可以在 `config.toml sqlite_home` / `C
 - [安全策略](./SECURITY.md) — 报告数据丢失、删除不完整、恢复、回滚、路径处理和本地历史泄露问题
 - [安全指南](./docs/SAFETY.md) — 删除/回收站/恢复/清除前必读
 - [更新日志](./CHANGELOG.md) — 版本记录
-- [SKILL.md](./SKILL.md) — Claude Code / Codex 的 AI 技能说明
+- [SKILL.md](./SKILL.md) — AI 技能说明（精简路由文件，~90 行）
+- [详细工具参考](./skills/codex-sessions-manager/docs/SKILL_DETAIL.md) — 完整 CLI/MCP 参数文档
+- [生态适配器](./adapters/) — Amp、Claude Code、Codex、Cursor、Factory Droid 各平台配置指南
 
 ## 开发
 

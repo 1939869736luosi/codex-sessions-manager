@@ -130,24 +130,66 @@ After deletion, run `verify` to confirm no residue remains in the surfaces this 
 | **Session family** | Read-only parent, child, ancestor, descendant, sibling, subagent, `/fork`, `/side`, and impact views; human output uses short `source` labels unless `--full` is used |
 | **Side conversations** | Parent and child sessions stay separate; delete/export/verify never recurses automatically |
 
-## Use with AI Agents (MCP)
+## Use with AI Agents
 
-Add to your MCP config:
+### 1. CLI (Universal, All Ecosystems)
+
+Any AI agent that can run shell commands can use codex-sessions-manager directly:
+
+```bash
+codex-sessions list --limit 10
+codex-sessions audit <session-id>
+codex-sessions delete <session-id>   # preview only without --yes
+```
+
+This works in Amp, Claude Code, Codex, Cursor, Factory Droid, and any other agent with shell access.
+
+### 2. Skill (Claude Code, Amp)
+
+Copy the self-contained skill directory for richer agent integration:
+
+```bash
+# Claude Code
+mkdir -p ~/.claude/skills/codex-sessions-manager
+cp -r skills/codex-sessions-manager/* ~/.claude/skills/codex-sessions-manager/
+
+# Amp
+mkdir -p .agents/skills/codex-sessions-manager
+cp -r skills/codex-sessions-manager/* .agents/skills/codex-sessions-manager/
+```
+
+### 3. MCP (Optional, Advanced)
+
+For agents that benefit from structured JSON responses:
 
 ```json
 {
   "mcpServers": {
     "codex-sessions": {
       "command": "codex-sessions-mcp",
-      "args": []
+      "args": ["--profile", "read-only"]
     }
   }
 }
 ```
 
-20 tools exposed: `inspect_root`, `list_sessions`, `summarize_sources`, `list_projects`, `get_session`, `get_session_family`, `audit_session`, `audit_root`, `preview_root_delete`, `export_session_backup`, `preview_delete_sessions`, `plan_delete_sessions`, `preview_delete_plan`, `delete_sessions`, `list_trash`, `restore_sessions`, `purge_trash`, `cleanup_session_indexes`, `cleanup_stale_indexes`, `verify_sessions`.
+Default profile is **read-only** (15 tools). For destructive operations, use `--profile admin` (20 tools).
 
-`summarize_sources`, `get_session_family`, `audit_session`, `audit_root`, `preview_root_delete`, `plan_delete_sessions`, and `preview_delete_plan` are read-only and do not need confirmation. `get_session_family` accepts `mode: full | children | parents | subagents | impact` plus optional `sourceKind`; `impact` is relationship context, not deletion advice and not a delete preview. `plan_delete_sessions` mirrors CLI `plan-delete`: explicit IDs can produce read-only `selectedIds`, include flags are read-only, and sourceKind candidate mode requires `sourceKind + limit` and returns `candidateIds` only. `preview_delete_plan` mirrors CLI `preview-plan`; stale plans return `stale=true` with no current `deletePreview`. Destructive tools require explicit confirmation. Without confirmation, delete and cleanup tools return previews only.
+### 4. Ecosystem Adapters
+
+Platform-specific setup guides are in the `adapters/` directory:
+
+| Platform | Adapter | Key Feature |
+|----------|---------|-------------|
+| Amp | [`adapters/amp/`](adapters/amp/) | Skill-bundled `mcp.json` for deferred loading |
+| Claude Code | [`adapters/claude-code/`](adapters/claude-code/) | Skill directory + MCP config |
+| OpenAI Codex | [`adapters/codex/`](adapters/codex/) | AGENTS.md snippet + CLI templates |
+| Cursor | [`adapters/cursor/`](adapters/cursor/) | `.cursor/mcp.json` example |
+| Factory Droid | [`adapters/factory-droid/`](adapters/factory-droid/) | `droid mcp add` one-liner |
+
+### Migration Note (v0.5.x to v0.6.0)
+
+MCP default changed from 20 tools to 15 tools (read-only profile). If you need all tools, add `--profile admin` to your MCP config args. This is a deliberate safety change, not a regression.
 
 ## CLI Reference
 
@@ -315,7 +357,9 @@ Compressed `.jsonl.zst` files are covered as session files for scan, preview, de
 - [Security policy](./SECURITY.md) — report data-loss, incomplete-deletion, restore, rollback, path, and local-history exposure issues
 - [Safety guide](./docs/SAFETY.md) — read before delete/trash/restore/purge
 - [Changelog](./CHANGELOG.md) — release notes
-- [SKILL.md](./SKILL.md) — AI skill instructions for Claude Code / Codex
+- [SKILL.md](./SKILL.md) — AI skill instructions (slim routing file, ~90 lines)
+- [Detailed tool reference](./skills/codex-sessions-manager/docs/SKILL_DETAIL.md) — full CLI/MCP parameter reference
+- [Ecosystem adapters](./adapters/) — platform-specific setup for Amp, Claude Code, Codex, Cursor, Factory Droid
 
 ## Development
 
