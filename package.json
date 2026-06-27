@@ -14,6 +14,7 @@
     "SECURITY.md",
     "CHANGELOG.md",
     "docs/SAFETY.md",
+    "docs/SKILL_DETAIL.md",
     "docs/UNKNOWN_GLOBAL_STATE_RULES.md",
     "SKILL.md",
     "skills/codex-sessions-manager",
