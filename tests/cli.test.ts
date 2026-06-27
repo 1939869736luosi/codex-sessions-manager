@@ -934,6 +934,22 @@ describe("cli", () => {
     expect(unknownRules).not.toContain("/Users/");
     expect(unknownRules).not.toContain("2026-");
     expect(unknownRules).toContain("do not issue a preview token");
+
+    const rootSkill = await readFile("SKILL.md", "utf8");
+    const skillDirSkill = await readFile("skills/codex-sessions-manager/SKILL.md", "utf8");
+    expect(rootSkill).toBe(skillDirSkill);
+    const rootDetail = await readFile("docs/SKILL_DETAIL.md", "utf8");
+    const skillDirDetail = await readFile("skills/codex-sessions-manager/docs/SKILL_DETAIL.md", "utf8");
+    expect(rootDetail).toBe(skillDirDetail);
+    const rootSafety = await readFile("docs/SAFETY.md", "utf8");
+    const skillDirSafety = await readFile("skills/codex-sessions-manager/docs/SAFETY.md", "utf8");
+    expect(rootSafety).toBe(skillDirSafety);
+    const exampleSkill = await readFile("examples/codex-sessions-manager.SKILL.md", "utf8");
+    expect(exampleSkill).toContain("../skills/codex-sessions-manager/docs/SKILL_DETAIL.md");
+    expect(exampleSkill).toContain("../skills/codex-sessions-manager/docs/SAFETY.md");
+    expect(packageJson.files).toContain("docs/SKILL_DETAIL.md");
+    expect(packageJson.files).toContain("skills/codex-sessions-manager");
+    expect(packageJson.files).toContain("adapters");
   });
 
   it("deletes sessions when --yes is passed", async () => {

@@ -86,5 +86,5 @@ Invalid `--profile` values exit with code 1. Default is read-only for safety.
 
 For full CLI/MCP parameter reference, safety model, and advanced rules:
 
-- [Detailed tool reference](docs/SKILL_DETAIL.md)
-- [Safety guide](docs/SAFETY.md)
+- [Detailed tool reference](../skills/codex-sessions-manager/docs/SKILL_DETAIL.md)
+- [Safety guide](../skills/codex-sessions-manager/docs/SAFETY.md)

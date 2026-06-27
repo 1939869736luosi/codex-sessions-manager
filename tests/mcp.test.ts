@@ -1621,6 +1621,24 @@ describe("mcp server --profile", () => {
     }
   });
 
+  it("read-only profile rejects calling an admin tool", async () => {
+    const { client, server } = await createConnectedClient("read-only");
+    try {
+      const result = await client.callTool({
+        name: "delete_sessions",
+        arguments: { sessionIds: ["unused-id"], confirm: false },
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content[0]).toMatchObject({
+        type: "text",
+        text: expect.stringContaining("delete_sessions not found"),
+      });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("parseProfile returns read-only by default", async () => {
     const { parseProfile } = await import("../src/mcp/server.js");
     expect(parseProfile(["node", "server.js"])).toBe("read-only");

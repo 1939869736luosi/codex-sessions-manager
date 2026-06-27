@@ -3,6 +3,7 @@
 > **Oracle Review Status**: Reviewed. All feedback integrated (rev4, 2026-06-27).
 > rev2 → rev3 (2026-05-27): 从"不做任何生态特有适配"改为"核心不站队 + 各生态薄适配文档/配置"。
 > rev3 → rev4 (2026-06-27): 更新 base version 为 0.5.2，同步项目定位变化，新增前置依赖和进度追踪。
+> rev4 → rev5 (2026-06-27): 实现全部完成并推送（`a5a333d`/`85ac0cb`/`62da801`）。进度表标记完成；记录 post-review 修复（examples 死链、防漂移 guard 测试、read-only 行为测试）。仅剩 npm publish 待用户手动执行。
 
 ## 目标
 
@@ -26,25 +27,30 @@
 
 ### 执行进度
 
-| 步骤 | 状态 | 预估工作量 |
+| 步骤 | 状态 | commit |
 |---|---|---|
 | **Session 1: 代码 + 测试** | | |
-| 1. `src/mcp/server.ts` --profile 实现 | 未开始 | ~1h |
-| 2. 测试 MCP profile 验收 | 未开始 | ~30min |
+| 1. `src/mcp/server.ts` --profile 实现 | ✅ 完成 | `a5a333d` |
+| 2. 测试 MCP profile 验收 | ✅ 完成 | `a5a333d` |
 | **Session 2: 文档 + adapters + 发版** | | |
-| 3. 创建 `skills/` 自包含目录 | 未开始 | ~15min |
-| 4. `SKILL_DETAIL.md` 从 SKILL.md 拆出 | 未开始 | ~2h（编辑量最大） |
-| 5. `SKILL.md` 重写精简版 | 未开始 | ~1h |
-| 6. `examples/` 同步精简 | 未开始 | ~15min |
-| 7. `adapters/` 5 个生态薄适配 | 未开始 | ~1.5h |
-| 8. README + README.zh-CN 重构 | 未开始 | ~1.5h |
-| 9. CHANGELOG migration note | 未开始 | ~15min |
-| 10. package.json files + version bump | 未开始 | ~15min |
-| 11. npm pack 验证 | 未开始 | ~10min |
-| 12. 全量验收 checklist | 未开始 | ~30min |
+| 3. 创建 `skills/` 自包含目录 | ✅ 完成 | `85ac0cb` |
+| 4. `SKILL_DETAIL.md` 从 SKILL.md 拆出 | ✅ 完成 | `85ac0cb` |
+| 5. `SKILL.md` 重写精简版（90 行） | ✅ 完成 | `85ac0cb` |
+| 6. `examples/` 同步精简 | ✅ 完成 | `85ac0cb` |
+| 7. `adapters/` 5 个生态薄适配 | ✅ 完成 | `85ac0cb` |
+| 8. README + README.zh-CN 重构 | ✅ 完成 | `85ac0cb` |
+| 9. CHANGELOG migration note | ✅ 完成 | `85ac0cb` |
+| 10. package.json files + version bump 0.6.0 | ✅ 完成 | `85ac0cb` |
+| 11. npm pack 验证 | ✅ 完成 | — |
+| 12. 全量验收 checklist | ✅ 完成 | — |
+| **Post-review 修复（5 步 review 发现）** | | |
+| 13. 修 root SKILL.md 死链 + amp includeTools | ✅ 完成 | `62da801` |
+| 14. examples/ 死链指向 skills/ 规范路径 | ✅ 完成 | 待提交 |
+| 15. 加防漂移 guard 测试（root==skills 三类文档字节一致） | ✅ 完成 | 待提交 |
+| 16. 加 read-only callTool 被拒行为测试 | ✅ 完成 | 待提交 |
 
-**预估总工作量**: ~9h（2 个 session）
-**当前阻塞**: T9/0.5.2 未发布
+**实际状态**: 代码 + 文档全部完成，204 测试通过（含 1 个 profile 行为测试 + 防漂移 guard）。
+**当前阻塞**: 仅剩 npm publish（git/tag 已推送 `62da801`，tag `v0.6.0`）。0.5.2 与 0.6.0 的 npm publish 需用户手动 `npm login` 后执行，0.6.0 必须排在 0.5.2 之后。
 
 ### 产品定位更新（rev4）
 
