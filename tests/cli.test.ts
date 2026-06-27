@@ -1041,7 +1041,7 @@ describe("cli", () => {
     expect(audit.overallStatus).toEqual(["present", "risky-global-state"]);
     expect(audit.surfaces.globalStateUnknown.count).toBe(1);
     expect(audit.surfaces.globalStateUnknown.paths).toEqual(["$.some-user-setting"]);
-    expect(audit.surfaces.sqlite.rows).toBe(7);
+    expect(audit.surfaces.sqlite.rows).toBe(6);
     expect(audit.familySummary.childIds).toEqual([FIXTURE_IDS.ARCHIVED_ID]);
     expect(audit.recommendedNextCommand).toBe(`codex-sessions delete ${FIXTURE_IDS.ACTIVE_ID} --root ${fixture.rootDir}`);
     expect(audit.recommendedNextCommand).not.toContain("--yes");

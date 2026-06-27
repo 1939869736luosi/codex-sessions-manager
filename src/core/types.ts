@@ -35,6 +35,9 @@ export interface SourceInfo {
 
 export interface CodexRootPaths {
   rootPath: string;
+  sqliteHomePath: string;
+  sqliteHomeSource: "CODEX_SQLITE_HOME" | "config.toml" | "root";
+  sqliteHomeConfigPath: string | null;
   sessionsDir: string;
   archivedDir: string | null;
   sessionIndexPath: string | null;
@@ -42,8 +45,10 @@ export interface CodexRootPaths {
   sqlitePath: string | null;
   logsSqlitePath: string | null;
   goalsSqlitePath: string | null;
+  memoriesSqlitePath: string | null;
   globalStatePath: string | null;
   shellSnapshotsDir: string | null;
+  warnings: string[];
 }
 
 export interface SessionIndexRecord {
@@ -95,6 +100,8 @@ export interface SessionTitleCandidate {
 export interface SessionFileTarget {
   id: string;
   bucket: "sessions" | "archived_sessions";
+  format: "jsonl" | "jsonl.zst";
+  compressed: boolean;
   absolutePath: string;
   relativePath: string;
   fileName: string;
@@ -755,12 +762,15 @@ export interface DeletePlanSurfaceFingerprint {
 
 export interface DeletePlanRootFingerprint {
   rootRealpath: string;
+  sqliteHomeRealpath: string | null;
+  sqliteHomeSource: CodexRootPaths["sqliteHomeSource"];
   sessionIndex: DeletePlanSurfaceFingerprint;
   history: DeletePlanSurfaceFingerprint;
   globalState: DeletePlanSurfaceFingerprint;
   sqlite: DeletePlanSurfaceFingerprint;
   logsSqlite: DeletePlanSurfaceFingerprint;
   goalsSqlite: DeletePlanSurfaceFingerprint;
+  memoriesSqlite: DeletePlanSurfaceFingerprint;
 }
 
 export interface DeletePlanSelectedSnapshot {
@@ -844,6 +854,7 @@ export interface BackupBundle {
   sessionFiles: Array<{
     path: string;
     text: string;
+    encoding?: "utf8" | "base64";
   }>;
   sessionIndexRecords: SessionIndexRecord[];
   historyRecords: HistoryRecord[];
@@ -892,6 +903,7 @@ export interface TrashBundle {
     sessionId: string;
     path: string;
     text: string;
+    encoding?: "utf8" | "base64";
   }>;
   shellSnapshots: Array<{
     sessionId: string;
@@ -1004,15 +1016,25 @@ export interface DoctorReport {
     trashDir: { path: string; exists: boolean; readable: boolean; entryCount: number };
   };
   sqlite: {
+    sqliteHomePath: string;
+    sqliteHomeSource: CodexRootPaths["sqliteHomeSource"];
+    sqliteHomeConfigPath: string | null;
     stateCandidates: string[];
     activeStatePath: string | null;
     logsCandidates: string[];
     activeLogsPath: string | null;
     goalsCandidates: string[];
     activeGoalsPath: string | null;
+    memoriesCandidates: string[];
+    activeMemoriesPath: string | null;
+    rootStateCandidates: string[];
+    rootLogsCandidates: string[];
+    rootGoalsCandidates: string[];
+    rootMemoriesCandidates: string[];
     stateTables: SqliteTableInspection[];
     logsTables: SqliteTableInspection[];
     goalsTables: SqliteTableInspection[];
+    memoriesTables: SqliteTableInspection[];
     warnings: string[];
   };
   globalState: {

@@ -1,4 +1,3 @@
-import os from "node:os";
 import path from "node:path";
 import { access, readdir, readFile } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
@@ -8,17 +7,12 @@ import {
   collectGlobalStateReferences,
   collectPossibleUnknownGlobalStateReferences,
 } from "./global-state.js";
+import { expandCodexPath, listVersionedSqlitePaths, resolveSqliteHome } from "./root.js";
 import { scanCodexRoot } from "./scan.js";
-import { inspectSqliteTables } from "./sqlite.js";
+import { inspectNamedSqliteTables, inspectSqliteTables } from "./sqlite.js";
 import type { DoctorReport, GlobalStateReference } from "./types.js";
 
 const TRASH_DIR_NAME = ".codex-sessions-trash";
-
-function expandHome(inputPath: string): string {
-  if (inputPath === "~") return os.homedir();
-  if (inputPath.startsWith("~/")) return path.join(os.homedir(), inputPath.slice(2));
-  return inputPath;
-}
 
 async function pathStatus(filePath: string): Promise<{ path: string; exists: boolean; readable: boolean }> {
   try {
@@ -32,22 +26,6 @@ async function pathStatus(filePath: string): Promise<{ path: string; exists: boo
     return { path: filePath, exists: true, readable: true };
   } catch {
     return { path: filePath, exists: true, readable: false };
-  }
-}
-
-async function listVersionedSqlite(rootPath: string, basename: "state" | "logs" | "goals"): Promise<string[]> {
-  try {
-    const entries = await readdir(rootPath);
-    return entries
-      .map((entry) => {
-        const match = entry.match(new RegExp(`^${basename}_(\\d+)\\.sqlite$`));
-        return match ? { entry, version: Number(match[1]) } : null;
-      })
-      .filter((entry): entry is { entry: string; version: number } => Boolean(entry))
-      .sort((left, right) => right.version - left.version)
-      .map((entry) => path.join(rootPath, entry.entry));
-  } catch {
-    return [];
   }
 }
 
@@ -89,8 +67,13 @@ function flattenExactKeyRefs(refsById: Map<string, GlobalStateReference[]>): Doc
     });
 }
 
+function uniqueMessages(messages: string[]): string[] {
+  return [...new Set(messages)];
+}
+
 export async function inspectCodexRoot(rootArg?: string): Promise<DoctorReport> {
-  const rootPath = path.resolve(expandHome(rootArg ?? "~/.codex"));
+  const rootPath = path.resolve(expandCodexPath(rootArg ?? "~/.codex"));
+  const sqliteHome = await resolveSqliteHome(rootPath);
   const sessionsDir = path.join(rootPath, "sessions");
   const archivedSessionsDir = path.join(rootPath, "archived_sessions");
   const sessionIndexPath = path.join(rootPath, "session_index.jsonl");
@@ -111,6 +94,11 @@ export async function inspectCodexRoot(rootArg?: string): Promise<DoctorReport> 
     stateCandidates,
     logsCandidates,
     goalsCandidates,
+    memoriesCandidates,
+    rootStateCandidates,
+    rootLogsCandidates,
+    rootGoalsCandidates,
+    rootMemoriesCandidates,
   ] = await Promise.all([
     pathStatus(sessionsDir),
     pathStatus(archivedSessionsDir),
@@ -119,9 +107,14 @@ export async function inspectCodexRoot(rootArg?: string): Promise<DoctorReport> 
     pathStatus(globalStatePath),
     pathStatus(shellSnapshotsDir),
     pathStatus(trashDir),
-    listVersionedSqlite(rootPath, "state"),
-    listVersionedSqlite(rootPath, "logs"),
-    listVersionedSqlite(rootPath, "goals"),
+    listVersionedSqlitePaths(sqliteHome.sqliteHomePath, "state"),
+    listVersionedSqlitePaths(sqliteHome.sqliteHomePath, "logs"),
+    listVersionedSqlitePaths(sqliteHome.sqliteHomePath, "goals"),
+    listVersionedSqlitePaths(sqliteHome.sqliteHomePath, "memories"),
+    listVersionedSqlitePaths(rootPath, "state"),
+    listVersionedSqlitePaths(rootPath, "logs"),
+    listVersionedSqlitePaths(rootPath, "goals"),
+    listVersionedSqlitePaths(rootPath, "memories"),
   ]);
 
   if (!sessionsStatus.readable) warnings.push("sessions/ 缺失或不可读。");
@@ -162,9 +155,24 @@ export async function inspectCodexRoot(rootArg?: string): Promise<DoctorReport> 
   const activeStatePath = stateCandidates[0] ?? null;
   const activeLogsPath = logsCandidates[0] ?? null;
   const activeGoalsPath = goalsCandidates[0] ?? null;
+  const activeMemoriesPath = memoriesCandidates[0] ?? null;
+  const dualHomeRootCandidateCount = [
+    ...rootStateCandidates,
+    ...rootLogsCandidates,
+    ...rootGoalsCandidates,
+    ...rootMemoriesCandidates,
+  ].length;
+
+  if (path.resolve(sqliteHome.sqliteHomePath) !== path.resolve(rootPath) && dualHomeRootCandidateCount > 0) {
+    sqliteWarnings.push(
+      `SQLite home 与 Codex root 分离：active SQLite home=${sqliteHome.sqliteHomePath}，root=${rootPath}；root 顶层仍有 ${dualHomeRootCandidateCount} 个 SQLite 候选，当前仅作 dual-home 警告，不作为 active DB。`,
+    );
+  }
+
   let stateTables: DoctorReport["sqlite"]["stateTables"] = [];
   let logsTables: DoctorReport["sqlite"]["logsTables"] = [];
   let goalsTables: DoctorReport["sqlite"]["goalsTables"] = [];
+  let memoriesTables: DoctorReport["sqlite"]["memoriesTables"] = [];
 
   try {
     stateTables = inspectSqliteTables(activeStatePath);
@@ -185,6 +193,13 @@ export async function inspectCodexRoot(rootArg?: string): Promise<DoctorReport> 
   } catch (error) {
     sqliteWarnings.push(`goals SQLite 无法读取：${error instanceof Error ? error.message : String(error)}`);
     goalsTables = inspectSqliteTables(null);
+  }
+
+  try {
+    memoriesTables = inspectNamedSqliteTables(activeMemoriesPath, ["stage1_outputs", "jobs"]);
+  } catch (error) {
+    sqliteWarnings.push(`memories SQLite 无法读取：${error instanceof Error ? error.message : String(error)}`);
+    memoriesTables = inspectNamedSqliteTables(null, ["stage1_outputs", "jobs"]);
   }
 
   warnings.push(...sqliteWarnings);
@@ -220,15 +235,25 @@ export async function inspectCodexRoot(rootArg?: string): Promise<DoctorReport> 
       },
     },
     sqlite: {
+      sqliteHomePath: sqliteHome.sqliteHomePath,
+      sqliteHomeSource: sqliteHome.sqliteHomeSource,
+      sqliteHomeConfigPath: sqliteHome.sqliteHomeConfigPath,
       stateCandidates,
       activeStatePath,
       logsCandidates,
       activeLogsPath,
       goalsCandidates,
       activeGoalsPath,
+      memoriesCandidates,
+      activeMemoriesPath,
+      rootStateCandidates,
+      rootLogsCandidates,
+      rootGoalsCandidates,
+      rootMemoriesCandidates,
       stateTables,
       logsTables,
       goalsTables,
+      memoriesTables,
       warnings: sqliteWarnings,
     },
     globalState: {
@@ -241,6 +266,6 @@ export async function inspectCodexRoot(rootArg?: string): Promise<DoctorReport> 
       sessionCount,
       warnings: scanWarnings,
     },
-    warnings,
+    warnings: uniqueMessages(warnings),
   };
 }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { appendFile, chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import Database from "better-sqlite3";
@@ -67,6 +67,130 @@ describe("core integration", () => {
     expect(resolveSessions(scan, [FIXTURE_IDS.ARCHIVED_ID])[0].kind).toBe("archived");
     expect(resolveSessions(scan, [FIXTURE_IDS.ARCHIVED_ID])[0].sourceKind).toBe("subagent");
     expect(resolveSessions(scan, [FIXTURE_IDS.STALE_ID])[0].kind).toBe("stale");
+  });
+
+  it("uses config sqlite_home and reports dual SQLite homes", async () => {
+    const sqliteHome = path.join(fixture.rootDir, "sqlite");
+    await mkdir(sqliteHome, { recursive: true });
+    const statePath = path.join(sqliteHome, "state_5.sqlite");
+    const logsPath = path.join(sqliteHome, "logs_2.sqlite");
+    const goalsPath = path.join(sqliteHome, "goals_1.sqlite");
+    const memoriesPath = path.join(sqliteHome, "memories_1.sqlite");
+    await rename(fixture.paths.sqlite, statePath);
+    if (fixture.paths.logsSqlite) await rename(fixture.paths.logsSqlite, logsPath);
+    if (fixture.paths.goalsSqlite) await rename(fixture.paths.goalsSqlite, goalsPath);
+    await writeFile(path.join(fixture.rootDir, "config.toml"), 'sqlite_home = "./sqlite"\n', "utf8");
+    await writeFile(path.join(fixture.rootDir, "state_1.sqlite"), "", "utf8");
+
+    const memoriesDb = new Database(memoriesPath);
+    memoriesDb.exec(`
+      create table stage1_outputs (thread_id text primary key, raw_memory text);
+      create table jobs (id text primary key, thread_id text, status text);
+    `);
+    memoriesDb.close();
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const doctor = await inspectCodexRoot(fixture.rootDir);
+
+    expect(scan.root.sqliteHomePath).toBe(sqliteHome);
+    expect(scan.root.sqliteHomeSource).toBe("config.toml");
+    expect(scan.root.sqlitePath).toBe(statePath);
+    expect(resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID])[0].sqliteTitle).toBe(`Title ${FIXTURE_IDS.ACTIVE_ID}`);
+    expect(doctor.sqlite.activeMemoriesPath).toBe(memoriesPath);
+    expect(doctor.sqlite.memoriesTables).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ table: "stage1_outputs", exists: true }),
+        expect.objectContaining({ table: "jobs", exists: true }),
+      ]),
+    );
+    expect(doctor.warnings.join("\n")).toContain("dual-home");
+  });
+
+  it("lets CODEX_SQLITE_HOME override root SQLite discovery", async () => {
+    const oldSqliteHome = process.env.CODEX_SQLITE_HOME;
+    const sqliteHome = path.join(fixture.rootDir, "env-sqlite");
+    await mkdir(sqliteHome, { recursive: true });
+    const statePath = path.join(sqliteHome, "state_5.sqlite");
+    await rename(fixture.paths.sqlite, statePath);
+    if (fixture.paths.logsSqlite) await rename(fixture.paths.logsSqlite, path.join(sqliteHome, "logs_2.sqlite"));
+    if (fixture.paths.goalsSqlite) await rename(fixture.paths.goalsSqlite, path.join(sqliteHome, "goals_1.sqlite"));
+
+    try {
+      process.env.CODEX_SQLITE_HOME = sqliteHome;
+      const scan = await scanCodexRoot(fixture.rootDir);
+      expect(scan.root.sqliteHomeSource).toBe("CODEX_SQLITE_HOME");
+      expect(scan.root.sqlitePath).toBe(statePath);
+      expect(resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID])[0].sqliteTitle).toBe(`Title ${FIXTURE_IDS.ACTIVE_ID}`);
+    } finally {
+      if (oldSqliteHome === undefined) {
+        delete process.env.CODEX_SQLITE_HOME;
+      } else {
+        process.env.CODEX_SQLITE_HOME = oldSqliteHome;
+      }
+    }
+  });
+
+  it("prefers config sqlite_home over CODEX_SQLITE_HOME when both are set", async () => {
+    const oldSqliteHome = process.env.CODEX_SQLITE_HOME;
+    const configSqliteHome = path.join(fixture.rootDir, "config-sqlite");
+    const envSqliteHome = path.join(fixture.rootDir, "env-sqlite");
+    await mkdir(configSqliteHome, { recursive: true });
+    await mkdir(envSqliteHome, { recursive: true });
+    const configStatePath = path.join(configSqliteHome, "state_5.sqlite");
+    await rename(fixture.paths.sqlite, configStatePath);
+    await writeFile(path.join(envSqliteHome, "state_99.sqlite"), "", "utf8");
+    await writeFile(path.join(fixture.rootDir, "config.toml"), 'sqlite_home = "./config-sqlite"\n', "utf8");
+
+    try {
+      process.env.CODEX_SQLITE_HOME = envSqliteHome;
+      const scan = await scanCodexRoot(fixture.rootDir);
+      expect(scan.root.sqliteHomePath).toBe(configSqliteHome);
+      expect(scan.root.sqliteHomeSource).toBe("config.toml");
+      expect(scan.root.sqlitePath).toBe(configStatePath);
+      expect(resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID])[0].sqliteTitle).toBe(`Title ${FIXTURE_IDS.ACTIVE_ID}`);
+    } finally {
+      if (oldSqliteHome === undefined) {
+        delete process.env.CODEX_SQLITE_HOME;
+      } else {
+        process.env.CODEX_SQLITE_HOME = oldSqliteHome;
+      }
+    }
+  });
+
+  it("scans .jsonl.zst rollout files and restores them from trash without text corruption", async () => {
+    const compressedPath = `${fixture.paths.activeSessionFile}.zst`;
+    const compressedBytes = Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x00, 0x11, 0x22, 0x33]);
+    await writeFile(compressedPath, compressedBytes);
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const active = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID])[0];
+    expect(active.fileTargets.map((target) => target.format).sort()).toEqual(["jsonl", "jsonl.zst"]);
+    expect(active.fileTargets.find((target) => target.format === "jsonl.zst")).toMatchObject({
+      compressed: true,
+      relativePath: path.relative(fixture.rootDir, compressedPath),
+    });
+
+    const trashResult = await moveSessionsToTrash(scan, [active]);
+    await expect(readFile(compressedPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+    await restoreTrashEntry(fixture.rootDir, trashResult.trashEntry.trashId);
+    await expect(readFile(compressedPath)).resolves.toEqual(compressedBytes);
+  });
+
+  it("uses history preview for compressed-only sessions instead of reading compressed transcript bytes", async () => {
+    const compressedPath = `${fixture.paths.activeSessionFile}.zst`;
+    await writeFile(compressedPath, Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0xaa, 0xbb]));
+    await rename(fixture.paths.activeSessionFile, `${fixture.paths.activeSessionFile}.bak`);
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const active = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID])[0];
+    expect(active.fileTargets.map((target) => target.format)).toEqual(["jsonl.zst"]);
+
+    const timeline = await readSessionTimeline(active);
+    expect(timeline[0]).toMatchObject({
+      roleLabel: "历史输入 1",
+      body: "active prompt",
+    });
   });
 
   it("searches all title candidates while showing the session_index title by default", async () => {
@@ -256,6 +380,26 @@ describe("core integration", () => {
     });
   });
 
+  it("maps raw appServer source to appServer metadata without adding a new stable sourceKind", async () => {
+    const db = new Database(fixture.paths.sqlite);
+    db.prepare("update threads set source = ?, thread_source = null, agent_role = null, agent_nickname = null, agent_path = null where id = ?").run(
+      "appServer",
+      FIXTURE_IDS.ARCHIVED_ID,
+    );
+    db.close();
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const archived = resolveSessions(scan, [FIXTURE_IDS.ARCHIVED_ID])[0];
+
+    expect(archived.sourceKind).toBe("mcp");
+    expect(archived.sourceInfo).toMatchObject({
+      sourceKind: "mcp",
+      rawSource: "appServer",
+      officialSourceKind: "appServer",
+      threadSourceKind: null,
+    });
+  });
+
   it("keeps unknown sourceInfo explicit for sessions without source evidence", async () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     const stale = resolveSessions(scan, [FIXTURE_IDS.STALE_ID])[0];
@@ -317,7 +461,7 @@ describe("core integration", () => {
     expect(backup.shellSnapshots[0].text).toContain(FIXTURE_IDS.ACTIVE_ID);
     expect(backup.globalStateRefs).toHaveLength(3);
     expect(backup.sqlite.threads).toHaveLength(1);
-    expect(backup.sqlite.logs).toHaveLength(1);
+    expect(backup.sqlite.logs).toHaveLength(0);
     expect(backup.sqlite.threadGoals).toHaveLength(1);
   });
 
@@ -870,7 +1014,7 @@ describe("core integration", () => {
     expect(audit.surfaces.shellSnapshots.count).toBe(1);
     expect(audit.surfaces.sessionIndex.count).toBe(1);
     expect(audit.surfaces.history.count).toBe(1);
-    expect(audit.surfaces.sqlite.rows).toBe(7);
+    expect(audit.surfaces.sqlite.rows).toBe(6);
     expect(audit.surfaces.globalStateKnown.count).toBe(3);
     expect(audit.surfaces.globalStateUnknown.count).toBe(1);
     expect(audit.surfaces.globalStateUnknown.paths).toEqual(["$.some-user-setting"]);
@@ -1230,7 +1374,7 @@ describe("core integration", () => {
     expect(preview.totals.shellSnapshotFiles).toBe(1);
     expect(preview.totals.globalStateRefs).toBe(3);
     expect(preview.totals.possibleUnknownGlobalStateRefs).toBe(1);
-    expect(preview.totals.sqliteRows).toBe(7);
+    expect(preview.totals.sqliteRows).toBe(6);
     expect(result.validation.every((item) => item.filePathsRemaining.length === 0)).toBe(true);
     expect(result.validation.every((item) => item.shellSnapshotFilesRemaining.length === 0)).toBe(true);
     expect(result.validation.every((item) => item.globalStateRefsRemaining === 0)).toBe(true);
@@ -1240,7 +1384,7 @@ describe("core integration", () => {
     expect(result.validation.every((item) => item.historyRowsRemaining === 0)).toBe(true);
     expect(result.validation.every((item) => item.sqlite.stage1Rows === 0)).toBe(true);
     expect(result.validation.every((item) => item.sqlite.dynamicToolRows === 0)).toBe(true);
-    expect(result.validation.every((item) => item.sqlite.logRows === 0)).toBe(true);
+    expect(result.validation.every((item) => item.sqlite.logRows === 1)).toBe(true);
     expect(result.validation.every((item) => item.sqlite.threadGoalRows === 0)).toBe(true);
     expect(result.validation.every((item) => item.sqlite.threadRows === 0)).toBe(true);
     await expect(readFile(fixture.paths.activeShellSnapshot, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
@@ -1868,7 +2012,7 @@ describe("core integration", () => {
     expect(liveValidation[0].sessionIndexRowsRemaining).toBe(0);
     expect(liveValidation[0].historyRowsRemaining).toBe(0);
     expect(liveValidation[0].sqlite.threadRows).toBe(0);
-    expect(liveValidation[0].sqlite.logRows).toBe(0);
+    expect(liveValidation[0].sqlite.logRows).toBe(1);
 
     const restore = await restoreTrashEntry(fixture.rootDir, trashResult.trashEntry.trashId);
     const restoredScan = await scanCodexRoot(fixture.rootDir);
@@ -1890,7 +2034,7 @@ describe("core integration", () => {
     expect(restore.restoredSessionIndexRecords).toBe(1);
     expect(restore.restoredHistoryRecords).toBe(1);
     expect(restore.restoredGlobalStateRefs).toBe(3);
-    expect(restore.restoredSqliteRows.total).toBe(7);
+    expect(restore.restoredSqliteRows.total).toBe(6);
     expect(restore.skippedSqliteRows.total).toBe(0);
     await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
     await expect(readFile(fixture.paths.activeShellSnapshot, "utf8")).resolves.toContain(FIXTURE_IDS.ACTIVE_ID);
@@ -1996,27 +2140,21 @@ describe("core integration", () => {
     expect(validation[0].historyRowsRemaining).toBe(0);
   });
 
-  it("refuses restore when live dedicated logs have the same primary key", async () => {
+  it("does not restore or conflict on retained dedicated logs in new trash bundles", async () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID]);
     const trashResult = await moveSessionsToTrash(scan, sessions);
-    const logsDb = new Database(fixture.paths.logsSqlite as string);
-    logsDb.prepare(
-      `insert into logs (id, ts, ts_nanos, level, target, feedback_log_body, thread_id, process_uuid, estimated_bytes)
-       values (1, 99, 0, 'INFO', 'fixture', 'live unrelated log', ?, 'fixture-process', 18)`,
-    ).run(FIXTURE_IDS.UNRELATED_ID);
-    logsDb.close();
 
-    await expect(restoreTrashEntry(fixture.rootDir, trashResult.trashEntry.trashId)).rejects.toThrow("SQLite key conflict logs(id=1)");
+    const restore = await restoreTrashEntry(fixture.rootDir, trashResult.trashEntry.trashId);
 
     const verifyDb = new Database(fixture.paths.logsSqlite as string, { readonly: true });
-    const row = verifyDb.prepare("select feedback_log_body, thread_id from logs where id = 1").get() as {
-      feedback_log_body: string;
-      thread_id: string;
-    };
+    const activeLogs = verifyDb
+      .prepare("select count(*) as count from logs where thread_id = ?")
+      .get(FIXTURE_IDS.ACTIVE_ID) as { count: number };
     verifyDb.close();
-    expect(row).toEqual({ feedback_log_body: "live unrelated log", thread_id: FIXTURE_IDS.UNRELATED_ID });
-    await expect(readFile(fixture.paths.activeSessionFile, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    expect(restore.restoredSqliteRows.dedicatedLogs).toBe(0);
+    expect(activeLogs.count).toBe(1);
+    await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
   });
 
   it("refuses restore when live spawn edges have the same unique key", async () => {
@@ -2065,27 +2203,27 @@ describe("core integration", () => {
     expect(validation[0].historyRowsRemaining).toBe(0);
     expect(validation[0].globalStateRefsRemaining).toBe(0);
     expect(validation[0].sqlite.threadRows).toBe(0);
-    expect(validation[0].sqlite.logRows).toBe(0);
+    expect(validation[0].sqlite.logRows).toBe(1);
     expect(validation[0].sqlite.dynamicToolRows).toBe(0);
     expect(validation[0].sqlite.stage1Rows).toBe(0);
     expect(validation[0].sqlite.assignedAgentJobs).toBe(0);
     expect(validation[0].sqlite.threadGoalRows).toBe(0);
   });
 
-  it("rolls back state sqlite when dedicated logs restore fails after state rows were restored", async () => {
+  it("rolls back state sqlite when dedicated goals restore fails after state rows were restored", async () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID]);
     const trashResult = await moveSessionsToTrash(scan, sessions);
-    const logsDb = new Database(fixture.paths.logsSqlite as string);
-    logsDb.exec(`
-      create trigger fail_dedicated_log_restore
-      before insert on logs
+    const goalsDb = new Database(fixture.paths.goalsSqlite as string);
+    goalsDb.exec(`
+      create trigger fail_dedicated_goal_restore
+      before insert on thread_goals
       when new.thread_id = '${FIXTURE_IDS.ACTIVE_ID}'
       begin
-        select raise(abort, 'blocked dedicated logs restore');
+        select raise(abort, 'blocked dedicated goals restore');
       end;
     `);
-    logsDb.close();
+    goalsDb.close();
 
     await expect(restoreTrashEntry(fixture.rootDir, trashResult.trashEntry.trashId)).rejects.toThrow("恢复失败，已回滚");
 
@@ -2096,7 +2234,7 @@ describe("core integration", () => {
     expect(validation[0].historyRowsRemaining).toBe(0);
     expect(validation[0].globalStateRefsRemaining).toBe(0);
     expect(validation[0].sqlite.threadRows).toBe(0);
-    expect(validation[0].sqlite.logRows).toBe(0);
+    expect(validation[0].sqlite.logRows).toBe(1);
     expect(validation[0].sqlite.dynamicToolRows).toBe(0);
     expect(validation[0].sqlite.stage1Rows).toBe(0);
     expect(validation[0].sqlite.assignedAgentJobs).toBe(0);
@@ -2127,7 +2265,7 @@ describe("core integration", () => {
     db.close();
 
     expect(edgeCount.count).toBe(1);
-    expect(restore.restoredSqliteRows.total).toBe(13);
+    expect(restore.restoredSqliteRows.total).toBe(11);
   });
 
   it("purges a trash entry without touching restored live sessions", async () => {
@@ -2197,9 +2335,9 @@ describe("core integration", () => {
       expect(restore.restoredSessionFiles).toBe(1);
       expect(restore.restoredSqliteRows.total).toBe(5);
       expect(restore.skippedSqliteRows.threadGoals).toBe(1);
-      expect(restore.skippedSqliteRows.dedicatedLogs).toBe(1);
-      expect(restore.skippedSqliteTables).toEqual(["logs", "thread_goals"]);
-      expect(restore.warnings[0]).toContain("SQLite 有 2 条记录未恢复");
+      expect(restore.skippedSqliteRows.dedicatedLogs).toBe(0);
+      expect(restore.skippedSqliteTables).toEqual(["thread_goals"]);
+      expect(restore.warnings[0]).toContain("SQLite 有 1 条记录未恢复");
       expect(validation[0].sqlite.threadRows).toBe(1);
       expect(validation[0].sqlite.logRows).toBe(0);
       expect(validation[0].sqlite.threadGoalRows).toBe(0);

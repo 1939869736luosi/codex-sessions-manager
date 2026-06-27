@@ -15,7 +15,7 @@ export const SQLITE_KEY_TABLES = [
   "thread_goals",
 ] as const;
 
-const ASSOCIATION_COLUMNS_BY_TABLE: Record<(typeof SQLITE_KEY_TABLES)[number], string[]> = {
+const ASSOCIATION_COLUMNS_BY_TABLE: Record<string, string[]> = {
   threads: ["id"],
   logs: ["thread_id", "id"],
   thread_spawn_edges: ["parent_thread_id", "child_thread_id"],
@@ -23,6 +23,7 @@ const ASSOCIATION_COLUMNS_BY_TABLE: Record<(typeof SQLITE_KEY_TABLES)[number], s
   thread_dynamic_tools: ["thread_id"],
   stage1_outputs: ["thread_id"],
   thread_goals: ["thread_id"],
+  jobs: ["id", "job_id", "thread_id", "source_thread_id", "target_thread_id"],
 };
 
 const REQUIRED_RESTORE_COLUMNS_BY_TABLE: Record<string, string[]> = {
@@ -119,8 +120,12 @@ function getTableColumns(db: Database.Database, tableName: string): string[] {
 }
 
 export function inspectSqliteTables(sqlitePath: string | null): SqliteTableInspection[] {
+  return inspectNamedSqliteTables(sqlitePath, [...SQLITE_KEY_TABLES]);
+}
+
+export function inspectNamedSqliteTables(sqlitePath: string | null, tables: string[]): SqliteTableInspection[] {
   if (!sqlitePath) {
-    return SQLITE_KEY_TABLES.map((table) => ({
+    return tables.map((table) => ({
       table,
       exists: false,
       columns: [],
@@ -129,13 +134,13 @@ export function inspectSqliteTables(sqlitePath: string | null): SqliteTableInspe
   }
 
   return withDatabase(sqlitePath, true, (db) =>
-    SQLITE_KEY_TABLES.map((table) => {
+    tables.map((table) => {
       const columns = getTableColumns(db, table);
       return {
         table,
         exists: columns.length > 0 || tableExists(db, table),
         columns,
-        associationColumns: columns.filter((column) => ASSOCIATION_COLUMNS_BY_TABLE[table].includes(column)),
+        associationColumns: columns.filter((column) => (ASSOCIATION_COLUMNS_BY_TABLE[table] ?? []).includes(column)),
       };
     }),
   );
@@ -215,14 +220,6 @@ function collectColumnSessionIds(
   for (const row of rows) {
     addSessionId(row.value, ids);
   }
-}
-
-function selectSessionLogs(db: Database.Database, sessionId: string): Record<string, unknown>[] {
-  if (!hasSessionLogsTable(db)) {
-    return [];
-  }
-
-  return selectRows(db, "select * from logs where thread_id = ?", [sessionId]);
 }
 
 function addLogRows(
@@ -548,7 +545,6 @@ export function collectSqliteDeletionTotals(
 export function sumSqliteDeletionCounts(counts: SqliteDeletionCounts): number {
   return (
     counts.threadRows +
-    counts.logRows +
     counts.spawnEdgeRows +
     counts.assignedAgentJobs +
     counts.dynamicToolRows +
@@ -563,7 +559,6 @@ function deleteStateRows(sqlitePath: string | null, sessionIds: string[]): void 
   }
 
   withDatabase(sqlitePath, false, (db) => {
-    const deleteLogs = hasSessionLogsTable(db) ? db.prepare("delete from logs where thread_id = ?") : null;
     const deleteGoals = tableExists(db, "thread_goals") ? db.prepare("delete from thread_goals where thread_id = ?") : null;
     const deleteDynamicTools = tableExists(db, "thread_dynamic_tools")
       ? db.prepare("delete from thread_dynamic_tools where thread_id = ?")
@@ -581,34 +576,12 @@ function deleteStateRows(sqlitePath: string | null, sessionIds: string[]): void 
 
     const transaction = db.transaction((ids: string[]) => {
       for (const sessionId of ids) {
-        deleteLogs?.run(sessionId);
         deleteGoals?.run(sessionId);
         deleteDynamicTools?.run(sessionId);
         deleteStage1Outputs?.run(sessionId);
         deleteEdges?.run(sessionId, sessionId);
         nullAgentJobItems?.run(sessionId);
         deleteThread?.run(sessionId);
-      }
-    });
-
-    transaction(sessionIds);
-  });
-}
-
-function deleteSessionLogs(sqlitePath: string | null, sessionIds: string[]): void {
-  if (!sqlitePath || sessionIds.length === 0) {
-    return;
-  }
-
-  withDatabase(sqlitePath, false, (db) => {
-    if (!hasSessionLogsTable(db)) {
-      return;
-    }
-
-    const deleteLogs = db.prepare("delete from logs where thread_id = ?");
-    const transaction = db.transaction((ids: string[]) => {
-      for (const sessionId of ids) {
-        deleteLogs.run(sessionId);
       }
     });
 
@@ -644,7 +617,7 @@ function collectStateRecords(sqlitePath: string | null, sessionId: string): Sqli
 
   return withDatabase(sqlitePath, true, (db) => ({
     threads: selectRowsIfTableExists(db, "threads", "select * from threads where id = ?", [sessionId]),
-    logs: selectSessionLogs(db, sessionId),
+    logs: [],
     threadSpawnEdges: selectRowsIfTableExists(
       db,
       "thread_spawn_edges",
@@ -660,14 +633,6 @@ function collectStateRecords(sqlitePath: string | null, sessionId: string): Sqli
   }));
 }
 
-function collectLogRecords(sqlitePath: string | null, sessionId: string): Record<string, unknown>[] {
-  if (!sqlitePath) {
-    return [];
-  }
-
-  return withDatabase(sqlitePath, true, (db) => selectSessionLogs(db, sessionId));
-}
-
 function collectGoalRecords(sqlitePath: string | null, sessionId: string): Record<string, unknown>[] {
   if (!sqlitePath) {
     return [];
@@ -675,16 +640,6 @@ function collectGoalRecords(sqlitePath: string | null, sessionId: string): Recor
 
   return withDatabase(sqlitePath, true, (db) =>
     selectRowsIfTableExists(db, "thread_goals", "select * from thread_goals where thread_id = ?", [sessionId]),
-  );
-}
-
-function collectLogRecordsForSessions(sqlitePath: string | null, sessionIds: string[]): Record<string, unknown>[] {
-  if (!sqlitePath || sessionIds.length === 0) {
-    return [];
-  }
-
-  return withDatabase(sqlitePath, true, (db) =>
-    sessionIds.flatMap((sessionId) => selectSessionLogs(db, sessionId)),
   );
 }
 
@@ -933,11 +888,8 @@ export function deleteSessionsFromSqlite(
   goalsSqlitePath: string | null = null,
 ): Map<string, SqliteDeletionCounts> {
   const counts = collectSqliteDeletionCounts(sqlitePath, sessionIds, logsSqlitePath, goalsSqlitePath);
-  const usesDedicatedLogs = Boolean(logsSqlitePath && logsSqlitePath !== sqlitePath);
   const usesDedicatedGoals = Boolean(goalsSqlitePath && goalsSqlitePath !== sqlitePath);
-  const logSnapshots = usesDedicatedLogs ? collectLogRecordsForSessions(logsSqlitePath, sessionIds) : [];
   const goalSnapshots = usesDedicatedGoals ? collectGoalRecordsForSessions(goalsSqlitePath, sessionIds) : [];
-  let dedicatedLogsDeleted = false;
   let dedicatedGoalsDeleted = false;
 
   try {
@@ -946,23 +898,8 @@ export function deleteSessionsFromSqlite(
       dedicatedGoalsDeleted = true;
     }
 
-    if (usesDedicatedLogs) {
-      deleteSessionLogs(logsSqlitePath, sessionIds);
-      dedicatedLogsDeleted = true;
-    }
-
     deleteStateRows(sqlitePath, sessionIds);
   } catch (error) {
-    if (dedicatedLogsDeleted) {
-      try {
-        restoreRows(logsSqlitePath, "logs", logSnapshots);
-      } catch (restoreError) {
-        throw new Error(
-          `SQLite 删除失败，logs 恢复也失败：${restoreError instanceof Error ? restoreError.message : String(restoreError)}。原始错误：${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-    }
-
     if (dedicatedGoalsDeleted) {
       try {
         restoreRows(goalsSqlitePath, "thread_goals", goalSnapshots);
@@ -991,14 +928,10 @@ export function validateSqliteDeletion(
 export function exportSqliteRecords(
   sqlitePath: string | null,
   sessionId: string,
-  logsSqlitePath: string | null = null,
+  _logsSqlitePath: string | null = null,
   goalsSqlitePath: string | null = null,
 ): SqliteRecordBundle {
   const bundle = collectStateRecords(sqlitePath, sessionId);
-
-  if (logsSqlitePath && logsSqlitePath !== sqlitePath) {
-    bundle.logs.push(...collectLogRecords(logsSqlitePath, sessionId));
-  }
 
   if (goalsSqlitePath && goalsSqlitePath !== sqlitePath) {
     bundle.threadGoals.push(...collectGoalRecords(goalsSqlitePath, sessionId));
@@ -1010,7 +943,7 @@ export function exportSqliteRecords(
 export function exportSqliteRecordsForRestore(
   sqlitePath: string | null,
   sessionId: string,
-  logsSqlitePath: string | null = null,
+  _logsSqlitePath: string | null = null,
   goalsSqlitePath: string | null = null,
 ): {
   state: SqliteRecordBundle;
@@ -1023,7 +956,7 @@ export function exportSqliteRecordsForRestore(
 
   return {
     state,
-    dedicatedLogs: logsSqlitePath && logsSqlitePath !== sqlitePath ? collectLogRecords(logsSqlitePath, sessionId) : [],
+    dedicatedLogs: [],
   };
 }
 

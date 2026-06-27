@@ -15,7 +15,7 @@ describe("sqlite core", () => {
     await fixture.cleanup();
   });
 
-  it("collects deletion counts and deletes linked rows", () => {
+  it("collects deletion counts and deletes linked rows while retaining logs", () => {
     const counts = collectSqliteDeletionCounts(
       fixture.paths.sqlite,
       [FIXTURE_IDS.ACTIVE_ID],
@@ -47,7 +47,7 @@ describe("sqlite core", () => {
       fixture.paths.goalsSqlite,
     );
     expect(validation.get(FIXTURE_IDS.ACTIVE_ID)?.threadRows).toBe(0);
-    expect(validation.get(FIXTURE_IDS.ACTIVE_ID)?.logRows).toBe(0);
+    expect(validation.get(FIXTURE_IDS.ACTIVE_ID)?.logRows).toBe(1);
     expect(validation.get(FIXTURE_IDS.ACTIVE_ID)?.stage1Rows).toBe(0);
     expect(validation.get(FIXTURE_IDS.ACTIVE_ID)?.dynamicToolRows).toBe(0);
     expect(validation.get(FIXTURE_IDS.ACTIVE_ID)?.threadGoalRows).toBe(0);
@@ -69,7 +69,7 @@ describe("sqlite core", () => {
     expect(row.assigned_thread_id).toBeNull();
   });
 
-  it("deletes session logs from the dedicated logs database", () => {
+  it("retains session logs in the dedicated logs database", () => {
     expect(fixture.paths.logsSqlite).not.toBeNull();
     deleteSessionsFromSqlite(fixture.paths.sqlite, [FIXTURE_IDS.ACTIVE_ID], fixture.paths.logsSqlite, fixture.paths.goalsSqlite);
 
@@ -82,7 +82,7 @@ describe("sqlite core", () => {
       .get(FIXTURE_IDS.ARCHIVED_ID) as { count: number };
     db.close();
 
-    expect(activeLogs.count).toBe(0);
+    expect(activeLogs.count).toBe(1);
     expect(archivedLogs.count).toBe(1);
   });
 
@@ -95,7 +95,7 @@ describe("sqlite core", () => {
 
       deleteSessionsFromSqlite(legacyFixture.paths.sqlite, [FIXTURE_IDS.ACTIVE_ID]);
       const validation = validateSqliteDeletion(legacyFixture.paths.sqlite, [FIXTURE_IDS.ACTIVE_ID]);
-      expect(validation.get(FIXTURE_IDS.ACTIVE_ID)?.logRows).toBe(0);
+      expect(validation.get(FIXTURE_IDS.ACTIVE_ID)?.logRows).toBe(1);
     } finally {
       await legacyFixture.cleanup();
     }
@@ -149,7 +149,7 @@ describe("sqlite core", () => {
     }
   });
 
-  it("restores dedicated logs when state deletion fails", () => {
+  it("retains dedicated logs when state deletion fails", () => {
     const stateDb = new Database(fixture.paths.sqlite);
     stateDb.exec(`
       create trigger fail_thread_delete

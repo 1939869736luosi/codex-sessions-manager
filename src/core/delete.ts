@@ -36,7 +36,6 @@ import type {
 function sumSqliteCounts(counts: SqliteDeletionCounts): number {
   return (
     counts.threadRows +
-    counts.logRows +
     counts.spawnEdgeRows +
     counts.assignedAgentJobs +
     counts.dynamicToolRows +

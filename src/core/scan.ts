@@ -49,8 +49,20 @@ async function* walkDirectory(directoryPath: string): AsyncGenerator<string> {
 }
 
 function extractSessionId(fileName: string): string | null {
-  const match = fileName.match(/([0-9a-f]{8,}-[0-9a-f-]{20,})\.jsonl$/i);
+  const match = fileName.match(/([0-9a-f]{8,}-[0-9a-f-]{20,})\.jsonl(?:\.zst)?$/i);
   return match?.[1] ?? null;
+}
+
+function getSessionFileFormat(filePath: string): Pick<SessionFileTarget, "format" | "compressed"> | null {
+  if (filePath.endsWith(".jsonl.zst")) {
+    return { format: "jsonl.zst", compressed: true };
+  }
+
+  if (filePath.endsWith(".jsonl")) {
+    return { format: "jsonl", compressed: false };
+  }
+
+  return null;
 }
 
 async function scanSessionDirectory(
@@ -65,7 +77,8 @@ async function scanSessionDirectory(
   }
 
   for await (const absolutePath of walkDirectory(directoryPath)) {
-    if (!absolutePath.endsWith(".jsonl")) {
+    const fileFormat = getSessionFileFormat(absolutePath);
+    if (!fileFormat) {
       continue;
     }
 
@@ -80,6 +93,7 @@ async function scanSessionDirectory(
     const target: SessionFileTarget = {
       id: sessionId,
       bucket,
+      ...fileFormat,
       absolutePath,
       relativePath: path.relative(rootPath, absolutePath),
       fileName,
@@ -403,6 +417,6 @@ export async function scanCodexRoot(rootArg?: string): Promise<ScanResult> {
       dir: root.shellSnapshotsDir,
       filesById: shellSnapshotFiles,
     },
-    warnings,
+    warnings: [...root.warnings, ...warnings],
   };
 }

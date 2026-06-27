@@ -7,7 +7,7 @@
 
 > Codex Desktop now includes a delete action for archived chats. Local testing shows that it removes the main session file and some thread rows, but may still leave session index rows, execution logs, and desktop state references behind.
 
-**codex-sessions-manager** is a local Codex session audit and cleanup tool. It works as a **Skill** (Claude Code / Codex), a **CLI**, and an **MCP server** — all sharing the same core. Use it to inspect what remains under `~/.codex`, audit leftovers after the official UI delete/archive flow, clean hidden local residues by exact session ID, and verify that deletion actually left no local orphans.
+**codex-sessions-manager** is a local Codex session audit and cleanup tool. It works as a **Skill** (Claude Code / Codex), a **CLI**, and an **MCP server** — all sharing the same core. Use it to inspect what remains under `~/.codex`, audit leftovers after the official UI delete/archive flow, clean hidden local residues by exact session ID, and verify the local surfaces this release understands.
 
 It is built for safety-critical local history work: prompt/history privacy, exact-session deletion, rollback, restore conflict checks, SQLite/global-state consistency, and post-delete verification.
 
@@ -19,12 +19,14 @@ Codex Desktop's built-in delete is the right first stop for ordinary archived-ch
 
 | | codex-sessions-manager | Others |
 |--|:---:|:---:|
-| Cleans all 4 layers (files + JSONL + SQLite + global state) | ✅ | ❌ partial |
+| Cleans covered session layers (files + JSONL + known SQLite + known global state) | ✅ | ❌ partial |
 | Automatic rollback if anything fails mid-delete | ✅ | ❌ |
 | Recoverable trash with conflict-safe restore | ✅ | ❌ or basic backup |
 | Post-delete verification (checks for orphans) | ✅ | ❌ |
 | AI agents can call it (MCP server) | ✅ | ❌ |
 | Detects `/side` and `/fork` child relationships | ✅ | ❌ |
+
+Current compatibility limit: Codex can store SQLite files outside the Codex root via `sqlite_home` or `CODEX_SQLITE_HOME`. This tool resolves that split in this order: `config.toml sqlite_home`, then `CODEX_SQLITE_HOME`, then the Codex root. It warns when both locations contain SQLite databases. It also recognizes compressed rollout files (`.jsonl.zst`) and preserves them through trash/restore as binary data. If a session has only `.jsonl.zst`, `show` / timeline output does not decompress the transcript body; it uses index/history summaries instead. `memories_N.sqlite` is recognized by `doctor` as an official memory surface, but memory rows and Phase 2 memory outputs are read-only and are not mutated by session cleanup. `logs_N.sqlite` execution logs and remote-control state are also not ordinary session cleanup surfaces.
 
 ## Quick Start
 
@@ -99,12 +101,12 @@ This tool:
 4. Clean known `.codex-global-state.json` references and the two P11 exact-key candidates only
 5. Delete raw session files
 6. Delete shell snapshot files
-7. Delete SQLite rows (threads, logs, spawn_edges, agent jobs, dynamic tools, stage1, thread goals; current Codex may store goals in `goals_N.sqlite`)
+7. Delete known SQLite session rows (threads, spawn_edges, assigned agent jobs, dynamic tools, legacy state-owned `stage1_outputs`, thread goals; current Codex may store goals in `goals_N.sqlite`). Execution logs in `logs_N.sqlite` are retained by default.
 
 If ANY step fails → everything rolls back to the original state.
 ```
 
-After deletion, run `verify` to confirm zero orphans remain.
+After deletion, run `verify` to confirm no residue remains in the surfaces this release covers. `verify` may still report retained logs as `retained_sqlite=logs=N`; that is expected. Memory state in `memories_N.sqlite` remains read-only and needs a separate memory-delete safety design before this tool can claim full memory cleanup.
 
 ## Features
 
@@ -118,10 +120,10 @@ After deletion, run `verify` to confirm zero orphans remain.
 | **Residue audit** | Read-only report for raw rollout files, shell snapshots, session indexes, history, SQLite rows, global-state refs, thread edges, family status, and broken parent/child links |
 | **Root residue scan** | Read-only root-level scan for likely leftover IDs, without requiring a session ID first |
 | **Root delete preview** | Read-only batch delete preview for root residue candidates, without requiring you to list session IDs by hand |
-| **Codex SQLite layout** | Detects `state_N.sqlite`, `logs_N.sqlite`, and `goals_N.sqlite`; `doctor`, `audit`, `verify`, and previews count `goals_N.sqlite.thread_goals` |
+| **Codex SQLite layout** | Resolves `config.toml sqlite_home` / `CODEX_SQLITE_HOME` / root fallback, in that order; detects `state_N.sqlite`, `logs_N.sqlite`, `goals_N.sqlite`, and read-only `memories_N.sqlite`; `doctor`, `audit`, `verify`, and previews count `goals_N.sqlite.thread_goals`, while `logs_N.sqlite` and `memories_N.sqlite` stay out of default deletion. |
 | **Explicit delete plan** | Read-only `plan-delete` for explicit session IDs; include flags can add children, subagents, descendants, or connected family to the plan selection, but execution is not supported |
-| **Trash & Restore** | Full snapshot saved; restore checks for SQLite key conflicts before writing |
-| **Verify** | Reports any remaining files, index rows, or DB records |
+| **Trash & Restore** | Full snapshot saved; `.jsonl.zst` session files are stored as binary-safe data; restore checks for SQLite key conflicts before writing |
+| **Verify** | Reports remaining files, index rows, and DB records for the surfaces this release supports |
 | **Cleanup** | Remove stale index entries without touching raw data |
 | **Health check** | `doctor` command for full root diagnostics |
 | **MCP server** | AI agents (Claude Code, Codex, Kiro) manage sessions directly |
@@ -219,7 +221,7 @@ Important source limits:
 - `source=mcp` means the thread was recorded with that source. It is not a log of every MCP tool call inside the conversation.
 - `model_provider` is only displayed and filtered here. This tool does not repair provider identity or rewrite provider history.
 
-Use `preview-root` when you want a read-only batch delete preview for the same candidates `audit-root` would select. It reuses the same status/source filters and conservative default `--limit 50`, then summarizes what a read-only preview would touch across rollout files, shell snapshots, `session_index`, `history`, SQLite (including `goals_N.sqlite.thread_goals` when present), known global-state refs, P11 exact-key global-state refs, unknown global-state refs, and `thread_spawn_edges`. It does not delete, does not rewrite JSONL, SQLite, shell snapshots, or global-state, does not accept `--yes`, does not recommend deleting any session, and does not recursively add parent, child, or family sessions. A `preview-root` result is not a deletion recommendation; it only shows what would be touched if you later choose explicit `delete` commands. Actual deletion should use a separate explicit-ID `delete` preview for review, followed by an explicitly confirmed `delete ... --yes` command.
+Use `preview-root` when you want a read-only batch delete preview for the same candidates `audit-root` would select. It reuses the same status/source filters and conservative default `--limit 50`, then summarizes what a read-only preview would touch across rollout files, compressed `.jsonl.zst` rollout files, shell snapshots, `session_index`, `history`, SQLite (including `goals_N.sqlite.thread_goals` when present), known global-state refs, P11 exact-key global-state refs, unknown global-state refs, and `thread_spawn_edges`. `logs_N.sqlite` and `memories_N.sqlite` are not default deletion surfaces. It does not delete, does not rewrite JSONL, SQLite, shell snapshots, or global-state, does not accept `--yes`, does not recommend deleting any session, and does not recursively add parent, child, or family sessions. A `preview-root` result is not a deletion recommendation; it only shows what would be touched if you later choose explicit `delete` commands. Actual deletion should use a separate explicit-ID `delete` preview for review, followed by an explicitly confirmed `delete ... --yes` command.
 
 Use `plan-delete` when you already have explicit session IDs and want a safer relationship-aware plan before any deletion preview or write. It is read-only, has `readOnly: true` and `executionSupported: false`, and is also available through the read-only MCP `plan_delete_sessions` tool. By default only the seed IDs are selected. Related parents, children, subagents, descendants, family members, and side/fork ambiguous sessions are reported in `availableIncludes` or warnings. `--include-children`, `--include-subagents`, `--include-descendants`, and `--include-family` only change `selectedIds`; they do not execute deletion. `--include-family` is highest risk and emits a strong warning. Exact-key global-state output shows only path, rule, shape, and byte metadata; unknown global-state remains warning-only.
 
@@ -229,7 +231,7 @@ MCP `plan_delete_sessions` supports the same sourceKind candidate semantics: pas
 
 `plan-delete --write-plan FILE` writes a stable `codex-sessions-delete-plan.v1` JSON audit artifact. The file includes `scanTimestamp`, `planHash`, a root fingerprint, selected surface counts, family edges, and exact-key global-state paths. It must not contain transcript bodies, prompt text, or full global-state values; exact-key global-state entries are limited to path/rule/shape/byteEstimate metadata. A plan file is not authorization, not a preview token, not a deletion confirmation, and cannot be passed to any delete execution command.
 
-Use `preview-plan <plan-file>` to re-scan the root read-only and compare the plan against current state. It checks root realpath, `session_index`, `history`, `.codex-global-state.json`, state/log SQLite mtime/size/parseability, selected surface counts, family edges, and exact-key paths. If anything differs, `stale=true` and no delete preview is produced, so an old plan cannot be treated as the current preview. `preview-plan` does not accept `--yes`, `--trash`, `--force`, or any delete execution mode.
+Use `preview-plan <plan-file>` to re-scan the root read-only and compare the plan against current state. It checks root realpath, SQLite home realpath/source, `session_index`, `history`, `.codex-global-state.json`, state/log/goals/memories SQLite mtime/size/parseability, selected surface counts, family edges, and exact-key paths. Selected surface counts include compressed `.jsonl.zst` rollout files when a selected session has them. If anything differs inside the covered fingerprint, `stale=true` and no delete preview is produced, so an old plan cannot be treated as the current preview. `preview-plan` does not accept `--yes`, `--trash`, `--force`, or any delete execution mode.
 
 MCP `preview_delete_plan` accepts either `planFile` or an inline `plan` object and uses the same stale detection. It is read-only, does not accept `confirm`, `trash`, `yes`, or `force`, and returns no current `deletePreview` when `stale=true`.
 
@@ -270,7 +272,7 @@ Family modes are all read-only:
 
 Use `--source-kind subagent|mcp|vscode|cli|exec|unknown` with family modes when you only want matching family nodes. Default human output is compact and may shorten long text; use `--full`, `family --json`, or MCP `get_session_family` when exact raw fields matter. Actual deletion should still use a separate explicit-ID preview and explicit confirmation.
 
-T8-P2 adds a source metadata compatibility layer. The stable `sourceKind` field remains the coarse compatibility category (`subagent`, `mcp`, `vscode`, `cli`, `exec`, `unknown`). JSON output may also include `sourceInfo` with raw `source`, raw `thread_source`, official Codex v2 source-kind metadata when reliably derived, thread-source analytics metadata, and compact evidence. This is observability only: it does not change filters, delete previews, plan-delete selection, MCP planning, or delete authorization. In particular, internal raw `mcp` is reported as stable `sourceKind=mcp` and official metadata `appServer`; it is not proof of individual MCP tool calls.
+T8-P2/T9 adds a source metadata compatibility layer. The stable `sourceKind` field remains the coarse compatibility category (`subagent`, `mcp`, `vscode`, `cli`, `exec`, `unknown`). JSON output may also include `sourceInfo` with raw `source`, raw `thread_source`, official Codex v2 source-kind metadata when reliably derived, thread-source analytics metadata, and compact evidence. This is observability only: it does not change filters, delete previews, plan-delete selection, MCP planning, or delete authorization. In particular, internal raw `mcp`, raw `appServer`, and raw `app-server` are reported as stable `sourceKind=mcp` with official metadata `appServer`; they are not proof of individual MCP tool calls.
 
 ## Session Titles
 
@@ -292,15 +294,21 @@ When Codex Desktop deletes an archived chat, it may already remove some of these
 
 ```
 ~/.codex/
-├── sessions/            ← raw rollout JSONL files        ✅ cleaned
-├── archived_sessions/   ← archived rollout JSONL files   ✅ cleaned
+├── sessions/            ← raw rollout .jsonl / .jsonl.zst files    ✅ cleaned
+├── archived_sessions/   ← archived .jsonl / .jsonl.zst files       ✅ cleaned
 ├── shell_snapshots/     ← shell snapshot scripts         ✅ cleaned
 ├── session_index.jsonl  ← session metadata index         ✅ cleaned
 ├── history.jsonl        ← conversation history index     ✅ cleaned
 ├── state_N.sqlite       ← threads and related records     ✅ cleaned
-├── logs_N.sqlite        ← execution logs                 ✅ cleaned
+├── goals_N.sqlite       ← thread goals, when split out    ✅ cleaned
+├── logs_N.sqlite        ← execution logs                 👁 retained by default
+├── memories_N.sqlite    ← official memory state           👁 doctor/schema watch only
 └── .codex-global-state.json ← known active-session refs   ✅ cleaned
 ```
+
+SQLite databases may live directly under `~/.codex` or under a separate SQLite home selected by `config.toml sqlite_home` / `CODEX_SQLITE_HOME`. `config.toml sqlite_home` wins when both are set. `doctor` reports the active SQLite home and warns when both locations contain candidate databases.
+
+Compressed `.jsonl.zst` files are covered as session files for scan, preview, delete, trash, restore, and stale detection. They are not decompressed for transcript display; compressed-only sessions use index/history summaries in `show` and timeline output.
 
 ## Documentation
 

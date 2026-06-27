@@ -69,13 +69,20 @@ function formatBytes(bytes: number): string {
 function sumSqlite(item: DeleteValidationItem["sqlite"]): number {
   return (
     item.threadRows +
-    item.logRows +
     item.spawnEdgeRows +
     item.assignedAgentJobs +
     item.dynamicToolRows +
     item.stage1Rows +
     item.threadGoalRows
   );
+}
+
+function formatRetainedSqlite(item: DeleteValidationItem["sqlite"]): string {
+  const retained = [
+    item.logRows > 0 ? `logs=${item.logRows}` : null,
+  ].filter((value): value is string => Boolean(value));
+
+  return retained.length ? `, retained_sqlite=${retained.join("/")}` : "";
 }
 
 function formatGlobalStateRemaining(item: DeleteValidationItem): string {
@@ -200,16 +207,25 @@ export function formatDoctor(report: DoctorReport): string {
       table.exists ? "OK" : "missing",
       table.associationColumns.join(", ") || "-",
     ]),
+    ...report.sqlite.memoriesTables.map((table) => [
+      "memories",
+      table.table,
+      table.exists ? "OK" : "missing",
+      table.associationColumns.join(", ") || "-",
+    ]),
   ];
 
   return [
     `Root: ${report.rootPath}`,
+    `SQLite home: ${report.sqlite.sqliteHomePath} (${report.sqlite.sqliteHomeSource})`,
+    ...(report.sqlite.sqliteHomeConfigPath ? [`SQLite home config: ${report.sqlite.sqliteHomeConfigPath}`] : []),
     "",
     printTable(pathRows),
     "",
     `state SQLite: ${report.sqlite.activeStatePath ?? "missing"}`,
     `logs SQLite: ${report.sqlite.activeLogsPath ?? "missing"}`,
     `goals SQLite: ${report.sqlite.activeGoalsPath ?? "missing"}`,
+    `memories SQLite: ${report.sqlite.activeMemoriesPath ?? "missing"}`,
     "",
     printTable(tableRows),
     "",
@@ -667,6 +683,7 @@ export function formatPreview(preview: DeletePreview): string {
       `  session_index: ${item.sessionIndexRows}`,
       `  history: ${item.historyRows}`,
       `  sqlite: ${sumSqlite(item.sqlite)}`,
+      `  sqlite_retained: logs=${item.sqlite.logRows}`,
     ]),
     ...formatFamilyWarnings(preview.familyWarnings),
   ];
@@ -784,7 +801,7 @@ export function formatDeleteResult(result: DeleteExecutionResult): string {
         item.historyRowsRemaining === 0 &&
         sqliteRemaining === 0;
       const warnings = item.warnings.length ? `, warnings=${item.warnings.join(" | ")}` : "";
-      return `- ${item.title}: ${allClean ? "已清理干净" : "仍有残留"} (files=${item.filePathsRemaining.length}, shell_snapshots=${item.shellSnapshotFilesRemaining.length}, global_state_refs=${formatGlobalStateRemaining(item)}, possible_unknown_global_state_refs=${item.possibleUnknownGlobalStateRefsRemaining}, session_index=${item.sessionIndexRowsRemaining}, history=${item.historyRowsRemaining}, sqlite=${sqliteRemaining}${warnings})`;
+      return `- ${item.title}: ${allClean ? "已清理干净" : "仍有残留"} (files=${item.filePathsRemaining.length}, shell_snapshots=${item.shellSnapshotFilesRemaining.length}, global_state_refs=${formatGlobalStateRemaining(item)}, possible_unknown_global_state_refs=${item.possibleUnknownGlobalStateRefsRemaining}, session_index=${item.sessionIndexRowsRemaining}, history=${item.historyRowsRemaining}, sqlite=${sqliteRemaining}${formatRetainedSqlite(item.sqlite)}${warnings})`;
     }),
   ].join("\n");
 }
@@ -805,7 +822,7 @@ export function formatVerifyResult(items: DeleteValidationItem[]): string {
         item.historyRowsRemaining === 0 &&
         sqliteRemaining === 0;
       const warnings = item.warnings.length ? `, warnings=${item.warnings.join(" | ")}` : "";
-      return `- ${item.title}: ${allClean ? "无残留" : "仍有残留"} (files=${item.filePathsRemaining.length}, shell_snapshots=${item.shellSnapshotFilesRemaining.length}, global_state_refs=${formatGlobalStateRemaining(item)}, possible_unknown_global_state_refs=${item.possibleUnknownGlobalStateRefsRemaining}, session_index=${item.sessionIndexRowsRemaining}, history=${item.historyRowsRemaining}, sqlite=${sqliteRemaining}${warnings})`;
+      return `- ${item.title}: ${allClean ? "无残留" : "仍有残留"} (files=${item.filePathsRemaining.length}, shell_snapshots=${item.shellSnapshotFilesRemaining.length}, global_state_refs=${formatGlobalStateRemaining(item)}, possible_unknown_global_state_refs=${item.possibleUnknownGlobalStateRefsRemaining}, session_index=${item.sessionIndexRowsRemaining}, history=${item.historyRowsRemaining}, sqlite=${sqliteRemaining}${formatRetainedSqlite(item.sqlite)}${warnings})`;
     }),
   ].join("\n");
 }

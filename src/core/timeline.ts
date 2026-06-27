@@ -147,7 +147,11 @@ function getPrimaryFileTarget(session: SessionEntry): SessionFileTarget | null {
     return null;
   }
 
-  return session.fileTargets.find((target) => target.bucket === "sessions") ?? session.fileTargets[0];
+  return (
+    session.fileTargets.find((target) => target.bucket === "sessions" && !target.compressed) ??
+    session.fileTargets.find((target) => !target.compressed) ??
+    null
+  );
 }
 
 export async function readSessionTimeline(session: SessionEntry): Promise<TimelineItem[]> {

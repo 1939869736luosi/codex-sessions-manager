@@ -22,6 +22,8 @@ node dist/cli/index.js doctor --root <path-to-codex-root>
 
 MCP tools also accept an optional `root` argument.
 
+Codex SQLite may live outside the Codex root. The resolver honors `sqlite_home` in `config.toml` first, then `CODEX_SQLITE_HOME`, then the Codex root itself. `doctor` / `inspect_root` report the active SQLite home and warn when both the root and the SQLite home contain candidate databases.
+
 ## Read-Only Operations
 
 These operations are intended to inspect or report information without modifying the Codex root:
@@ -37,7 +39,7 @@ These operations are intended to inspect or report information without modifying
 | `trash-list` | `list_trash` | List trash entries |
 | `plan-delete` / `preview-plan` | `plan_delete_sessions` / `preview_delete_plan` | Build and re-preview read-only explicit-ID delete plans; sourceKind candidate mode lists `candidateIds` only; MCP never writes plan files and never executes delete-by-plan |
 
-`doctor` and `inspect_root` are read-only diagnostics. They are intended to detect Codex storage changes, missing files, SQLite table availability, trash state, and global-state warnings.
+`doctor` and `inspect_root` are read-only diagnostics. They are intended to detect Codex storage changes, missing files, SQLite table availability, SQLite home splits, memory DB presence, trash state, and global-state warnings.
 
 ## Write Operations
 
@@ -64,13 +66,17 @@ Permanent delete remains the default delete mode for compatibility. However, `de
 
 `sourceKind` is only a filter dimension. `mcp` means thread source, not a record of each MCP tool call; `vscode` is the raw Codex thread source label, not proof of the VS Code IDE; `exec` does not imply execution logs are safe to batch-delete. Root-level sourceKind candidate plans must not inherit candidates from `audit-root` or `preview-root` as deletion recommendations.
 
-T8-P2 adds a source metadata compatibility layer. The stable `sourceKind` field remains the coarse compatibility category (`subagent`, `mcp`, `vscode`, `cli`, `exec`, `unknown`). JSON output may also include `sourceInfo` with raw `source`, raw `thread_source`, official Codex v2 source-kind metadata when reliably derived, thread-source analytics metadata, and compact evidence. This is observability only: it does not change filters, delete previews, plan-delete selection, MCP planning, or delete authorization. In particular, internal raw `mcp` is reported as stable `sourceKind=mcp` and official metadata `appServer`; it is not proof of individual MCP tool calls.
+T8-P2/T9 adds a source metadata compatibility layer. The stable `sourceKind` field remains the coarse compatibility category (`subagent`, `mcp`, `vscode`, `cli`, `exec`, `unknown`). JSON output may also include `sourceInfo` with raw `source`, raw `thread_source`, official Codex v2 source-kind metadata when reliably derived, thread-source analytics metadata, and compact evidence. This is observability only: it does not change filters, delete previews, plan-delete selection, MCP planning, or delete authorization. In particular, internal raw `mcp`, raw `appServer`, and raw `app-server` are reported as stable `sourceKind=mcp` with official metadata `appServer`; they are not proof of individual MCP tool calls.
 
 `plan-delete --write-plan FILE` may write a stable `codex-sessions-delete-plan.v1` audit file. That file is not authorization, not a preview token, not a delete confirmation, and not accepted by any delete execution command. It must contain only metadata: selected IDs, included/rejected IDs, available includes, warnings, broken relations, missing surfaces, surface counts, root fingerprint, plan hash, scan timestamp, and exact-key global-state path/rule/shape/byteEstimate. It must not contain transcript bodies, prompt text, or full global-state values.
 
-`preview-plan <plan-file>` is read-only. It rescans the root, compares root realpath, `session_index`, `history`, global-state, state SQLite, logs SQLite, goals SQLite mtime/size/parseability, selected surface counts, family edges, and exact-key paths. If any comparison differs, it returns `stale=true` and refuses to produce a current delete preview from the old plan.
+`preview-plan <plan-file>` is read-only. It rescans the root, compares root realpath, SQLite home realpath/source, `session_index`, `history`, global-state, state SQLite, logs SQLite, goals SQLite, memories SQLite mtime/size/parseability, selected surface counts, family edges, and exact-key paths. Selected surface counts include compressed `.jsonl.zst` rollout files when selected sessions have them. If any comparison differs, it returns `stale=true` and refuses to produce a current delete preview from the old plan.
 
-Newer Codex roots may store `thread_goals` in `goals_N.sqlite` instead of `state_N.sqlite`. `doctor` / `inspect_root`, `audit`, delete previews, and `verify` report those rows as part of the SQLite surface. This compatibility change does not add delete-by-plan, preview tokens, sourceKind delete execution, side/fork automatic deletion, or release/cleanup automation.
+Newer Codex roots may store `thread_goals` in `goals_N.sqlite` instead of `state_N.sqlite`. `doctor` / `inspect_root`, `audit`, delete previews, trash/restore, and `verify` report those rows as part of the SQLite cleanup surface. This compatibility change does not add delete-by-plan, preview tokens, sourceKind delete execution, side/fork automatic deletion, or release/cleanup automation.
+
+Codex roots may also contain `logs_N.sqlite`, `memories_N.sqlite`, remote-control state, and compressed rollout files (`.jsonl.zst`). Execution logs are retained by default; `verify` may show them as retained SQLite rows, not as failed cleanup. Compressed rollout files are treated as session files and are stored in trash/backup bundles as binary-safe data. Compressed-only sessions are not decompressed for transcript display; `show` / timeline output should use index/history summaries instead. Treat memory DB rows as official derived state, not disposable residue: `memories_N.sqlite.stage1_outputs.thread_id` can link back to `state_N.sqlite.threads.id`, and Phase 2 can update `MEMORY.md`, `memory_summary.md`, `raw_memories.md`, `rollout_summaries`, and `skills`. Current session cleanup must not mutate `logs_N.sqlite`, `memories_N.sqlite`, memory job rows, Phase 2 memory outputs, or remote-control state. Future cleanup support for those surfaces requires a separate development plan and safety design.
+
+When reporting `verify` results, say that the result applies to the cleanup surfaces this release supports. Do not claim unconditional zero-orphan or all-SQLite coverage while memory DB mutation is deliberately unsupported and execution logs are retained by default.
 
 MCP `plan_delete_sessions` is the read-only MCP equivalent for plan generation. Explicit `sessionIds` reuse the same include flag semantics as CLI `plan-delete`. SourceKind candidate mode requires `sourceKind` plus `limit`, rejects root-level `unknown`, returns `candidateIds` only, keeps `selectedIds` empty, and rejects active/current matches into `rejectedIds`. It does not support `writePlan`, does not create preview tokens, and does not execute deletion.
 
@@ -107,7 +113,7 @@ Use this narrow workflow for residue that has all of these properties:
 - exactly one `history.jsonl` row
 - no `session_index.jsonl` row
 - no shell snapshots
-- no SQLite rows
+- no SQLite cleanup rows, ignoring retained `logs_N.sqlite` execution logs
 - no known, P11 exact-key, or unknown global-state references
 - no parent, child, subagent, side/fork, or broken family relation warnings
 

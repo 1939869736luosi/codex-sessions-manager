@@ -65,6 +65,10 @@ function normalizeKnownKind(value: string | null): SourceKind | null {
     return normalized;
   }
 
+  if (normalized === "appserver" || normalized === "app-server") {
+    return "mcp";
+  }
+
   if (normalized === "subagent") {
     return "subagent";
   }
@@ -99,6 +103,7 @@ function officialKindFromRawSource(value: string | null): OfficialCodexSourceKin
   if (lower === "vscode") return "vscode";
   if (lower === "exec") return "exec";
   if (lower === "mcp") return "appServer";
+  if (lower === "appserver" || lower === "app-server") return "appServer";
   if (lower === "unknown") return "unknown";
   return null;
 }

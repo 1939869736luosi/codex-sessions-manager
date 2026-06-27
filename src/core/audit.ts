@@ -320,6 +320,9 @@ export function buildSessionResidueAudit(scan: ScanResult, sessionId: string): S
     ...(exactKeyGlobalStateRefs.length > 0
       ? [`global-state 有 ${exactKeyGlobalStateRefs.length} 个 P11 exact-key 引用；只能在 delete 预览后显式确认删除。`]
       : []),
+    ...(item.sqlite.logRows > 0
+      ? [`SQLite logs 有 ${item.sqlite.logRows} 行关联记录；当前默认保留，不纳入删除建议。`]
+      : []),
   ]);
   const recommendedNextCommand = hasAnyResidue
     ? `codex-sessions delete ${quoteShellArg(session.id)} --root ${quoteShellArg(scan.root.rootPath)}`

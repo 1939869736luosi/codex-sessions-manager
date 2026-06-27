@@ -7,7 +7,7 @@
 
 > Codex Desktop 现在已经有归档聊天删除入口。实测中，它会删除主会话文件和部分 thread 记录，但仍可能留下索引、执行日志和桌面状态引用。
 
-**codex-sessions-manager** 是本地 Codex 会话审计和清理工具。它同时是 **Skill**（Claude Code / Codex 可直接调用）、**CLI** 和 **MCP Server**——三种形态共享同一套核心逻辑。它用来检查 `~/.codex` 里还剩什么、审计官方 UI 删除/归档后留下的本地残留、按精确 session ID 处理隐藏记录，并验证删除后是否真的没有本机孤儿记录。
+**codex-sessions-manager** 是本地 Codex 会话审计和清理工具。它同时是 **Skill**（Claude Code / Codex 可直接调用）、**CLI** 和 **MCP Server**——三种形态共享同一套核心逻辑。它用来检查 `~/.codex` 里还剩什么、审计官方 UI 删除/归档后留下的本地残留、按精确 session ID 处理隐藏记录，并验证当前版本已覆盖的本机 surface 是否仍有残留。
 
 它面向安全敏感的本地历史管理：prompt/history 隐私、精确会话删除、失败回滚、恢复冲突检查、SQLite/global-state 一致性，以及删除后的残留验证。
 
@@ -19,12 +19,14 @@
 
 | | codex-sessions-manager | 其他工具 |
 |--|:---:|:---:|
-| 清理全部 4 层（文件 + JSONL + SQLite + 全局状态） | ✅ | ❌ 只清部分 |
+| 清理已覆盖的 session 层（文件 + JSONL + 已知 SQLite + 已知全局状态） | ✅ | ❌ 只清部分 |
 | 删除中途出错自动回滚 | ✅ | ❌ |
 | 可恢复的回收站 + 冲突检测 | ✅ | ❌ 或简单备份 |
 | 删完验证有没有残留 | ✅ | ❌ |
 | AI Agent 可直接调用（MCP） | ✅ | ❌ |
 | 识别 `/side` 和 `/fork` 父子关系 | ✅ | ❌ |
+
+当前兼容边界：Codex 可能通过 `sqlite_home` 或 `CODEX_SQLITE_HOME` 把 SQLite 放在 Codex root 外。本工具会按 `config.toml sqlite_home`、`CODEX_SQLITE_HOME`、Codex root 的顺序解析，并在 root 顶层和 SQLite home 同时存在 DB 时报警。压缩 rollout 文件 `.jsonl.zst` 已进入扫描、删除、回收站和恢复路径，并按二进制保存；如果某个 session 只剩 `.jsonl.zst`，`show` / timeline 不会解压正文，只使用索引或历史摘要。`logs_N.sqlite` 执行日志、`memories_N.sqlite` memory 数据和 remote-control 状态当前都不作为普通 session cleanup surface。
 
 ## 快速开始
 
@@ -89,12 +91,12 @@ codex-sessions verify <session-id>
 4. 只清理已知 `.codex-global-state.json` 引用和两个 P11 exact-key 候选
 5. 删除原始 session 文件
 6. 删除 shell snapshot 文件
-7. 删除 SQLite 记录（threads、logs、spawn edges、agent jobs、dynamic tools、stage1、thread goals；新版 Codex 可能把 goals 放在 `goals_N.sqlite`）
+7. 删除已知 SQLite session 记录（threads、spawn edges、agent jobs、dynamic tools、legacy state-owned `stage1_outputs`、thread goals；新版 Codex 可能把 goals 放在 `goals_N.sqlite`）。`logs_N.sqlite` 执行日志默认保留。
 
 如果任何一步失败 → 全部回滚到原始状态。
 ```
 
-删完之后跑 `verify`，确认零残留。
+删完之后跑 `verify`，确认当前版本覆盖的 surface 没有残留。`verify` 可能显示 `retained_sqlite=logs=N`，这是预期结果。`.jsonl.zst` 已按 session 文件处理；`memories_N.sqlite` 仍是只读 memory surface，必须另做 memory 删除安全设计后，才能声称完整 memory cleanup。
 
 ## 功能一览
 
@@ -108,9 +110,9 @@ codex-sessions verify <session-id>
 | **残留审计** | 只读报告原始 rollout 文件、shell snapshot、session_index、history、SQLite、global-state、thread edges、family 状态和断裂 parent/child 关系 |
 | **Root 残留扫描** | 不需要先知道 session ID，直接只读扫描整个 root 的疑似残留 |
 | **Root 删除预览** | 对 root 残留候选做只读批量 delete preview，不需要手工列 session ID |
-| **Codex SQLite 结构** | 识别 `state_N.sqlite`、`logs_N.sqlite` 和 `goals_N.sqlite`；`doctor`、`audit`、`verify` 和预览会统计 `goals_N.sqlite.thread_goals` |
-| **回收站 & 恢复** | 完整快照保存；恢复时检查 SQLite 主键冲突 |
-| **验证** | 报告是否还有残留文件、索引行、数据库记录 |
+| **Codex SQLite 结构** | 按 `config.toml sqlite_home` / `CODEX_SQLITE_HOME` / root fallback 顺序解析；识别 `state_N.sqlite`、`logs_N.sqlite`、`goals_N.sqlite` 和只读 `memories_N.sqlite`；`doctor`、`audit`、`verify` 和预览会统计 `goals_N.sqlite.thread_goals`，但 `logs_N.sqlite` 和 `memories_N.sqlite` 默认不删除。 |
+| **回收站 & 恢复** | 完整快照保存；`.jsonl.zst` 会话文件按二进制安全保存；恢复时检查 SQLite 主键冲突 |
+| **验证** | 报告当前版本支持的文件、索引行和数据库记录是否仍有残留 |
 | **清理索引** | 移除失效索引条目，不动原始数据 |
 | **健康检查** | `doctor` 命令做完整诊断 |
 | **MCP 服务** | AI Agent（Claude Code、Codex、Kiro）直接管理会话 |
@@ -170,6 +172,8 @@ codex-sessions verify <session-id...> [--json]
 
 `export` 和 trash bundle 是恢复数据，不是预览。它们可能包含完整 global-state exact-key value，包括 prompt-history 内容。人工 delete 预览只显示 path、rule、shape 和 byte count。
 
+当前兼容边界：Codex 可能通过 `sqlite_home` 或 `CODEX_SQLITE_HOME` 把 SQLite 放在 Codex root 外。本工具会按 `config.toml sqlite_home`、`CODEX_SQLITE_HOME`、Codex root 的顺序解析，并在 root 顶层和 SQLite home 同时存在 DB 时报警。压缩 rollout 文件 `.jsonl.zst` 已进入扫描、删除、回收站和恢复路径，并按二进制保存；如果某个 session 只剩 `.jsonl.zst`，`show` / timeline 不会解压正文，只使用索引或历史摘要。`logs_N.sqlite` 执行日志、`memories_N.sqlite` memory 数据和 remote-control 状态当前都不作为普通 session cleanup surface。
+
 官方 Codex UI 删除或归档后，如果想知道本机还剩什么，先用 `audit`。它只读，不会改文件。它会报告原始 rollout 文件、shell snapshot、`session_index`、`history`、SQLite 记录、已知 global-state 引用、P11 exact-key global-state 引用、未知 global-state 引用、`thread_spawn_edges` 是否还在，也会报告 family 归属和断裂 parent/child 关系。如果仍有残留，建议命令只会给不带 `--yes` 的删除预览；只有你自己加 `--yes` 才会真的删除。
 
 如果你还不知道 session ID，用 `audit-root`。它会扫描整个 Codex root，按风险列出疑似残留：断裂 parent/child 边、没有 rollout 文件但还有未知 global-state 引用、SQLite-only 记录、shell snapshot、index-only 记录，以及其他不完整残留。它只读，默认 `--limit 50`，不会打印聊天正文，每条只建议继续跑对应的单 session `audit` 命令。只有明确想把正常完整会话也列出来时，才加 `--all`。
@@ -206,7 +210,7 @@ codex-sessions verify <session-id...> [--json]
 - `source=mcp` 表示这个 thread 的来源是 mcp，不是每一次 MCP 工具调用日志。
 - `model_provider` 这里只做显示和筛选，不修复 provider 身份，也不改写历史。
 
-如果想对 `audit-root` 选出的候选做批量删除预览，用 `preview-root`。它复用同一套 `status/source` 筛选和保守默认 `--limit 50`，汇总展示只读预览会碰到哪些位置：rollout 文件、shell snapshots、`session_index`、`history`、SQLite（包含存在时的 `goals_N.sqlite.thread_goals`）、已知 global-state 引用、P11 exact-key global-state 引用、未知 global-state 引用和 `thread_spawn_edges`。它只读，不删除，不改写 JSONL、SQLite、shell snapshot 或 global-state，不接受 `--yes`，也不会自动递归加入 parent、child 或 family session。`preview-root` 的结果不等于“这些都该删”，也不会建议删除任何 session；它只说明如果之后你明确运行 delete，会碰到什么。真正删除应先跑单独的明确 ID `delete` 预览供检查，再单独运行显式确认的 `delete ... --yes`。
+如果想对 `audit-root` 选出的候选做批量删除预览，用 `preview-root`。它复用同一套 `status/source` 筛选和保守默认 `--limit 50`，汇总展示只读预览会碰到哪些位置：rollout 文件、压缩 `.jsonl.zst` rollout 文件、shell snapshots、`session_index`、`history`、SQLite（包含存在时的 `goals_N.sqlite.thread_goals`）、已知 global-state 引用、P11 exact-key global-state 引用、未知 global-state 引用和 `thread_spawn_edges`。`logs_N.sqlite` 和 `memories_N.sqlite` 不是默认删除面。它只读，不删除，不改写 JSONL、SQLite、shell snapshot 或 global-state，不接受 `--yes`，也不会自动递归加入 parent、child 或 family session。`preview-root` 的结果不等于“这些都该删”，也不会建议删除任何 session；它只说明如果之后你明确运行 delete，会碰到什么。真正删除应先跑单独的明确 ID `delete` 预览供检查，再单独运行显式确认的 `delete ... --yes`。
 
 如果已经有明确 session ID，并且想在任何删除预览或写操作前先做更安全的关系感知计划，用 `plan-delete`。它只读，JSON 里会标明 `readOnly: true` 和 `executionSupported: false`，也可通过只读 MCP `plan_delete_sessions` 调用。默认只选择 seed IDs。相关 parent、child、subagent、descendant、family member，以及 `/side`/`/fork` 这类 ambiguous session，会出现在 `availableIncludes` 或 warning 里。`--include-children`、`--include-subagents`、`--include-descendants` 和 `--include-family` 只改变 `selectedIds`，不会执行删除；其中 `--include-family` 风险最高，会给出强提醒。exact-key global-state 只显示 path、rule、shape 和 byteEstimate 元数据；unknown global-state 仍然只是 warning-only。
 
@@ -216,7 +220,7 @@ MCP `plan_delete_sessions` 支持同样的 sourceKind candidate 语义：传 `so
 
 `plan-delete --write-plan FILE` 会写出稳定的 `codex-sessions-delete-plan.v1` JSON 审计文件。文件包含 `scanTimestamp`、`planHash`、root fingerprint、selected surface counts、family edges 和 exact-key global-state paths。它不能包含 transcript 正文、prompt text 或完整 global-state values；exact-key global-state 条目只限 path/rule/shape/byteEstimate 元数据。plan file 只是审计材料，不是授权、不是 preview token、不是删除确认，也不能传给任何删除执行命令。
 
-`preview-plan <plan-file>` 会只读重扫 root，并把 plan 和当前状态做比较。它检查 root realpath、`session_index`、`history`、`.codex-global-state.json`、state/log/goals SQLite 的 mtime/size/parseability、selected surface counts、family edges 和 exact-key paths。只要有差异，就返回 `stale=true`，并且不产生当前 delete preview，避免把旧 plan 当成当前预览。`preview-plan` 不接受 `--yes`、`--trash`、`--force` 或任何删除执行模式。
+`preview-plan <plan-file>` 会只读重扫 root，并把 plan 和当前状态做比较。它检查 root realpath、SQLite home realpath/source、`session_index`、`history`、`.codex-global-state.json`、state/log/goals/memories SQLite 的 mtime/size/parseability、selected surface counts、family edges 和 exact-key paths。selected surface counts 会包含已选 session 的压缩 `.jsonl.zst` rollout 文件。只要已覆盖的 fingerprint 有差异，就返回 `stale=true`，并且不产生当前 delete preview，避免把旧 plan 当成当前预览。`preview-plan` 不接受 `--yes`、`--trash`、`--force` 或任何删除执行模式。
 
 MCP `preview_delete_plan` 接收 `planFile` 或 inline `plan` object，并复用同一套 stale detection。它只读，不接受 `confirm`、`trash`、`yes` 或 `force`；当 `stale=true` 时不会返回当前 `deletePreview`。
 
@@ -257,7 +261,7 @@ MCP 规则相同：先调用 `preview_delete_sessions` 检查 exact path，再�
 
 可以给 family 视图加 `--source-kind subagent|mcp|vscode|cli|exec|unknown`，只看匹配成员。默认人类输出会保持紧凑，长文本可能缩短；需要完整原始字段时，用 `--full`、`family --json` 或 MCP `get_session_family`。真正删除仍然必须单独跑明确 ID 预览，并显式确认。
 
-T8-P2 增加 source metadata compatibility layer。稳定的 `sourceKind` 字段仍然保持粗粒度兼容分类（`subagent`、`mcp`、`vscode`、`cli`、`exec`、`unknown`）。JSON 输出还可能包含 `sourceInfo`，记录 raw `source`、raw `thread_source`、可可靠派生时的官方 Codex v2 source-kind metadata、thread-source analytics metadata 和简明 evidence。这只用于观测：不改变 filters、delete preview、plan-delete selection、MCP planning 或删除授权。尤其是内部 raw `mcp` 会报告为稳定 `sourceKind=mcp` 和官方 metadata `appServer`；它不是 individual MCP tool-call 的证明。
+T8-P2/T9 增加 source metadata compatibility layer。稳定的 `sourceKind` 字段仍然保持粗粒度兼容分类（`subagent`、`mcp`、`vscode`、`cli`、`exec`、`unknown`）。JSON 输出还可能包含 `sourceInfo`，记录 raw `source`、raw `thread_source`、可可靠派生时的官方 Codex v2 source-kind metadata、thread-source analytics metadata 和简明 evidence。这只用于观测：不改变 filters、delete preview、plan-delete selection、MCP planning 或删除授权。尤其是内部 raw `mcp`、raw `appServer` 或 raw `app-server` 会报告为稳定 `sourceKind=mcp` 和官方 metadata `appServer`；它不是 individual MCP tool-call 的证明。
 
 ## 标题怎么看
 
@@ -279,15 +283,21 @@ Codex Desktop 删除归档聊天时，可能已经清掉其中一部分。`audit
 
 ```
 ~/.codex/
-├── sessions/            ← 原始 rollout JSONL 文件       ✅ 清理
-├── archived_sessions/   ← 归档 rollout JSONL 文件       ✅ 清理
+├── sessions/            ← 原始 rollout .jsonl/.jsonl.zst 文件       ✅ 清理
+├── archived_sessions/   ← 归档 rollout .jsonl/.jsonl.zst 文件       ✅ 清理
 ├── shell_snapshots/     ← shell 快照脚本                ✅ 清理
 ├── session_index.jsonl  ← 会话元数据索引                ✅ 清理
 ├── history.jsonl        ← 对话历史索引                  ✅ 清理
 ├── state_N.sqlite       ← threads 和相关记录            ✅ 清理
-├── logs_N.sqlite        ← 执行日志                      ✅ 清理
+├── goals_N.sqlite       ← 拆分出的 thread goals         ✅ 清理
+├── logs_N.sqlite        ← 执行日志                      👁 默认保留
+├── memories_N.sqlite    ← 官方 memory state             👁 只做 doctor/schema watch
 └── .codex-global-state.json ← 已知活跃会话引用          ✅ 清理
 ```
+
+SQLite 可以在 `~/.codex` 顶层，也可以在 `config.toml sqlite_home` / `CODEX_SQLITE_HOME` 指定的 SQLite home；两者同时存在时，`config.toml sqlite_home` 优先。`doctor` 会显示当前 active SQLite home，并在两边同时有 DB 候选时给 dual-home warning。
+
+`.jsonl.zst` 已作为 session 文件纳入 scan、preview、delete、trash、restore 和 stale detection。它不会在 `show` / timeline 中解压读取正文；compressed-only session 只显示索引或历史摘要。
 
 ## 文档
 

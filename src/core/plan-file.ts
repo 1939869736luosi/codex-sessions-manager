@@ -84,9 +84,23 @@ async function fingerprintFile(
   };
 }
 
+async function realpathOrNull(filePath: string | null): Promise<string | null> {
+  if (!filePath) {
+    return null;
+  }
+
+  try {
+    return await realpath(filePath);
+  } catch {
+    return null;
+  }
+}
+
 export async function buildDeletePlanRootFingerprint(scan: ScanResult): Promise<DeletePlanRootFingerprint> {
   return {
     rootRealpath: await realpath(scan.root.rootPath),
+    sqliteHomeRealpath: await realpathOrNull(scan.root.sqliteHomePath),
+    sqliteHomeSource: scan.root.sqliteHomeSource,
     sessionIndex: await fingerprintFile(scan.root.sessionIndexPath, parseJsonlText),
     history: await fingerprintFile(scan.root.historyPath, parseJsonlText),
     globalState: await fingerprintFile(scan.root.globalStatePath, (text) => {
@@ -96,6 +110,7 @@ export async function buildDeletePlanRootFingerprint(scan: ScanResult): Promise<
     sqlite: await fingerprintFile(scan.root.sqlitePath, parseSqlite, "path"),
     logsSqlite: await fingerprintFile(scan.root.logsSqlitePath, parseSqlite, "path"),
     goalsSqlite: await fingerprintFile(scan.root.goalsSqlitePath, parseSqlite, "path"),
+    memoriesSqlite: await fingerprintFile(scan.root.memoriesSqlitePath, parseSqlite, "path"),
   };
 }
 
@@ -196,12 +211,19 @@ export async function previewDeletePlan(scan: ScanResult, plan: DeletePlanFile):
     ...(plan.rootFingerprint.rootRealpath !== currentFingerprint.rootRealpath
       ? [`root realpath changed: ${plan.rootFingerprint.rootRealpath} -> ${currentFingerprint.rootRealpath}`]
       : []),
+    ...(plan.rootFingerprint.sqliteHomeRealpath !== currentFingerprint.sqliteHomeRealpath
+      ? [`sqlite home realpath changed: ${plan.rootFingerprint.sqliteHomeRealpath ?? "missing"} -> ${currentFingerprint.sqliteHomeRealpath ?? "missing"}`]
+      : []),
+    ...(plan.rootFingerprint.sqliteHomeSource !== currentFingerprint.sqliteHomeSource
+      ? [`sqlite home source changed: ${plan.rootFingerprint.sqliteHomeSource} -> ${currentFingerprint.sqliteHomeSource}`]
+      : []),
     ...compareFingerprint("session_index", plan.rootFingerprint.sessionIndex, currentFingerprint.sessionIndex),
     ...compareFingerprint("history", plan.rootFingerprint.history, currentFingerprint.history),
     ...compareFingerprint("global-state", plan.rootFingerprint.globalState, currentFingerprint.globalState),
     ...compareFingerprint("sqlite", plan.rootFingerprint.sqlite, currentFingerprint.sqlite),
     ...compareFingerprint("sqlite logs", plan.rootFingerprint.logsSqlite, currentFingerprint.logsSqlite),
     ...compareFingerprint("sqlite goals", plan.rootFingerprint.goalsSqlite, currentFingerprint.goalsSqlite),
+    ...compareFingerprint("sqlite memories", plan.rootFingerprint.memoriesSqlite, currentFingerprint.memoriesSqlite),
     ...compareSnapshot(plan.selectedSnapshot, buildSelectedSnapshot(scan, plan.selectedIds)),
   ];
   const stale = staleReasons.length > 0;

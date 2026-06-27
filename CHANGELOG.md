@@ -1,11 +1,27 @@
 # Changelog
 
-## Unreleased
+## 0.5.2
 
 ### Added
 
-- Added `SECURITY.md` with reporting guidance for local Codex session artifacts, data loss, incomplete deletion, restore conflicts, rollback failures, path handling, and local-history exposure.
+- SQLite home resolver: supports `config.toml sqlite_home`, `CODEX_SQLITE_HOME` environment variable, and Codex root fallback, with config taking priority.
+- Dual-home warning when SQLite databases exist in both the configured SQLite home and the Codex root.
+- Compressed rollout file (`.jsonl.zst`) support: scan, delete, trash, and restore handle compressed archives as binary data without decompression. Compressed-only sessions use index/history summaries instead of transcript body.
+- `memories_N.sqlite` recognition in `doctor` as an official memory surface; memory rows are read-only and not mutated by session cleanup.
+- `SECURITY.md` with reporting guidance for local Codex session artifacts, data loss, incomplete deletion, restore conflicts, rollback failures, path handling, and local-history exposure.
 - Linked the security policy from both English and Chinese README documentation sections.
+
+### Changed
+
+- `logs_N.sqlite` execution logs are now preserved by default and excluded from ordinary session delete scope. They remain accessible to `doctor` and audit but are not cleanup targets.
+- README and SAFETY documentation updated to reflect that `verify` covers logical live-surface verification only, not byte-forensic cleanup. Documentation no longer claims unconditional coverage of all SQLite surfaces or zero orphans.
+
+### Safety
+
+- Logs-only residue does not belong to ordinary `delete <session-id>` semantics.
+- Memory rows and Phase 2 memory outputs are read-only observability; session cleanup does not mutate them.
+- Rollback remains best-effort, not crash-safe transaction.
+- `remote_control_enrollments` and related pairing state are not session cleanup surfaces.
 
 ## 0.5.1
 

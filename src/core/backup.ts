@@ -5,10 +5,21 @@ import type { BackupBundle, ScanResult, SessionEntry } from "./types.js";
 
 export async function exportSessionBackup(scan: ScanResult, session: SessionEntry): Promise<BackupBundle> {
   const sessionFiles = await Promise.all(
-    session.fileTargets.map(async (target) => ({
-      path: target.relativePath,
-      text: await readFile(target.absolutePath, "utf8"),
-    })),
+    session.fileTargets.map(async (target) => {
+      if (target.compressed) {
+        return {
+          path: target.relativePath,
+          text: Buffer.from(await readFile(target.absolutePath)).toString("base64"),
+          encoding: "base64" as const,
+        };
+      }
+
+      return {
+        path: target.relativePath,
+        text: await readFile(target.absolutePath, "utf8"),
+        encoding: "utf8" as const,
+      };
+    }),
   );
   const shellSnapshots = await Promise.all(
     (scan.shellSnapshots.filesById.get(session.id) ?? []).map(async (target) => ({

@@ -22,6 +22,7 @@ import type {
   HistoryRecord,
   ScanResult,
   SessionEntry,
+  SessionFileTarget,
   SessionIndexRecord,
   TrashBundle,
   TrashDeleteResult,
@@ -430,14 +431,28 @@ async function resolveTrashEntryForRestore(
   }
 }
 
-async function writeFileIfMissing(rootPath: string, relativePath: string, text: string): Promise<boolean> {
+function decodeStoredText(text: string, encoding?: "utf8" | "base64"): string | Buffer {
+  return encoding === "base64" ? Buffer.from(text, "base64") : text;
+}
+
+async function writeStoredFileIfMissing(
+  rootPath: string,
+  relativePath: string,
+  text: string,
+  encoding?: "utf8" | "base64",
+): Promise<boolean> {
   const targetPath = safeRootPath(rootPath, relativePath);
   if (await pathExists(targetPath)) {
     return false;
   }
 
   await mkdir(path.dirname(targetPath), { recursive: true });
-  await writeFile(targetPath, text, "utf8");
+  const contents = decodeStoredText(text, encoding);
+  if (typeof contents === "string") {
+    await writeFile(targetPath, contents, "utf8");
+  } else {
+    await writeFile(targetPath, contents);
+  }
   return true;
 }
 
@@ -486,6 +501,29 @@ async function appendJsonlRecords<T>(
   return nextLines.length;
 }
 
+async function readTrashSessionFile(target: SessionFileTarget): Promise<{
+  sessionId: string;
+  path: string;
+  text: string;
+  encoding: "utf8" | "base64";
+}> {
+  if (target.compressed) {
+    return {
+      sessionId: target.id,
+      path: target.relativePath,
+      text: Buffer.from(await readFile(target.absolutePath)).toString("base64"),
+      encoding: "base64",
+    };
+  }
+
+  return {
+    sessionId: target.id,
+    path: target.relativePath,
+    text: await readFile(target.absolutePath, "utf8"),
+    encoding: "utf8",
+  };
+}
+
 async function buildTrashBundle(scan: ScanResult, sessions: SessionEntry[], trashId: string): Promise<TrashBundle> {
   const preview = buildDeletePreview(scan, sessions);
   const sessionIds = sessions.map((session) => session.id);
@@ -517,11 +555,7 @@ async function buildTrashBundle(scan: ScanResult, sessions: SessionEntry[], tras
     sessionFiles: (
       await Promise.all(
         sessions.flatMap((session) =>
-          session.fileTargets.map(async (target) => ({
-            sessionId: session.id,
-            path: target.relativePath,
-            text: await readFile(target.absolutePath, "utf8"),
-          })),
+          session.fileTargets.map((target) => readTrashSessionFile(target)),
         ),
       )
     ).flat(),
@@ -764,13 +798,13 @@ export async function restoreTrashEntry(rootArg: string | undefined, idOrSession
 
   try {
     for (const file of bundle.sessionFiles) {
-      if (await writeFileIfMissing(scan.root.rootPath, file.path, file.text)) {
+      if (await writeStoredFileIfMissing(scan.root.rootPath, file.path, file.text, file.encoding)) {
         restoredSessionFiles += 1;
       }
     }
 
     for (const file of bundle.shellSnapshots) {
-      if (await writeFileIfMissing(scan.root.rootPath, file.path, file.text)) {
+      if (await writeStoredFileIfMissing(scan.root.rootPath, file.path, file.text)) {
         restoredShellSnapshots += 1;
       }
     }
