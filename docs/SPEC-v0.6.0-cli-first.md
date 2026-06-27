@@ -45,9 +45,9 @@
 | 12. 全量验收 checklist | ✅ 完成 | — |
 | **Post-review 修复（5 步 review 发现）** | | |
 | 13. 修 root SKILL.md 死链 + amp includeTools | ✅ 完成 | `62da801` |
-| 14. examples/ 死链指向 skills/ 规范路径 | ✅ 完成 | 待提交 |
-| 15. 加防漂移 guard 测试（root==skills 三类文档字节一致） | ✅ 完成 | 待提交 |
-| 16. 加 read-only callTool 被拒行为测试 | ✅ 完成 | 待提交 |
+| 14. examples/ 死链指向 skills/ 规范路径 | ✅ 完成 | `6d5ca26` |
+| 15. 加防漂移 guard 测试（root==skills 三类文档字节一致） | ✅ 完成 | `6d5ca26` |
+| 16. 加 read-only callTool 被拒行为测试 | ✅ 完成 | `6d5ca26` |
 
 **实际状态**: 代码 + 文档全部完成，204 测试通过（含 1 个 profile 行为测试 + 防漂移 guard）。
 **当前阻塞**: 仅剩 npm publish（git/tag 已推送 `62da801`，tag `v0.6.0`）。0.5.2 与 0.6.0 的 npm publish 需用户手动 `npm login` 后执行，0.6.0 必须排在 0.5.2 之后。
