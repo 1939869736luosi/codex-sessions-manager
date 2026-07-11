@@ -153,9 +153,12 @@ jobs:
           test "${SOURCE_SHA256}" = "${EXPECTED_SHA256}"
           printf '%s  %s\n' "${SOURCE_SHA256}" "${SOURCE_NAME}" > "${RUNNER_TEMP}/source.sha256"
           npm pack --dry-run --json --ignore-scripts > "${RUNNER_TEMP}/source-manifest.json"
+          SOURCE_FILE_COUNT="$(node -p "(require(process.argv[1])[0]?.files ?? []).length" "${RUNNER_TEMP}/source-manifest.json")"
+          [[ "${SOURCE_FILE_COUNT}" =~ ^[1-9][0-9]*$ ]]
           echo "SOURCE_NAME=${SOURCE_NAME}" >> "${GITHUB_ENV}"
           echo "SOURCE_PATH=${SOURCE_PATH}" >> "${GITHUB_ENV}"
           echo "SOURCE_SHA256=${SOURCE_SHA256}" >> "${GITHUB_ENV}"
+          echo "SOURCE_FILE_COUNT=${SOURCE_FILE_COUNT}" >> "${GITHUB_ENV}"
 
       - name: Snapshot dist-tags before registry verification
         shell: bash
@@ -209,22 +212,22 @@ jobs:
             const result = require(process.argv[1])[0];
             if (result.name !== "codex-sessions-manager" || result.version !== process.argv[2]) process.exit(1);
             const files = result.files ?? [];
-            if (files.length !== 110) process.exit(1);
+            if (files.length !== Number(process.argv[3])) process.exit(1);
             for (const file of files) {
               const value = String(file.path).replaceAll("\\", "/");
               if (path.posix.isAbsolute(value) || value.split("/").includes("..")) process.exit(1);
             }
-          ' "${PACK_RESULT}" "${VERSION}"
+          ' "${PACK_RESULT}" "${VERSION}" "${SOURCE_FILE_COUNT}"
           tar -tzf "${REGISTRY_PATH}" > "${RUNNER_TEMP}/registry-tar-entries.txt"
           node -e '
             const fs = require("node:fs");
             const entries = fs.readFileSync(process.argv[1], "utf8").split(/\r?\n/u).filter(Boolean);
-            if (entries.length !== 110) process.exit(1);
+            if (entries.length !== Number(process.argv[2])) process.exit(1);
             for (const entry of entries) {
               const value = entry.replaceAll("\\", "/");
               if (!value.startsWith("package/") || value.split("/").includes("..")) process.exit(1);
             }
-          ' "${RUNNER_TEMP}/registry-tar-entries.txt"
+          ' "${RUNNER_TEMP}/registry-tar-entries.txt" "${SOURCE_FILE_COUNT}"
           mkdir -p "${RUNNER_TEMP}/registry-extract"
           tar -xzf "${REGISTRY_PATH}" -C "${RUNNER_TEMP}/registry-extract"
           node -e '
@@ -257,11 +260,11 @@ jobs:
           node -e '
             const dist = require(process.argv[1]);
             const attestations = require(process.argv[2]);
-            if (dist.fileCount !== 110) process.exit(1);
+            if (dist.fileCount !== Number(process.argv[4])) process.exit(1);
             if (typeof dist.integrity !== "string" || typeof dist.shasum !== "string") process.exit(1);
             if (typeof attestations.url !== "string" || !attestations.url.includes(process.argv[3])) process.exit(1);
             if (attestations.provenance?.predicateType !== "https://slsa.dev/provenance/v1") process.exit(1);
-          ' "${RUNNER_TEMP}/registry-metadata.json" "${RUNNER_TEMP}/attestations.json" "codex-sessions-manager@${VERSION}"
+          ' "${RUNNER_TEMP}/registry-metadata.json" "${RUNNER_TEMP}/attestations.json" "codex-sessions-manager@${VERSION}" "${SOURCE_FILE_COUNT}"
 
       - name: Install the verified bytes and smoke CLI, MCP, and doctor
         shell: bash
@@ -322,7 +325,7 @@ jobs:
               securityVerify: process.env.VERSION,
               latestBefore: process.env.EXPECTED_LATEST,
               latestAfter: process.env.EXPECTED_LATEST,
-              fileCount: 110,
+              fileCount: Number(process.env.SOURCE_FILE_COUNT),
               provenanceMetadataPresent: true,
               candidate,
               smoke: { cli: true, mcp: true, doctor: true }
