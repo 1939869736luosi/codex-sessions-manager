@@ -30,7 +30,7 @@ import { scanCodexRoot } from "../core/scan.js";
 import { assertCanonicalSessionIds, MutationSafetyError } from "../core/mutation-safety.js";
 import { getRecoveryStatus, recoverInterruptedOperation } from "../core/recovery.js";
 import { SOURCE_KINDS, summarizeSources } from "../core/sources.js";
-import { readSessionTimeline } from "../core/timeline.js";
+import { readSessionTimelineResult } from "../core/timeline.js";
 import {
   listTrashEntries,
   moveSessionsToTrash,
@@ -39,7 +39,7 @@ import {
   summarizeTrashDuplicateSessions,
   trashEntryMatches,
 } from "../core/trash.js";
-import type { SessionKind, SourceKind } from "../core/types.js";
+import type { SessionEntry, SessionKind, SessionTimelineResult, SourceKind } from "../core/types.js";
 import { TOOL_VERSION } from "../version.js";
 
 const VALID_PROFILES = ["read-only", "admin"] as const;
@@ -96,6 +96,58 @@ function normalizePlanDeleteLimit(limit: number | undefined): number {
   return limit;
 }
 
+const MCP_SESSION_LIMITS = {
+  compact: { items: 20, bytes: 64 * 1024 },
+  full: { items: 200, bytes: 256 * 1024 },
+} as const;
+
+type McpSessionDetail = keyof typeof MCP_SESSION_LIMITS;
+
+export function buildMcpSessionPayload(
+  session: SessionEntry,
+  result: SessionTimelineResult,
+  detail: McpSessionDetail,
+): Record<string, unknown> {
+  const limit = MCP_SESSION_LIMITS[detail];
+  const { items, ...metadata } = result;
+  let timeline = items.slice(0, limit.items);
+  const itemLimited = items.length > limit.items;
+  let byteLimited = false;
+
+  const createPayload = () => {
+    const limited = itemLimited || byteLimited;
+    const limitReason = byteLimited
+      ? `MCP ${detail} byte limit (${limit.bytes})`
+      : itemLimited
+        ? `MCP ${detail} item limit (${limit.items})`
+        : null;
+    const omittedReason = [limitReason, result.omittedReason].filter(Boolean).join("; ") || null;
+    return {
+      session,
+      timeline,
+      detail,
+      ...metadata,
+      sourceCompleteness: result.completeness,
+      completeness: limited ? "truncated_limit" : result.completeness,
+      itemsReturned: timeline.length,
+      omittedReason,
+    };
+  };
+
+  let payload = createPayload();
+  while (Buffer.byteLength(JSON.stringify(payload), "utf8") > limit.bytes && timeline.length > 0) {
+    timeline = timeline.slice(0, -1);
+    byteLimited = true;
+    payload = createPayload();
+  }
+
+  if (Buffer.byteLength(JSON.stringify(payload), "utf8") > limit.bytes) {
+    throw new Error(`Session metadata exceeds the MCP ${detail} byte limit (${limit.bytes}). Use CLI show --json.`);
+  }
+
+  return payload;
+}
+
 export function createServer(profile: McpProfile = "read-only"): McpServer {
   const server = new McpServer(
     {
@@ -104,6 +156,8 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
     },
     {
       capabilities: { logging: {} },
+      instructions:
+        "Prefer the codex-sessions CLI for large or complete JSON output and byte-exact exports. Use MCP for bounded structured reads and explicitly approved management actions. get_session responses always report completeness and limits.",
     },
   );
 
@@ -253,22 +307,27 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
   server.registerTool(
     "get_session",
     {
-      description: "Get one Codex session with timeline preview.",
+      description: "Get one Codex session with a bounded timeline and explicit completeness metadata. Use CLI show --json or export for complete/local byte-exact content.",
       outputSchema: TOOL_OUTPUT_SCHEMA,
       inputSchema: z.object({
         sessionId: z.string().describe("Exact session id or unique prefix."),
         root: z.string().optional(),
+        detail: z.enum(["compact", "full"]).optional().describe("compact: up to 20 items/64 KiB; full: up to 200 items/256 KiB."),
       }),
       annotations: {
         readOnlyHint: true,
         idempotentHint: true,
       },
     },
-    async ({ sessionId, root }) => {
+    async ({ sessionId, root, detail = "compact" }) => {
       const scan = await scanCodexRoot(root);
       const session = resolveSessions(scan, [sessionId])[0];
-      const timeline = await readSessionTimeline(session);
-      return textResult(`Loaded session ${session.id}.`, { session, timeline });
+      const result = await readSessionTimelineResult(session);
+      const payload = buildMcpSessionPayload(session, result, detail);
+      return textResult(
+        `Loaded ${payload.itemsReturned as number}/${payload.itemsKnown ?? "unknown"} timeline items for session ${session.id} (${payload.completeness as string}).`,
+        payload,
+      );
     },
   );
 

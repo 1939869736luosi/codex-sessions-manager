@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "product": "openai/codex",
+  "stableVersion": "0.144.1",
+  "checkedAt": "2026-07-11",
+  "releaseUrl": "https://github.com/openai/codex/releases/tag/rust-v0.144.1",
+  "tagUrl": "https://github.com/openai/codex/tree/rust-v0.144.1",
+  "commit": {
+    "sha": "44918ea10c0f99151c6710411b4322c2f5c96bea",
+    "url": "https://github.com/openai/codex/commit/44918ea10c0f99151c6710411b4322c2f5c96bea"
+  },
+  "documentation": {
+    "mcp": "https://learn.chatgpt.com/docs/extend/mcp#stdio-servers",
+    "skills": "https://learn.chatgpt.com/docs/build-skills",
+    "appServerThreads": "https://learn.chatgpt.com/docs/app-server#list-threads-with-pagination--filters",
+    "memories": "https://learn.chatgpt.com/docs/customization/memories#how-local-codex-memories-work"
+  },
+  "knownSchema": {
+    "threadColumns": [
+      "recency_at_ms",
+      "recency_at",
+      "updated_at_ms",
+      "updated_at",
+      "history_mode"
+    ],
+    "historyModes": ["legacy", "paginated"],
+    "rolloutOuterTypes": ["session_meta", "response_item", "event_msg"],
+    "paginatedCanonicalRecord": "event_msg.payload.type=item_completed",
+    "compressedExtension": ".jsonl.zst",
+    "migrations": [
+      "0025_thread_timestamps_millis.sql",
+      "0039_threads_recency_at.sql",
+      "0040_threads_history_mode.sql"
+    ]
+  }
+}

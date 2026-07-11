@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "samples": [
+    {
+      "originator": "codex-work-web",
+      "ordinarySessionMetadata": true,
+      "cleanupSurface": false
+    },
+    {
+      "originator": "codex-work-mobile",
+      "ordinarySessionMetadata": true,
+      "cleanupSurface": false
+    }
+  ],
+  "observationOnly": [
+    "external_agent_config_imports",
+    "logs_N.sqlite",
+    "memories_N.sqlite",
+    "remote-control"
+  ]
+}

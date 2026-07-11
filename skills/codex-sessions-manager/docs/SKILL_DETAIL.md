@@ -27,7 +27,7 @@ Date-only filters use the local calendar day. Timezone-less datetime strings mus
 codex-sessions show <session-id> [--root PATH] [--json]
 ```
 
-Human output shortens long titles and timeline previews. Use `--json` for full values.
+Human output shows at most 20 timeline items and reports returned/known counts. Use `--json` for every locally parseable semantic item; JSON has no total item-count limit and marks unknown items, parse errors, and truncated tool output. `export` is the byte-exact raw-content path. A compressed-only `.jsonl.zst` session reports `compressed_unread` instead of presenting an index/history summary as transcript text.
 
 ### family
 
@@ -156,6 +156,8 @@ Reports remaining files, JSONL rows, SQLite rows (including goals DB), shell sna
 | `recover_operation` | Recover the exact interrupted operation after explicit confirmation |
 
 All admin tools require `confirm=true` to execute; without it they return preview only.
+
+`get_session` accepts `detail=compact|full`. `compact` is limited to 20 timeline items and 64 KiB; `full` is limited to 200 items and 256 KiB. Responses include `completeness`, underlying `sourceCompleteness`, `itemsReturned`, `itemsKnown`, `omittedReason`, and `exactExportAvailable`. These limits are intentional; use CLI JSON or export for complete local handoff.
 
 ## Source Metadata Rules
 

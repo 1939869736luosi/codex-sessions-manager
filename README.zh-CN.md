@@ -7,7 +7,7 @@
 
 > Codex Desktop 现在已经有归档聊天删除入口。实测中，它会删除主会话文件和部分 thread 记录，但仍可能留下索引、执行日志和桌面状态引用。
 
-**codex-sessions-manager** 是本地 Codex 会话审计和清理工具。它同时是 **Skill**（Claude Code / Codex 可直接调用）、**CLI** 和 **MCP Server**——三种形态共享同一套核心逻辑。它用来检查 `~/.codex` 里还剩什么、审计官方 UI 删除/归档后留下的本地残留、按精确 session ID 处理隐藏记录，并验证当前版本已覆盖的本机 surface 是否仍有残留。
+**codex-sessions-manager** 是 CLI-first 的本地 Codex 会话审计和清理工具。它的 **Skill**、**CLI** 和有限返回的 **MCP Server** 共享同一套核心逻辑。它用来检查 `~/.codex` 里还剩什么、审计官方 UI 删除/归档后留下的本地残留、按精确 session ID 处理隐藏记录，并验证当前版本已覆盖的本机 surface 是否仍有残留。
 
 它面向安全敏感的本地历史管理：prompt/history 隐私、精确会话删除、失败回滚、恢复冲突检查、SQLite/global-state 一致性，以及删除后的残留验证。
 
@@ -26,7 +26,7 @@
 | AI Agent 可直接调用（MCP） | ✅ | ❌ |
 | 识别 `/side` 和 `/fork` 父子关系 | ✅ | ❌ |
 
-当前兼容边界：Codex 可能通过 `sqlite_home` 或 `CODEX_SQLITE_HOME` 把 SQLite 放在 Codex root 外。本工具会按 `config.toml sqlite_home`、`CODEX_SQLITE_HOME`、Codex root 的顺序解析，并在 root 顶层和 SQLite home 同时存在 DB 时报警。压缩 rollout 文件 `.jsonl.zst` 已进入扫描、删除、回收站和恢复路径，并按二进制保存；如果某个 session 只剩 `.jsonl.zst`，`show` / timeline 不会解压正文，只使用索引或历史摘要。`logs_N.sqlite` 执行日志、`memories_N.sqlite` memory 数据和 remote-control 状态当前都不作为普通 session cleanup surface。
+当前兼容边界：Codex 可能通过 `sqlite_home` 或 `CODEX_SQLITE_HOME` 把 SQLite 放在 Codex root 外。本工具会按 `config.toml sqlite_home`、`CODEX_SQLITE_HOME`、Codex root 的顺序解析，并在 root 顶层和 SQLite home 同时存在 DB 时报警。旧式 `event_msg` / `response_item` timeline 和 paginated `item_completed` timeline 都会解析，并明确报告完整性。会话排序按 `recency_at_ms`、`recency_at`、`updated_at` 依次回退，结构化结果会显示 `historyMode`。压缩 rollout 文件 `.jsonl.zst` 已进入扫描、删除、回收站和恢复路径，并按二进制保存；如果某个 session 只剩 `.jsonl.zst`，`show` 不会解压正文，而会报告 `compressed_unread`，精确压缩字节通过 `export` 获取。`logs_N.sqlite` 执行日志、`memories_N.sqlite` memory 数据和 remote-control 状态当前都不作为普通 session cleanup surface。
 
 确认写操作只接受标准完整 session UUID；删除 active session 还要显式提供 `--allow-active` / `allowActive=true`。managed symlink、junction、hard link、root 外路径和过期计划都会拒绝。写操作若被中断，会保留恢复记录并阻止后续写入，直到使用精确 operation ID 完成恢复。退出状态、验证范围和同一用户持续抢占文件系统时的边界见 [安全指南](./docs/SAFETY.md)。
 
@@ -135,23 +135,35 @@ codex-sessions delete <session-id>   # 不加 --yes 只做预览
 
 适用于 Amp、Claude Code、Codex、Cursor、Factory Droid 及任何有 shell 权限的 agent。
 
-### 2. Skill（Claude Code、Amp）
+### 2. Skill（Codex、Claude Code、Amp）
 
 复制自包含的 skill 目录获得更完整的 agent 集成：
 
 ```bash
+# Codex 项目级官方共享目录
+mkdir -p .agents/skills/codex-sessions-manager
+cp -r skills/codex-sessions-manager/* .agents/skills/codex-sessions-manager/
+
+# Codex 用户级目录
+mkdir -p "$HOME/.agents/skills/codex-sessions-manager"
+cp -r skills/codex-sessions-manager/* "$HOME/.agents/skills/codex-sessions-manager/"
+
 # Claude Code
 mkdir -p ~/.claude/skills/codex-sessions-manager
 cp -r skills/codex-sessions-manager/* ~/.claude/skills/codex-sessions-manager/
 
-# Amp
-mkdir -p .agents/skills/codex-sessions-manager
-cp -r skills/codex-sessions-manager/* .agents/skills/codex-sessions-manager/
+# 分发的 Skill 内含 nested agents/openai.yaml。
 ```
 
 ### 3. MCP（可选，进阶）
 
-需要结构化 JSON 响应时使用：
+Codex 使用官方注册命令，或使用 [Codex adapter](adapters/codex/) 中等价的 TOML：
+
+```bash
+codex mcp add codex-sessions -- codex-sessions-mcp --profile read-only
+```
+
+其他 MCP host 可继续使用它们各自的 JSON 配置，例如：
 
 ```json
 {
@@ -165,6 +177,8 @@ cp -r skills/codex-sessions-manager/* .agents/skills/codex-sessions-manager/
 ```
 
 默认 **read-only** profile（16 个工具）。需要破坏性操作时使用 `--profile admin`（22 个工具）。
+
+MCP `get_session` 有固定上限：`compact` 最多 20 items / 64 KiB，`full` 最多 200 items / 256 KiB。两者都会返回 `completeness`、底层 `sourceCompleteness`、已返回/已知数量、省略原因和是否可精确导出。需要全部本地可解析 semantic items 时用 `codex-sessions show <id> --json`；需要 byte-exact 原始内容时用 `export`。
 
 **Windows 上的 0.6 系列安全补丁仅支持只读。** 删除、移入回收站、恢复、永久清除、索引清理和中断恢复都会直接拒绝。待真实 Windows 环境完成 junction/reparse point、大小写和异常退出测试后，才会重新开放写操作。Windows 上即使请求 MCP `admin` profile，也只注册只读工具。
 
@@ -196,7 +210,7 @@ codex-sessions list --agent-role subagent --agent-nickname helper
 codex-sessions sources [--json]
 codex-sessions projects
 codex-sessions doctor [--json]
-codex-sessions show <session-id>
+codex-sessions show <session-id> [--json]
 codex-sessions family <session-id> [--json] [--children|--parents|--subagents|--impact] [--full] [--source-kind KIND]
 codex-sessions audit <session-id> [--json]
 codex-sessions audit-root [--json] [--limit 50] [--status STATUS...] [--source SOURCE...] [--all]
@@ -222,7 +236,7 @@ codex-sessions verify <session-id...> [--json]
 
 `export` 和 trash bundle 是恢复数据，不是预览。它们可能包含完整 global-state exact-key value，包括 prompt-history 内容。人工 delete 预览只显示 path、rule、shape 和 byte count。
 
-当前兼容边界：Codex 可能通过 `sqlite_home` 或 `CODEX_SQLITE_HOME` 把 SQLite 放在 Codex root 外。本工具会按 `config.toml sqlite_home`、`CODEX_SQLITE_HOME`、Codex root 的顺序解析，并在 root 顶层和 SQLite home 同时存在 DB 时报警。压缩 rollout 文件 `.jsonl.zst` 已进入扫描、删除、回收站和恢复路径，并按二进制保存；如果某个 session 只剩 `.jsonl.zst`，`show` / timeline 不会解压正文，只使用索引或历史摘要。`logs_N.sqlite` 执行日志、`memories_N.sqlite` memory 数据和 remote-control 状态当前都不作为普通 session cleanup surface。
+兼容检查以 [compat baseline](https://github.com/1939869736luosi/codex-sessions-manager/tree/main/compat) 为准：旧式和 paginated timeline 都有合成 fixture；`.jsonl.zst` 只剩压缩文件时明确报告 `compressed_unread`；`logs_N.sqlite`、`memories_N.sqlite`、external agent imports 和 remote-control 继续只做观察，不进入普通 session cleanup。
 
 官方 Codex UI 删除或归档后，如果想知道本机还剩什么，先用 `audit`。它只读，不会改文件。它会报告原始 rollout 文件、shell snapshot、`session_index`、`history`、SQLite 记录、已知 global-state 引用、P11 exact-key global-state 引用、未知 global-state 引用、`thread_spawn_edges` 是否还在，也会报告 family 归属和断裂 parent/child 关系。如果仍有残留，建议命令只会给不带 `--yes` 的删除预览；只有你自己加 `--yes` 才会真的删除。
 
@@ -347,7 +361,7 @@ Codex Desktop 删除归档聊天时，可能已经清掉其中一部分。`audit
 
 SQLite 可以在 `~/.codex` 顶层，也可以在 `config.toml sqlite_home` / `CODEX_SQLITE_HOME` 指定的 SQLite home；两者同时存在时，`config.toml sqlite_home` 优先。`doctor` 会显示当前 active SQLite home，并在两边同时有 DB 候选时给 dual-home warning。
 
-`.jsonl.zst` 已作为 session 文件纳入 scan、preview、delete、trash、restore 和 stale detection。它不会在 `show` / timeline 中解压读取正文；compressed-only session 只显示索引或历史摘要。
+`.jsonl.zst` 已作为 session 文件纳入 scan、preview、delete、trash、restore 和 stale detection。它不会在 `show` 中解压正文；compressed-only session 会报告 `compressed_unread`，索引或历史摘要也会明确标成 history，不冒充 transcript 正文。
 
 ## 文档
 
@@ -357,6 +371,7 @@ SQLite 可以在 `~/.codex` 顶层，也可以在 `config.toml sqlite_home` / `C
 - [SKILL.md](./SKILL.md) — AI 技能说明（精简路由文件，~90 行）
 - [详细工具参考](./skills/codex-sessions-manager/docs/SKILL_DETAIL.md) — 完整 CLI/MCP 参数文档
 - [生态适配器](./adapters/) — Amp、Claude Code、Codex、Cursor、Factory Droid 各平台配置指南
+- [兼容基线](https://github.com/1939869736luosi/codex-sessions-manager/tree/main/compat) — 固定 Codex 版本、合成 fixtures、公开巡检结果和发版新鲜度规则
 
 ## 开发
 

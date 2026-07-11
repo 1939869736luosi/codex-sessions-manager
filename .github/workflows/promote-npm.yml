@@ -55,8 +55,21 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_DIST_TAG_TOKEN }}
         run: npm dist-tag add "codex-sessions-manager@${{ inputs.version }}" latest
 
-      - name: Verify dist-tags
+      - name: Wait for dist-tag replication
         shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          test "$(npm view codex-sessions-manager@latest version)" = "${{ inputs.version }}"
-          test "$(npm view codex-sessions-manager@security-verify version)" = "${{ inputs.version }}"
+          for ATTEMPT in {1..12}; do
+            CACHE_DIR="${RUNNER_TEMP}/npm-dist-tag-cache-${ATTEMPT}"
+            LATEST="$(npm view codex-sessions-manager@latest version --prefer-online --cache "${CACHE_DIR}" 2>/dev/null || true)"
+            CANDIDATE="$(npm view codex-sessions-manager@security-verify version --prefer-online --cache "${CACHE_DIR}" 2>/dev/null || true)"
+            if [ "${LATEST}" = "${VERSION}" ] && [ "${CANDIDATE}" = "${VERSION}" ]; then
+              exit 0
+            fi
+            if [ "${ATTEMPT}" -eq 12 ]; then
+              echo "dist-tags did not converge to ${VERSION} within the bounded retry window" >&2
+              exit 1
+            fi
+            sleep 5
+          done
