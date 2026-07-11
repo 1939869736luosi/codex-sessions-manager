@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: npm-promote-${{ inputs.version }}
+  group: npm-package-codex-sessions-manager
   cancel-in-progress: false
 
 jobs:

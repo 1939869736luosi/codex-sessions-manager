@@ -184,6 +184,7 @@ describe("release configuration", () => {
     expect(releaseWorkflow).toContain("npm run test:coverage");
     expect(releaseWorkflow).toContain("npm run smoke:release");
     expect(releaseWorkflow).toContain("npm audit --omit=dev --audit-level=high");
+    expect(releaseWorkflow).toContain("group: npm-package-codex-sessions-manager");
 
     expect(promoteWorkflow).toContain("workflow_dispatch:");
     expect(promoteWorkflow).toContain("environment: npm-production");
@@ -193,6 +194,7 @@ describe("release configuration", () => {
     expect(promoteWorkflow).toContain("Wait for dist-tag replication");
     expect(promoteWorkflow).toContain("--prefer-online");
     expect(promoteWorkflow).toContain("for ATTEMPT in {1..12}");
+    expect(promoteWorkflow).toContain("group: npm-package-codex-sessions-manager");
     const candidatePrecheckIndex = promoteWorkflow.indexOf("Require security-verify candidate identity");
     const moveLatestIndex = promoteWorkflow.indexOf("Move latest only after exact-version verification");
     expect(candidatePrecheckIndex).toBeGreaterThan(-1);

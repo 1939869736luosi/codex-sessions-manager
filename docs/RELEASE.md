@@ -19,6 +19,8 @@ This checklist is intentionally stricter than a normal package publish. A releas
 
 ## Release window
 
+The candidate and promotion workflows share one package-level concurrency queue. Do not bypass or replace that queue with per-version groups: overlapping versions must never race while changing `security-verify` or `latest`.
+
 1. Merge the reviewed commit to public `main` only after private review passes.
 2. Wait for all required Linux, macOS, Windows, coverage, package, and production-audit checks on that exact commit.
 3. Create the immutable `v<version>` tag. Do not move or replace an existing tag.

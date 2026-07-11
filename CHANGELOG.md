@@ -17,7 +17,7 @@
 - Added official `.agents/skills` installation paths and nested `skills/codex-sessions-manager/agents/openai.yaml` packaging, with drift checks against the root copies.
 - Added a tracked, synthetic `compat/` baseline, legacy/paginated/SQLite/zstd/source fixtures, public run summaries, an offline validator, and a report-only weekly upstream version check.
 - Added the compatibility fixture suite to Windows CI while keeping destructive Windows behavior fail-closed.
-- Added a seven-day compatibility-baseline release gate and bounded retry for npm dist-tag replication. Promotion now verifies that `security-verify` already points to the requested version before moving `latest`.
+- Added a seven-day compatibility-baseline release gate and bounded retry for npm dist-tag replication. Candidate publishing and promotion now share one package-level concurrency queue, and promotion verifies that `security-verify` already points to the requested version before moving `latest`.
 
 ## 0.6.2
 
