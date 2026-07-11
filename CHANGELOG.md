@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
 
 - Added the 0.7.0 shared application layer: CLI and MCP now reuse the same list, session-detail, doctor, audit, planning, export, verification, recovery, delete, trash, restore, purge, and index-cleanup operations while keeping adapter-specific presentation and response bounds.
 - Added adapter-boundary and parity tests so CLI/MCP cannot bypass the shared mutation policy, shell out to one another, or silently reintroduce separate confirmation and ID rules.
