@@ -184,7 +184,12 @@ describe("release configuration", () => {
     expect(releaseWorkflow).toContain("npm run test:coverage");
     expect(releaseWorkflow).toContain("npm run smoke:release");
     expect(releaseWorkflow).toContain("npm audit --omit=dev --audit-level=high");
-    expect(releaseWorkflow).toContain("group: npm-package-codex-sessions-manager");
+    const sharedConcurrencyBlock = [
+      "concurrency:",
+      "  group: npm-package-codex-sessions-manager",
+      "  cancel-in-progress: false",
+    ].join("\n");
+    expect(releaseWorkflow).toContain(sharedConcurrencyBlock);
 
     expect(promoteWorkflow).toContain("workflow_dispatch:");
     expect(promoteWorkflow).toContain("environment: npm-production");
@@ -194,11 +199,19 @@ describe("release configuration", () => {
     expect(promoteWorkflow).toContain("Wait for dist-tag replication");
     expect(promoteWorkflow).toContain("--prefer-online");
     expect(promoteWorkflow).toContain("for ATTEMPT in {1..12}");
-    expect(promoteWorkflow).toContain("group: npm-package-codex-sessions-manager");
+    expect(promoteWorkflow).toContain(sharedConcurrencyBlock);
     const candidatePrecheckIndex = promoteWorkflow.indexOf("Require security-verify candidate identity");
     const moveLatestIndex = promoteWorkflow.indexOf("Move latest only after exact-version verification");
+    const replicationIndex = promoteWorkflow.indexOf("Wait for dist-tag replication");
     expect(candidatePrecheckIndex).toBeGreaterThan(-1);
     expect(candidatePrecheckIndex).toBeLessThan(moveLatestIndex);
+    expect(moveLatestIndex).toBeLessThan(replicationIndex);
+    const replicationBlock = promoteWorkflow.slice(replicationIndex);
+    expect(replicationBlock).toContain("LATEST=\"$(npm view codex-sessions-manager@latest version");
+    expect(replicationBlock).toContain("CANDIDATE=\"$(npm view codex-sessions-manager@security-verify version");
+    expect(replicationBlock).toContain(
+      'if [ "${LATEST}" = "${VERSION}" ] && [ "${CANDIDATE}" = "${VERSION}" ]; then',
+    );
   });
 
   it("rejects private material from the actual npm dry-run manifest", () => {
