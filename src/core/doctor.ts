@@ -1,6 +1,5 @@
 import path from "node:path";
-import { access, readdir, readFile } from "node:fs/promises";
-import { constants as fsConstants } from "node:fs";
+import { readdir } from "node:fs/promises";
 
 import {
   collectExactKeyGlobalStateReferences,
@@ -9,31 +8,67 @@ import {
 } from "./global-state.js";
 import { expandCodexPath, listVersionedSqlitePaths, resolveSqliteHome } from "./root.js";
 import { scanCodexRoot } from "./scan.js";
+import {
+  captureManagedPath,
+  createTrustedRootContext,
+  isPathSafetyError,
+  readManagedText,
+  revalidateManagedPath,
+  type TrustedRootContext,
+} from "./path-safety.js";
 import { inspectNamedSqliteTables, inspectSqliteTables } from "./sqlite.js";
+import { getRecoveryStatus } from "./recovery.js";
 import type { DoctorReport, GlobalStateReference } from "./types.js";
 
 const TRASH_DIR_NAME = ".codex-sessions-trash";
 
-async function pathStatus(filePath: string): Promise<{ path: string; exists: boolean; readable: boolean }> {
+async function pathStatus(
+  context: TrustedRootContext,
+  relativePath: string,
+  expectedKind: "file" | "directory",
+  warnings: string[],
+): Promise<{ path: string; exists: boolean; readable: boolean }> {
+  const filePath = path.join(context.lexicalPath, relativePath);
   try {
-    await access(filePath, fsConstants.F_OK);
-  } catch {
+    const snapshot = await captureManagedPath(context, relativePath, {
+      expectedKind,
+      allowMissing: true,
+    });
+    return { path: filePath, exists: snapshot.exists, readable: snapshot.exists };
+  } catch (error) {
+    if (!isPathSafetyError(error)) throw error;
+    warnings.push(error.message);
     return { path: filePath, exists: false, readable: false };
-  }
-
-  try {
-    await access(filePath, fsConstants.R_OK);
-    return { path: filePath, exists: true, readable: true };
-  } catch {
-    return { path: filePath, exists: true, readable: false };
   }
 }
 
-async function countTrashEntries(trashDir: string): Promise<number> {
+async function countTrashEntries(context: TrustedRootContext, warnings: string[]): Promise<number> {
   try {
-    const entries = await readdir(trashDir, { withFileTypes: true });
-    return entries.filter((entry) => entry.isDirectory()).length;
-  } catch {
+    const trashSnapshot = await captureManagedPath(context, TRASH_DIR_NAME, {
+      expectedKind: "directory",
+      allowMissing: true,
+    });
+    if (!trashSnapshot.exists) return 0;
+    const entries = await readdir(trashSnapshot.absolutePath, { withFileTypes: true });
+    await revalidateManagedPath(context, trashSnapshot);
+    let count = 0;
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue;
+      try {
+        const snapshot = await captureManagedPath(context, path.join(TRASH_DIR_NAME, entry.name), {
+          expectedKind: "directory",
+          allowMissing: false,
+        });
+        await revalidateManagedPath(context, snapshot);
+        count += 1;
+      } catch (error) {
+        if (!isPathSafetyError(error)) throw error;
+        warnings.push(error.message);
+      }
+    }
+    return count;
+  } catch (error) {
+    if (isPathSafetyError(error)) warnings.push(error.message);
     return 0;
   }
 }
@@ -73,15 +108,9 @@ function uniqueMessages(messages: string[]): string[] {
 
 export async function inspectCodexRoot(rootArg?: string): Promise<DoctorReport> {
   const rootPath = path.resolve(expandCodexPath(rootArg ?? "~/.codex"));
-  const sqliteHome = await resolveSqliteHome(rootPath);
-  const sessionsDir = path.join(rootPath, "sessions");
-  const archivedSessionsDir = path.join(rootPath, "archived_sessions");
-  const sessionIndexPath = path.join(rootPath, "session_index.jsonl");
-  const historyPath = path.join(rootPath, "history.jsonl");
-  const globalStatePath = path.join(rootPath, ".codex-global-state.json");
-  const shellSnapshotsDir = path.join(rootPath, "shell_snapshots");
-  const trashDir = path.join(rootPath, TRASH_DIR_NAME);
+  const rootContext = await createTrustedRootContext(rootPath);
   const warnings: string[] = [];
+  const sqliteHome = await resolveSqliteHome(rootPath, rootContext, warnings);
 
   const [
     sessionsStatus,
@@ -100,21 +129,29 @@ export async function inspectCodexRoot(rootArg?: string): Promise<DoctorReport> 
     rootGoalsCandidates,
     rootMemoriesCandidates,
   ] = await Promise.all([
-    pathStatus(sessionsDir),
-    pathStatus(archivedSessionsDir),
-    pathStatus(sessionIndexPath),
-    pathStatus(historyPath),
-    pathStatus(globalStatePath),
-    pathStatus(shellSnapshotsDir),
-    pathStatus(trashDir),
-    listVersionedSqlitePaths(sqliteHome.sqliteHomePath, "state"),
-    listVersionedSqlitePaths(sqliteHome.sqliteHomePath, "logs"),
-    listVersionedSqlitePaths(sqliteHome.sqliteHomePath, "goals"),
-    listVersionedSqlitePaths(sqliteHome.sqliteHomePath, "memories"),
-    listVersionedSqlitePaths(rootPath, "state"),
-    listVersionedSqlitePaths(rootPath, "logs"),
-    listVersionedSqlitePaths(rootPath, "goals"),
-    listVersionedSqlitePaths(rootPath, "memories"),
+    pathStatus(rootContext, "sessions", "directory", warnings),
+    pathStatus(rootContext, "archived_sessions", "directory", warnings),
+    pathStatus(rootContext, "session_index.jsonl", "file", warnings),
+    pathStatus(rootContext, "history.jsonl", "file", warnings),
+    pathStatus(rootContext, ".codex-global-state.json", "file", warnings),
+    pathStatus(rootContext, "shell_snapshots", "directory", warnings),
+    pathStatus(rootContext, TRASH_DIR_NAME, "directory", warnings),
+    sqliteHome.sqliteHomeTrusted
+      ? listVersionedSqlitePaths(sqliteHome.sqliteHomePath, "state", warnings)
+      : Promise.resolve([]),
+    sqliteHome.sqliteHomeTrusted
+      ? listVersionedSqlitePaths(sqliteHome.sqliteHomePath, "logs", warnings)
+      : Promise.resolve([]),
+    sqliteHome.sqliteHomeTrusted
+      ? listVersionedSqlitePaths(sqliteHome.sqliteHomePath, "goals", warnings)
+      : Promise.resolve([]),
+    sqliteHome.sqliteHomeTrusted
+      ? listVersionedSqlitePaths(sqliteHome.sqliteHomePath, "memories", warnings)
+      : Promise.resolve([]),
+    listVersionedSqlitePaths(rootPath, "state", warnings),
+    listVersionedSqlitePaths(rootPath, "logs", warnings),
+    listVersionedSqlitePaths(rootPath, "goals", warnings),
+    listVersionedSqlitePaths(rootPath, "memories", warnings),
   ]);
 
   if (!sessionsStatus.readable) warnings.push("sessions/ 缺失或不可读。");
@@ -129,7 +166,7 @@ export async function inspectCodexRoot(rootArg?: string): Promise<DoctorReport> 
 
   if (globalStateBaseStatus.exists && globalStateBaseStatus.readable) {
     try {
-      const text = await readFile(globalStatePath, "utf8");
+      const text = await readManagedText(rootContext, ".codex-global-state.json");
       knownRefs = collectGlobalStateReferences(text);
       exactKeyRefs = collectExactKeyGlobalStateReferences(text);
       possibleUnknownRefs = collectPossibleUnknownGlobalStateReferences(text);
@@ -216,9 +253,23 @@ export async function inspectCodexRoot(rootArg?: string): Promise<DoctorReport> 
     }
   }
   warnings.push(...scanWarnings);
+  const recoveryStatus = await getRecoveryStatus(rootPath);
+  if (recoveryStatus.pending) {
+    warnings.push(`RECOVERY_REQUIRED: interrupted ${recoveryStatus.kind} operation ${recoveryStatus.operationId} is at ${recoveryStatus.stage}.`);
+    if (recoveryStatus.invalidReason) warnings.push(recoveryStatus.invalidReason);
+  }
 
   return {
     rootPath,
+    recovery: {
+      pending: recoveryStatus.pending,
+      operationId: recoveryStatus.operationId,
+      kind: recoveryStatus.kind,
+      stage: recoveryStatus.stage,
+      targetIds: recoveryStatus.targetIds,
+      hasRecoveryPayload: recoveryStatus.hasRecoveryPayload,
+      invalidReason: recoveryStatus.invalidReason,
+    },
     paths: {
       sessionsDir: sessionsStatus,
       archivedSessionsDir: archivedStatus,
@@ -231,12 +282,13 @@ export async function inspectCodexRoot(rootArg?: string): Promise<DoctorReport> 
       shellSnapshotsDir: shellSnapshotsStatus,
       trashDir: {
         ...trashBaseStatus,
-        entryCount: await countTrashEntries(trashDir),
+        entryCount: await countTrashEntries(rootContext, warnings),
       },
     },
     sqlite: {
       sqliteHomePath: sqliteHome.sqliteHomePath,
       sqliteHomeSource: sqliteHome.sqliteHomeSource,
+      sqliteHomeTrusted: sqliteHome.sqliteHomeTrusted,
       sqliteHomeConfigPath: sqliteHome.sqliteHomeConfigPath,
       stateCandidates,
       activeStatePath,

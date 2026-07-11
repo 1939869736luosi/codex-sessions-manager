@@ -24,6 +24,10 @@ MCP tools also accept an optional `root` argument.
 
 Codex SQLite may live outside the Codex root. The resolver honors `sqlite_home` in `config.toml` first, then `CODEX_SQLITE_HOME`, then the Codex root itself. `doctor` / `inspect_root` report the active SQLite home and warn when both the root and the SQLite home contain candidate databases.
 
+The supplied Codex root may itself be a symlink, but it is resolved once to a canonical trusted root for each operation. Managed descendants must remain ordinary directories or files inside that root. Read-only commands skip unsafe symlinks, junctions, hard-linked files, and outside-root paths with warnings. Confirmed writes reject the whole operation. The configured SQLite home is validated as a separate trusted root because Codex may legitimately store it outside the main root. SQLite main databases and their `-wal`, `-shm`, and `-journal` sidecars follow the same rule; an unsafe sidecar makes that database unavailable to read-only scans and blocks mutation.
+
+These checks narrow path races by repeating path, type, content, and filesystem-identity validation immediately before mutation. They do not claim absolute protection from a malicious process running as the same user and continuously racing filesystem entries. The current implementation intentionally fails closed instead of using an unverified native `openat` / `unlinkat` layer.
+
 ## Read-Only Operations
 
 These operations are intended to inspect or report information without modifying the Codex root:
@@ -55,6 +59,29 @@ These operations modify files or indexes and require explicit confirmation:
 | `cleanup-stale --yes` | `cleanup_stale_indexes` with `confirm=true` | Rewrites JSONL indexes to remove stale rows |
 
 Without `--yes` or `confirm=true`, destructive operations return a preview and do not perform the write.
+
+Read-only lookup may use a unique short session-ID prefix. A confirmed delete, trash, cleanup, restore, or purge never accepts that prefix as authority: session mutations require canonical lowercase full UUIDs, while restore and purge require the exact internal `trashId`. Active-session delete and trash operations are refused by default even with `--yes`; use `--allow-active` in CLI or `allowActive=true` in an admin MCP call only after checking the full UUID and current active state again.
+
+The MCP `read-only` profile does not register destructive tools. Use the `admin` profile only when the host policy and user confirmation allow local mutations; `confirm=true` remains mandatory.
+
+Windows is intentionally read-only in v0.6.1. Every core mutation entrypoint fails closed, CLI confirmed writes are refused, and the MCP `admin` profile registers only read-only tools. This restriction remains until the real Windows junction/reparse-point, case-handling, permission, and abrupt-termination matrix proves the same safety invariants as the supported mutation platforms.
+
+## Operation Results and Recovery
+
+Structured mutation results include:
+
+- `operationStatus`: `not_started`, `committed`, `rolled_back`, or `recovery_required`.
+- `verificationStatus`: `passed`, `partial`, `failed`, or `not_run`.
+- `verificationScope`: the files, indexes, SQLite data, trash data, journal, and retained surfaces actually checked.
+- `warnings`: unsafe paths, retained data, incomplete verification, and recovery requirements.
+
+CLI exit status is `0` only when the declared verification scope passes. Status `1` means the command was refused or failed before mutation, `2` means the mutation committed but verification was partial or failed, and `3` means the state is uncertain and recovery is required. A committed operation with failed verification is reported as committed; it is not relabeled as if no write occurred.
+
+Each mutation obtains an exclusive lock and records its prepared, committing, committed, verifying, rolled-back, or recovery-required state. File replacements use private temporary files, flush them before atomic replacement, and sync parent directories where the platform supports it. SQLite recovery stores only the affected rows; `logs_N.sqlite` is read-only and large databases are never copied wholesale.
+
+Use `recovery-status --json` to inspect an interrupted operation. Recovery itself requires the exact operation UUID and explicit `recover <operation-id> --yes`. If current files or SQLite rows match neither the recorded before-state nor after-state, recovery refuses to overwrite that third state and keeps mutation blocked for manual review.
+
+Private mutation directories use mode `0700` and private journal, manifest, backup, export, and plan files use `0600` on platforms with POSIX permissions.
 
 ## Delete, Trash, Restore, and Purge
 

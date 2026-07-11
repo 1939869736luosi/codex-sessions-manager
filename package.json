@@ -1,6 +1,6 @@
 {
   "name": "codex-sessions-manager",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Audit and clean local Codex session leftovers: list, export, delete, trash, restore, verify, and cleanup — via CLI or MCP server.",
   "type": "module",
   "bin": {
@@ -38,20 +38,29 @@
     "url": "git+https://github.com/1939869736luosi/codex-sessions-manager.git"
   },
   "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.json && chmod +x dist/cli/index.js dist/mcp/server.js",
+    "build": "node scripts/build.mjs",
     "cli": "node dist/cli/index.js",
     "mcp": "node dist/mcp/server.js",
-    "test": "vitest run"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node scripts/test.mjs",
+    "test:coverage": "node scripts/test-coverage.mjs",
+    "pack:check": "node scripts/check-package.mjs",
+    "audit:prod": "npm audit --omit=dev --audit-level=high",
+    "prepack": "npm run build"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.17.5",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "better-sqlite3": "^12.6.2",
     "zod": "^4.1.12"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.3.0",
+    "@vitest/coverage-v8": "^4.1.2",
     "typescript": "^6.0.2",
     "vitest": "^4.1.2"
   }

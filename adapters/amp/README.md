@@ -18,7 +18,7 @@ cp -r skills/codex-sessions-manager/* .agents/skills/codex-sessions-manager/
 cp adapters/amp/mcp.json .agents/skills/codex-sessions-manager/mcp.json
 ```
 
-3. The SKILL.md teaches Amp when and how to use the CLI. The `mcp.json` enables deferred MCP tool loading with the read-only profile (15 tools).
+3. The SKILL.md teaches Amp when and how to use the CLI. The `mcp.json` enables deferred MCP tool loading with the read-only profile (16 tools).
 
 ## Admin Access
 

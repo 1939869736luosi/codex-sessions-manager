@@ -1,0 +1,62 @@
+name: Promote verified npm release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact already-published version to promote
+        required: true
+        type: string
+      expected_sha256:
+        description: SHA-256 from the candidate publish workflow
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-promote-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Verify candidate and move latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: npm-production
+
+    steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - name: Verify registry bytes and smoke the exact version
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
+        run: |
+          [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          mkdir -p "${RUNNER_TEMP}/registry-pack" "${RUNNER_TEMP}/smoke" "${RUNNER_TEMP}/empty-codex-root"
+          TARBALL_NAME="$(npm pack "codex-sessions-manager@${VERSION}" --pack-destination "${RUNNER_TEMP}/registry-pack")"
+          ACTUAL_SHA256="$(sha256sum "${RUNNER_TEMP}/registry-pack/${TARBALL_NAME}" | cut -d ' ' -f 1)"
+          test "${ACTUAL_SHA256}" = "${EXPECTED_SHA256}"
+          npm install --prefix "${RUNNER_TEMP}/smoke" "codex-sessions-manager@${VERSION}"
+          test "$(node "${RUNNER_TEMP}/smoke/node_modules/codex-sessions-manager/dist/cli/index.js" --version)" = "${VERSION}"
+          test "$(node "${RUNNER_TEMP}/smoke/node_modules/codex-sessions-manager/dist/mcp/server.js" --version)" = "${VERSION}"
+          node "${RUNNER_TEMP}/smoke/node_modules/codex-sessions-manager/dist/cli/index.js" doctor --root "${RUNNER_TEMP}/empty-codex-root" --json > "${RUNNER_TEMP}/registry-doctor.json"
+
+      - name: Move latest only after exact-version verification
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_DIST_TAG_TOKEN }}
+        run: npm dist-tag add "codex-sessions-manager@${{ inputs.version }}" latest
+
+      - name: Verify dist-tags
+        shell: bash
+        run: |
+          test "$(npm view codex-sessions-manager@latest version)" = "${{ inputs.version }}"
+          test "$(npm view codex-sessions-manager@security-verify version)" = "${{ inputs.version }}"

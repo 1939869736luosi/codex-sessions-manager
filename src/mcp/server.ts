@@ -10,6 +10,7 @@ import { z } from "zod";
 
 import { buildRootDeletePreview, buildRootResidueAudit, buildSessionResidueAudit } from "../core/audit.js";
 import { exportSessionBackup } from "../core/backup.js";
+import { assertConfirmedSessionSelection, isDestructivePlatformSupported } from "../core/destructive-policy.js";
 import { inspectCodexRoot } from "../core/doctor.js";
 import {
   buildDeletePreview,
@@ -26,6 +27,8 @@ import { buildPlanDelete } from "../core/plan-delete.js";
 import { groupSessionsByProject, listProjectSummaries } from "../core/project.js";
 import { filterSessions, resolveSessions } from "../core/query.js";
 import { scanCodexRoot } from "../core/scan.js";
+import { assertCanonicalSessionIds, MutationSafetyError } from "../core/mutation-safety.js";
+import { getRecoveryStatus, recoverInterruptedOperation } from "../core/recovery.js";
 import { SOURCE_KINDS, summarizeSources } from "../core/sources.js";
 import { readSessionTimeline } from "../core/timeline.js";
 import {
@@ -566,18 +569,67 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
     },
   );
 
-  if (profile === "admin") {
+  server.registerTool(
+    "get_recovery_status",
+    {
+      description: "Read-only status for an interrupted local mutation. Returns its exact operationId and durable checkpoints without changing data.",
+      outputSchema: TOOL_OUTPUT_SCHEMA,
+      inputSchema: z.object({ root: z.string().optional() }),
+      annotations: { readOnlyHint: true, idempotentHint: true },
+    },
+    async ({ root }) => {
+      const status = await getRecoveryStatus(root);
+      const message = !status.pending
+        ? "No interrupted mutation is pending."
+        : status.invalidReason
+          ? "Interrupted mutation metadata is invalid; recovery is blocked until it is reviewed."
+          : `Interrupted operation ${status.operationId} requires review.`;
+      return textResult(message, { status });
+    },
+  );
+
+  if (profile === "admin" && isDestructivePlatformSupported()) {
+    server.registerTool(
+      "recover_operation",
+      {
+        description: "Recover one interrupted mutation from its durable journal. Requires the exact operationId and confirm=true. Recovery refuses any file or SQLite value outside the recorded before/after states.",
+        outputSchema: TOOL_OUTPUT_SCHEMA,
+        inputSchema: z.object({
+          operationId: z.string().describe("Exact operationId returned by get_recovery_status."),
+          root: z.string().optional(),
+          confirm: z.boolean().optional(),
+        }),
+        annotations: { destructiveHint: true, readOnlyHint: false, idempotentHint: false },
+      },
+      async ({ operationId, root, confirm }) => {
+        assertCanonicalSessionIds([operationId]);
+        const status = await getRecoveryStatus(root);
+        if (!status.pending || status.operationId !== operationId) {
+          throw new MutationSafetyError("RECOVERY_REQUIRED", `no matching interrupted operation: ${operationId}`);
+        }
+        if (!confirm) {
+          return textResult("Recovery was not executed. Pass confirm=true with the exact operationId after reviewing checkpoints.", {
+            status,
+            requiresConfirmation: true,
+            exactOperationIdRequired: true,
+          });
+        }
+        const result = await recoverInterruptedOperation(root);
+        return textResult(`Recovered operation ${operationId} by ${result.recoveredBy}.`, { result });
+      },
+    );
     server.registerTool(
       "delete_sessions",
       {
         description:
-          "Delete explicit Codex sessions across files, JSONL indexes, SQLite, known global-state refs, and the two P11 exact-key global-state refs only. Pass trash=true to move them to recoverable trash. Without confirm=true this returns a preview only; with confirm=true it executes after the caller has reviewed the intended scope. There is no preview token binding a prior preview call to the confirmed call. Unknown global-state refs outside the exact-key rules remain warnings, and unknown-only cleanup is refused. This tool never recursively adds parent, child, or family sessions.",
+          "Delete explicit Codex sessions across files, JSONL indexes, SQLite, known global-state refs, and the two P11 exact-key global-state refs only. Preview may use a unique short prefix. Confirmed execution requires full UUID session IDs. Pass trash=true to move them to recoverable trash. Active sessions additionally require allowActive=true. Without confirm=true this returns a preview only; with confirm=true it executes after the caller has reviewed the intended scope. There is no preview token binding a prior preview call to the confirmed call. Unknown global-state refs outside the exact-key rules remain warnings, and unknown-only cleanup is refused. This tool never recursively adds parent, child, or family sessions.",
         outputSchema: TOOL_OUTPUT_SCHEMA,
         inputSchema: z.object({
           sessionIds: z.array(z.string()).min(1),
           root: z.string().optional(),
           confirm: z.boolean().optional().describe("Must be true to execute deletion after you have inspected a separate preview. Omit or false to return preview only."),
           trash: z.boolean().optional().describe("Move sessions to recoverable trash before deleting live surfaces. Defaults to false for permanent delete compatibility."),
+          allowActive: z.boolean().optional().describe("Must be true, together with confirm=true and full UUIDs, to delete or trash an active session."),
         }),
         annotations: {
           destructiveHint: true,
@@ -585,26 +637,41 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
           idempotentHint: false,
         },
       },
-      async ({ sessionIds, root, confirm, trash }) => {
+      async ({ sessionIds, root, confirm, trash, allowActive }) => {
         const scan = await scanCodexRoot(root);
+        if (confirm) {
+          assertCanonicalSessionIds(sessionIds);
+        }
         const sessions = resolveSessions(scan, sessionIds);
         if (!confirm) {
           const preview = buildDeletePreview(scan, sessions);
+          const activeSessionIds = sessions.filter((session) => session.kind === "active").map((session) => session.id);
           return textResult(`Deletion was not executed. Pass confirm=true to ${trash ? "move to trash" : "delete"} ${sessions.length} sessions.`, {
             preview,
             warnings: scan.warnings,
             requiresConfirmation: true,
+            requiresFullSessionIds: true,
+            activeSessionIds,
+            requiresAllowActive: activeSessionIds.length > 0,
             action: trash ? "trash" : "delete",
           });
         }
+
+        assertConfirmedSessionSelection(sessionIds, sessions, { allowActive });
   
         if (trash) {
-          const result = await moveSessionsToTrash(scan, sessions);
-          return textResult(`Moved ${sessions.length} sessions to trash.`, { result });
+          const result = await moveSessionsToTrash(scan, sessions, { allowActive });
+          return textResult(
+            `Trash mutation committed for ${sessions.length} sessions; verification=${result.verificationStatus}.`,
+            { result },
+          );
         }
   
-        const result = await deleteSessions(scan, sessions);
-        return textResult(`Deleted ${sessions.length} sessions.`, { result });
+        const result = await deleteSessions(scan, sessions, { allowActive });
+        return textResult(
+          `Delete mutation committed for ${sessions.length} sessions; verification=${result.verificationStatus}.`,
+          { result },
+        );
       },
     );
   
@@ -612,10 +679,10 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       "restore_sessions",
       {
         description:
-          "Restore one trash entry by trash id or contained session id. If a session id matches multiple trash entries, confirm=true refuses it and requires an exact trash id.",
+          "Preview one restore candidate by trash id, contained session id, or unique prefix. Confirmed restore requires the exact trashId returned by the preview or list_trash.",
         outputSchema: TOOL_OUTPUT_SCHEMA,
         inputSchema: z.object({
-          id: z.string().describe("Trash id, trash id prefix, session id, or session id prefix."),
+          id: z.string().describe("Preview accepts trash id, session id, or a unique prefix. confirm=true requires an exact trashId."),
           root: z.string().optional(),
           confirm: z.boolean().optional(),
         }),
@@ -633,7 +700,7 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
           return textResult("Restore was not executed. Pass confirm=true to restore.", {
             entries,
             duplicateSessionIds,
-            requiresExactTrashId: entries.length > 1,
+            requiresExactTrashId: true,
             preflight: entries.map((entry) => ({
               trashId: entry.trashId,
               sessionIds: entry.sessionIds,
@@ -644,7 +711,10 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
         }
   
         const result = await restoreTrashEntry(root, id);
-        return textResult(`Restored ${result.restoredSessionIds.length} sessions.`, { result });
+        return textResult(
+          `Restore mutation committed for ${result.restoredSessionIds.length} sessions; verification=${result.verificationStatus}.`,
+          { result },
+        );
       },
     );
   
@@ -652,10 +722,10 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       "purge_trash",
       {
         description:
-          "Permanently remove one trash entry without touching live sessions. If a session id matches multiple trash entries, confirm=true refuses it and requires an exact trash id.",
+          "Preview one purge candidate by trash id, contained session id, or unique prefix. Confirmed purge requires the exact trashId returned by the preview or list_trash.",
         outputSchema: TOOL_OUTPUT_SCHEMA,
         inputSchema: z.object({
-          id: z.string().describe("Trash id, trash id prefix, session id, or session id prefix."),
+          id: z.string().describe("Preview accepts trash id, session id, or a unique prefix. confirm=true requires an exact trashId."),
           root: z.string().optional(),
           confirm: z.boolean().optional(),
         }),
@@ -673,13 +743,16 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
           return textResult("Purge was not executed. Pass confirm=true to purge.", {
             entries,
             duplicateSessionIds,
-            requiresExactTrashId: entries.length > 1,
+            requiresExactTrashId: true,
             requiresConfirmation: true,
           });
         }
   
         const result = await purgeTrashEntry(root, id);
-        return textResult(`Purged trash entry ${result.trashEntry.trashId}.`, { result });
+        return textResult(
+          `Purge mutation committed for ${result.trashEntry.trashId}; verification=${result.verificationStatus}.`,
+          { result },
+        );
       },
     );
   
@@ -687,12 +760,13 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       "cleanup_session_indexes",
       {
         description:
-          "Remove JSONL index traces for specific sessions without deleting raw files or SQLite rows. Requires confirm=true; otherwise returns a preview only.",
+          "Remove JSONL index traces for specific sessions without deleting raw files or SQLite rows. Preview may use a unique short prefix. Confirmed execution requires full UUID session IDs; active sessions additionally require allowActive=true. Requires confirm=true; otherwise returns a preview only.",
         outputSchema: TOOL_OUTPUT_SCHEMA,
         inputSchema: z.object({
           sessionIds: z.array(z.string()).min(1),
           root: z.string().optional(),
           confirm: z.boolean().optional().describe("Must be true to rewrite JSONL indexes. Omit or false to return preview only."),
+          allowActive: z.boolean().optional().describe("Must be true, together with confirm=true and full UUIDs, to rewrite indexes for an active session."),
         }),
         annotations: {
           destructiveHint: true,
@@ -700,19 +774,31 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
           idempotentHint: false,
         },
       },
-      async ({ sessionIds, root, confirm }) => {
+      async ({ sessionIds, root, confirm, allowActive }) => {
         const scan = await scanCodexRoot(root);
+        if (confirm) {
+          assertCanonicalSessionIds(sessionIds);
+        }
         const sessions = resolveSessions(scan, sessionIds);
         if (!confirm) {
           const preview = previewCleanupSessionIndexes(scan, sessions);
+          const activeSessionIds = sessions.filter((session) => session.kind === "active").map((session) => session.id);
           return textResult("Cleanup was not executed. Pass confirm=true to rewrite JSONL indexes.", {
             preview,
             requiresConfirmation: true,
+            requiresFullSessionIds: true,
+            activeSessionIds,
+            requiresAllowActive: activeSessionIds.length > 0,
           });
         }
+
+        assertConfirmedSessionSelection(sessionIds, sessions, { allowActive });
   
-        const result = await cleanupSessionIndexes(scan, sessions);
-        return textResult(`Cleaned index traces for ${sessions.length} sessions.`, { result });
+        const result = await cleanupSessionIndexes(scan, sessions, { allowActive });
+        return textResult(
+          `Index cleanup committed for ${sessions.length} sessions; verification=${result.verificationStatus}.`,
+          { result },
+        );
       },
     );
   
@@ -743,7 +829,10 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
         }
   
         const result = await cleanupStaleIndexes(scan);
-        return textResult(`Cleaned ${result.staleSessionIds.length} stale session indexes.`, { result });
+        return textResult(
+          `Stale-index cleanup committed for ${result.staleSessionIds.length} sessions; verification=${result.verificationStatus}.`,
+          { result },
+        );
       },
     );
   } // end if (profile === "admin")

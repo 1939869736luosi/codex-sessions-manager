@@ -20,13 +20,15 @@ Codex Desktop's built-in delete is the right first stop for ordinary archived-ch
 | | codex-sessions-manager | Others |
 |--|:---:|:---:|
 | Cleans covered session layers (files + JSONL + known SQLite + known global state) | ✅ | ❌ partial |
-| Automatic rollback if anything fails mid-delete | ✅ | ❌ |
+| Durable journal, rollback, and explicit crash recovery | ✅ | ❌ |
 | Recoverable trash with conflict-safe restore | ✅ | ❌ or basic backup |
 | Post-delete verification (checks for orphans) | ✅ | ❌ |
 | AI agents can call it (MCP server) | ✅ | ❌ |
 | Detects `/side` and `/fork` child relationships | ✅ | ❌ |
 
 Current compatibility limit: Codex can store SQLite files outside the Codex root via `sqlite_home` or `CODEX_SQLITE_HOME`. This tool resolves that split in this order: `config.toml sqlite_home`, then `CODEX_SQLITE_HOME`, then the Codex root. It warns when both locations contain SQLite databases. It also recognizes compressed rollout files (`.jsonl.zst`) and preserves them through trash/restore as binary data. If a session has only `.jsonl.zst`, `show` / timeline output does not decompress the transcript body; it uses index/history summaries instead. `memories_N.sqlite` is recognized by `doctor` as an official memory surface, but memory rows and Phase 2 memory outputs are read-only and are not mutated by session cleanup. `logs_N.sqlite` execution logs and remote-control state are also not ordinary session cleanup surfaces.
+
+Confirmed mutations require canonical full session UUIDs; deleting an active session needs the additional `--allow-active` / `allowActive=true` override. Managed symlinks, junctions, hard-linked files, outside-root paths, and stale plans are rejected. Interrupted mutations keep a durable recovery record and block further writes until the exact recovery operation completes. See [Safety Guide](./docs/SAFETY.md) for exit statuses, verification scope, and the same-user filesystem-race boundary.
 
 ## Quick Start
 
@@ -77,14 +79,14 @@ codex-sessions delete <session-id>
 # Preview P11 exact-key global-state cleanup for one explicit session (safe, no changes)
 codex-sessions delete <session-id> --root <path-to-codex-root>
 
-# After preview, delete with recoverable trash (recommended)
-codex-sessions delete <session-id> --trash --yes
+# After preview, delete with the canonical full UUID (recommended)
+codex-sessions delete <full-session-uuid> --trash --yes
 
 # Changed your mind? Restore it
-# If trash-list shows multiple copies for the same session, use the exact trash_id.
-codex-sessions restore <trash-id-or-session-id> --yes
+# Confirmed restore always uses the exact internal trashId.
+codex-sessions restore <exact-trash-id> --yes
 
-# Verify nothing is left behind
+# Verify the live surfaces covered by this release
 codex-sessions verify <session-id>
 ```
 
@@ -173,7 +175,9 @@ For agents that benefit from structured JSON responses:
 }
 ```
 
-Default profile is **read-only** (15 tools). For destructive operations, use `--profile admin` (20 tools).
+Default profile is **read-only** (16 tools). For destructive operations, use `--profile admin` (22 tools).
+
+**Windows v0.6.1 is read-only.** Delete, trash, restore, purge, cleanup, and interrupted-operation recovery fail closed until the real Windows junction/reparse-point, case-handling, and abrupt-termination matrix is verified. On Windows, requesting the MCP `admin` profile still registers only the read-only tools.
 
 ### 4. Ecosystem Adapters
 
@@ -189,7 +193,7 @@ Platform-specific setup guides are in the `adapters/` directory:
 
 ### Migration Note (v0.5.x to v0.6.0)
 
-MCP default changed from 20 tools to 15 tools (read-only profile). If you need all tools, add `--profile admin` to your MCP config args. This is a deliberate safety change, not a regression.
+MCP default changed from 20 tools to 15 tools in v0.6.0. v0.6.1 adds read-only recovery inspection and an admin-only confirmed recovery tool, bringing the profiles to 16 and 22 tools. If you need destructive tools, add `--profile admin`; explicit confirmation remains mandatory.
 
 ## CLI Reference
 
@@ -212,16 +216,20 @@ codex-sessions export <session-id> [--output ./backup.json]
 codex-sessions plan-delete <session-id...> [--json] [--write-plan FILE] [--include-children] [--include-subagents] [--include-descendants] [--include-family]
 codex-sessions plan-delete --source-kind KIND [--source-kind KIND...] --limit N [--status STATUS...] [--json]
 codex-sessions preview-plan <plan-file> [--json]
-codex-sessions delete <session-id...> [--trash] [--yes]
+codex-sessions delete <full-session-uuid...> [--trash] [--yes] [--allow-active]
+codex-sessions cleanup-index <full-session-uuid...> [--yes] [--allow-active]
+codex-sessions recovery-status [--json]
+codex-sessions recover <exact-operation-id> --yes
 codex-sessions trash-list
-codex-sessions restore <trash-id-or-session-id> --yes
-codex-sessions purge <trash-id-or-session-id> --yes
+codex-sessions restore <exact-trash-id> --yes
+codex-sessions purge <exact-trash-id> --yes
 codex-sessions cleanup-stale [--yes]
-codex-sessions cleanup-index <session-id...> [--yes]
 codex-sessions verify <session-id...> [--json]
 ```
 
 **Safety first**: All destructive commands require `--yes`. Without it, you only get a preview. Run a separate preview for the exact session IDs first; `family`, `impact`, `audit-root`, `preview-root`, `plan-delete`, plan files, and `preview-plan` never count as permission to delete.
+
+Read-only lookups may resolve a unique short prefix. Confirmed session mutations require lowercase full UUIDs; active-session deletion needs `--allow-active`. Confirmed restore and purge require an exact `trashId`. Exit status `2` means a mutation committed but verification was partial or failed; status `3` means recovery is required and further mutation is blocked.
 
 `export` and trash bundles are recovery data, not previews. They may include full global-state exact-key values such as prompt-history content. Human delete previews show only path, rule, shape, and byte counts.
 

@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.6.1
+
+### Security
+
+- Restricted every managed read and write to a canonical Codex root or the separately trusted configured SQLite home. Managed symlinks, junctions, hard-linked files, path escapes, stale operation plans, and unsafe SQLite `-wal`/`-shm`/`-journal` sidecars are rejected.
+- Confirmed destructive session operations now require canonical full UUIDs. Deleting an active session also requires the explicit `--allow-active` CLI flag or `allowActive=true` MCP argument.
+- Added exclusive mutation locks, durable operation journals, crash recovery records, atomic file replacement, and row-level SQLite recovery. Large log databases remain read-only and are never copied into rollback data.
+- Invalid trash manifests are reported instead of silently skipped. Restore destinations are limited to the documented session and shell-snapshot directories, and confirmed restore or purge requires an exact `trashId`.
+- The MCP `read-only` profile no longer registers destructive tools. The `admin` profile still requires explicit confirmation.
+
+### Added
+
+- Added `operationStatus`, `verificationStatus`, `verificationScope`, `warnings`, and stable mutation error codes to structured results without removing existing success fields.
+- Added `recovery-status` and confirmed `recover <operation-id> --yes` CLI commands, plus read-only recovery inspection and admin recovery tools for MCP.
+- Added cross-platform CI on Linux Node 20/22/24 and macOS/Windows Node 24, an 80% coverage gate, production dependency auditing, npm package-content checks, and private-material leak detection.
+
+### Changed
+
+- CLI exit status is now `0` for a committed and fully verified operation, `1` for a pre-mutation refusal or failure, `2` for a committed operation with partial or failed verification, and `3` when recovery is required.
+- Build and executable-permission handling now use a cross-platform Node script. The package requires Node 20 or newer and uses an explicit npm file allowlist.
+- Mutation output distinguishes a completed write from its later verification. It no longer describes a limited verification scope as proof that every retained Codex surface was erased.
+
+### Safety boundary
+
+- The release rejects managed symlinks and repeats path and identity checks immediately before writes. It does not claim absolute protection against a malicious process running as the same user and continuously racing filesystem entries; stronger descriptor-relative native filesystem operations remain a separate future design.
+
 ## 0.6.0
 
 ### Breaking Changes

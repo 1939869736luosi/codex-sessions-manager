@@ -20,13 +20,15 @@
 | | codex-sessions-manager | 其他工具 |
 |--|:---:|:---:|
 | 清理已覆盖的 session 层（文件 + JSONL + 已知 SQLite + 已知全局状态） | ✅ | ❌ 只清部分 |
-| 删除中途出错自动回滚 | ✅ | ❌ |
+| 持久 journal、失败回滚和明确的崩溃恢复 | ✅ | ❌ |
 | 可恢复的回收站 + 冲突检测 | ✅ | ❌ 或简单备份 |
 | 删完验证有没有残留 | ✅ | ❌ |
 | AI Agent 可直接调用（MCP） | ✅ | ❌ |
 | 识别 `/side` 和 `/fork` 父子关系 | ✅ | ❌ |
 
 当前兼容边界：Codex 可能通过 `sqlite_home` 或 `CODEX_SQLITE_HOME` 把 SQLite 放在 Codex root 外。本工具会按 `config.toml sqlite_home`、`CODEX_SQLITE_HOME`、Codex root 的顺序解析，并在 root 顶层和 SQLite home 同时存在 DB 时报警。压缩 rollout 文件 `.jsonl.zst` 已进入扫描、删除、回收站和恢复路径，并按二进制保存；如果某个 session 只剩 `.jsonl.zst`，`show` / timeline 不会解压正文，只使用索引或历史摘要。`logs_N.sqlite` 执行日志、`memories_N.sqlite` memory 数据和 remote-control 状态当前都不作为普通 session cleanup surface。
+
+确认写操作只接受标准完整 session UUID；删除 active session 还要显式提供 `--allow-active` / `allowActive=true`。managed symlink、junction、hard link、root 外路径和过期计划都会拒绝。写操作若被中断，会保留恢复记录并阻止后续写入，直到使用精确 operation ID 完成恢复。退出状态、验证范围和同一用户持续抢占文件系统时的边界见 [安全指南](./docs/SAFETY.md)。
 
 ## 快速开始
 
@@ -68,13 +70,13 @@ codex-sessions delete <session-id>
 # 预览 P11 exact-key global-state 清理（安全，不做任何修改）
 codex-sessions delete <session-id> --root <path-to-codex-root>
 
-# 预览确认后，删除到回收站（推荐）
-codex-sessions delete <session-id> --trash --yes
+# 预览确认后，使用标准完整 UUID 删除到回收站（推荐）
+codex-sessions delete <full-session-uuid> --trash --yes
 
-# 后悔了？恢复
-codex-sessions restore <session-id> --yes
+# 后悔了？使用精确内部 trashId 恢复
+codex-sessions restore <exact-trash-id> --yes
 
-# 验证是否清理干净
+# 验证当前版本覆盖的 live surfaces
 codex-sessions verify <session-id>
 ```
 
@@ -162,7 +164,9 @@ cp -r skills/codex-sessions-manager/* .agents/skills/codex-sessions-manager/
 }
 ```
 
-默认 **read-only** profile（15 个工具）。需要破坏性操作时使用 `--profile admin`（20 个工具）。
+默认 **read-only** profile（16 个工具）。需要破坏性操作时使用 `--profile admin`（22 个工具）。
+
+**Windows 上的 v0.6.1 仅支持只读。** 删除、移入回收站、恢复、永久清除、索引清理和中断恢复都会直接拒绝。待真实 Windows 环境完成 junction/reparse point、大小写和异常退出测试后，才会重新开放写操作。Windows 上即使请求 MCP `admin` profile，也只注册只读工具。
 
 ### 4. 生态适配器
 
@@ -178,7 +182,7 @@ cp -r skills/codex-sessions-manager/* .agents/skills/codex-sessions-manager/
 
 ### 升级说明（v0.5.x → v0.6.0）
 
-MCP 默认从 20 个工具缩减为 15 个（read-only profile）。如需全部工具，在 MCP 配置中添加 `--profile admin`。这是刻意的安全改动，不是 regression。
+v0.6.0 把 MCP 默认 profile 从 20 个工具缩减为 15 个。v0.6.1 增加只读恢复状态检查和 admin-only 确认恢复工具，两个 profile 现在分别是 16 和 22 个工具。需要写操作时添加 `--profile admin`，但仍然必须明确确认。
 
 ## CLI 命令
 
@@ -201,16 +205,20 @@ codex-sessions export <session-id> [--output ./backup.json]
 codex-sessions plan-delete <session-id...> [--json] [--write-plan FILE] [--include-children] [--include-subagents] [--include-descendants] [--include-family]
 codex-sessions plan-delete --source-kind KIND [--source-kind KIND...] --limit N [--status STATUS...] [--json]
 codex-sessions preview-plan <plan-file> [--json]
-codex-sessions delete <session-id...> [--trash] [--yes]
+codex-sessions delete <full-session-uuid...> [--trash] [--yes] [--allow-active]
+codex-sessions cleanup-index <full-session-uuid...> [--yes] [--allow-active]
+codex-sessions recovery-status [--json]
+codex-sessions recover <exact-operation-id> --yes
 codex-sessions trash-list
-codex-sessions restore <session-id> --yes
-codex-sessions purge <session-id> --yes
+codex-sessions restore <exact-trash-id> --yes
+codex-sessions purge <exact-trash-id> --yes
 codex-sessions cleanup-stale [--yes]
-codex-sessions cleanup-index <session-id...> [--yes]
 codex-sessions verify <session-id...> [--json]
 ```
 
 **安全第一**：所有破坏性命令需要 `--yes` 才执行，不加只看预览。真正删除前，先对明确的 session ID 单独预览；`family`、`impact`、`audit-root`、`preview-root`、`plan-delete`、plan files 和 `preview-plan` 都不能算删除许可，也不能替代删除确认。
+
+只读查询可以解析唯一短前缀。确认 session 写操作只接受小写完整 UUID，删除 active session 还要加 `--allow-active`；确认 restore/purge 只接受精确 `trashId`。退出状态 `2` 表示写操作已提交，但验证不完整或失败；状态 `3` 表示必须恢复，后续写操作已经阻止。
 
 `export` 和 trash bundle 是恢复数据，不是预览。它们可能包含完整 global-state exact-key value，包括 prompt-history 内容。人工 delete 预览只显示 path、rule、shape 和 byte count。
 

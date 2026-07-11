@@ -1,9 +1,9 @@
 import path from "node:path";
-import { mkdir, writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 
 import { buildRootDeletePreview, buildRootResidueAudit, buildSessionResidueAudit } from "../core/audit.js";
 import { exportSessionBackup } from "../core/backup.js";
+import { assertConfirmedSessionSelection } from "../core/destructive-policy.js";
 import { inspectCodexRoot } from "../core/doctor.js";
 import {
   buildDeletePreview,
@@ -15,11 +15,14 @@ import {
   validateDeletion,
 } from "../core/delete.js";
 import { buildSessionFamilyQuery } from "../core/family.js";
+import { writePrivateOutputFile } from "../core/private-output.js";
 import { previewDeletePlan, readDeletePlanFile, writeDeletePlanFile } from "../core/plan-file.js";
 import { buildPlanDelete } from "../core/plan-delete.js";
 import { listProjectSummaries } from "../core/project.js";
 import { filterSessions, resolveSessions } from "../core/query.js";
 import { scanCodexRoot } from "../core/scan.js";
+import { assertCanonicalSessionIds, MutationSafetyError } from "../core/mutation-safety.js";
+import { getRecoveryStatus, recoverInterruptedOperation } from "../core/recovery.js";
 import { parseSourceKind, summarizeSources } from "../core/sources.js";
 import { readSessionTimeline } from "../core/timeline.js";
 import {
@@ -79,6 +82,8 @@ type CommandName =
   | "purge"
   | "cleanup-index"
   | "cleanup-stale"
+  | "recovery-status"
+  | "recover"
   | "verify";
 
 interface CliIo {
@@ -86,11 +91,24 @@ interface CliIo {
   stderr(message: string): void;
 }
 
+export function cliUnhandledErrorExitCode(error: unknown): 1 | 2 | 3 {
+  const errorCode = typeof error === "object" && error !== null && "code" in error
+    ? String(error.code)
+    : "";
+  if (errorCode === "RECOVERY_REQUIRED") return 3;
+  if (errorCode === "POST_COMMIT_VERIFY_FAILED") return 2;
+  return 1;
+}
+
 function defaultIo(): CliIo {
   return {
     stdout: (message) => console.log(message),
     stderr: (message) => console.error(message),
   };
+}
+
+export function mutationExitCode(result: { verificationStatus: string }): 0 | 2 {
+  return result.verificationStatus === "passed" ? 0 : 2;
 }
 
 export function getHelpText(): string {
@@ -122,12 +140,14 @@ Usage:
   codex-sessions plan-delete --source-kind KIND [--source-kind KIND...] --limit N
                             [--status STATUS...] [--root PATH] [--json]
   codex-sessions preview-plan <plan-file> [--root PATH] [--json]
-  codex-sessions delete <session-id...> [--root PATH] [--json] [--yes] [--trash]
+  codex-sessions delete <session-id...> [--root PATH] [--json] [--yes] [--trash] [--allow-active]
   codex-sessions trash-list [--root PATH] [--json]
   codex-sessions restore <trash-id-or-session-id> [--root PATH] [--json] [--yes]
   codex-sessions purge <trash-id-or-session-id> [--root PATH] [--json] [--yes]
-  codex-sessions cleanup-index <session-id...> [--root PATH] [--json] [--yes]
+  codex-sessions cleanup-index <session-id...> [--root PATH] [--json] [--yes] [--allow-active]
   codex-sessions cleanup-stale [--root PATH] [--json] [--yes]
+  codex-sessions recovery-status [--root PATH] [--json]
+  codex-sessions recover <operation-id> [--root PATH] [--json] [--yes]
   codex-sessions verify <session-id...> [--root PATH] [--json]
 
 Notes:
@@ -152,8 +172,10 @@ Notes:
   - audit-root/preview-root --status 可选: absent | clean | present | partial | broken-family | risky-global-state | db-only | index-only | partial-residue | global-state-exact-key | global-state-unknown | shell-snapshot-residue | index-residue | sqlite-residue | missing-parent-edge | missing-child-edge
   - audit-root/preview-root --source 可选: rollout-files | shell-snapshots | session-index | history | sqlite | global-state-known | global-state-exact-key | global-state-unknown | thread-spawn-edges
   - delete --trash --yes 会先写入回收站，再清理 live session
-  - restore 和 purge 未带 --yes 时只展示匹配的回收站记录
+  - delete / cleanup-index 确认执行只接受完整 UUID；active session 还必须显式加 --allow-active
+  - restore 和 purge 未带 --yes 时可用唯一短前缀预览；确认执行只接受精确 trashId
   - cleanup-index 和 cleanup-stale 未带 --yes 时只展示预览，不改写 JSONL
+  - recovery-status 只读显示中断操作；recover 必须使用精确 operation ID 和 --yes
   - status 可选: all | active | archived | db-only | stale
   - source-kind 可选: subagent | mcp | vscode | cli | exec | unknown
   - sources 只读汇总 sourceKind、raw source、thread_source、model_provider、model、agent_role
@@ -195,8 +217,7 @@ function parsePlanDeleteStatuses(values: string[]): SessionKind[] {
 }
 
 async function writeBackupFile(outputPath: string, payload: unknown): Promise<void> {
-  await mkdir(path.dirname(outputPath), { recursive: true });
-  await writeFile(outputPath, JSON.stringify(payload, null, 2), "utf8");
+  await writePrivateOutputFile(outputPath, `${JSON.stringify(payload, null, 2)}\n`);
 }
 
 export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<number> {
@@ -208,6 +229,7 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
       json: { type: "boolean", default: false },
       yes: { type: "boolean", default: false },
       trash: { type: "boolean", default: false },
+      "allow-active": { type: "boolean", default: false },
       all: { type: "boolean", default: false },
       children: { type: "boolean", default: false },
       parents: { type: "boolean", default: false },
@@ -266,6 +288,46 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
     const report = await inspectCodexRoot(rootArg);
     io.stdout(asJson ? JSON.stringify(report, null, 2) : formatDoctor(report));
     return 0;
+  }
+
+  if (command === "recovery-status") {
+    if (rest.length !== 0) throw new Error("recovery-status 不接收 operation ID。");
+    const status = await getRecoveryStatus(rootArg);
+    io.stdout(
+      asJson
+        ? JSON.stringify(status, null, 2)
+        : status.pending
+          ? status.invalidReason
+            ? `恢复元数据无效，后续写操作已阻止。\n- 原因: ${status.invalidReason}`
+            : `存在待恢复操作: ${status.operationId}\n- kind: ${status.kind}\n- stage: ${status.stage}\n- recovery payload: ${status.hasRecoveryPayload ? "存在" : "缺失"}`
+          : "没有待恢复操作。",
+    );
+    return 0;
+  }
+
+  if (command === "recover") {
+    if (rest.length !== 1) throw new Error("recover 需要 1 个精确 operation ID。");
+    assertCanonicalSessionIds([rest[0]]);
+    const status = await getRecoveryStatus(rootArg);
+    if (!status.pending || status.operationId !== rest[0]) {
+      throw new MutationSafetyError("RECOVERY_REQUIRED", `找不到匹配的待恢复操作：${rest[0]}`);
+    }
+    if (!values.yes) {
+      const preview = { ...status, requiresConfirmation: true, exactOperationIdRequired: true };
+      io.stdout(
+        asJson
+          ? JSON.stringify(preview, null, 2)
+          : `恢复未执行。核对 operation ${rest[0]} 后加 --yes。\n- kind: ${status.kind}\n- stage: ${status.stage}`,
+      );
+      return 0;
+    }
+    const result = await recoverInterruptedOperation(rootArg);
+    io.stdout(
+      asJson
+        ? JSON.stringify(result, null, 2)
+        : `恢复处理完成: ${result.operationId}\n- kind: ${result.kind}\n- action: ${result.recoveredBy}\n- operationStatus: ${result.operationStatus}\n- verificationStatus: ${result.verificationStatus}`,
+    );
+    return mutationExitCode(result);
   }
 
   const scan = await scanCodexRoot(rootArg);
@@ -450,27 +512,41 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
         throw new Error("delete 至少需要 1 个 session-id。");
       }
 
+      if (values.yes) {
+        assertCanonicalSessionIds(rest);
+      }
+
       const sessions = resolveSessions(scan, rest);
 
       if (!values.yes) {
         const preview = buildDeletePreview(scan, sessions);
+        const activeSessionIds = sessions.filter((session) => session.kind === "active").map((session) => session.id);
         io.stdout(
           asJson
-            ? JSON.stringify({ preview, action: values.trash ? "trash" : "delete", requiresConfirmation: true }, null, 2)
-            : `${values.trash ? "将移入回收站，未执行。\n\n" : ""}${formatPreview(preview)}`,
+            ? JSON.stringify({
+              preview,
+              action: values.trash ? "trash" : "delete",
+              requiresConfirmation: true,
+              requiresFullSessionIds: true,
+              activeSessionIds,
+              requiresAllowActive: activeSessionIds.length > 0,
+            }, null, 2)
+            : `${values.trash ? "将移入回收站，未执行。\n\n" : ""}${formatPreview(preview)}\n\n确认执行必须使用完整 UUID${activeSessionIds.length > 0 ? "，并为 active session 加 --allow-active" : ""}。`,
         );
         return 0;
       }
 
       if (values.trash) {
-        const result = await moveSessionsToTrash(scan, sessions);
+        assertConfirmedSessionSelection(rest, sessions, { allowActive: values["allow-active"] });
+        const result = await moveSessionsToTrash(scan, sessions, { allowActive: values["allow-active"] });
         io.stdout(asJson ? JSON.stringify(result, null, 2) : formatTrashDeleteResult(result));
-        return 0;
+        return mutationExitCode(result);
       }
 
-      const result = await deleteSessions(scan, sessions);
+      assertConfirmedSessionSelection(rest, sessions, { allowActive: values["allow-active"] });
+      const result = await deleteSessions(scan, sessions, { allowActive: values["allow-active"] });
       io.stdout(asJson ? JSON.stringify(result, null, 2) : formatDeleteResult(result));
-      return 0;
+      return mutationExitCode(result);
     }
 
     case "plan-delete": {
@@ -589,15 +665,15 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
         const duplicateSessionIds = summarizeTrashDuplicateSessions(matches);
         io.stdout(
           asJson
-            ? JSON.stringify({ matches, duplicateSessionIds, requiresExactTrashId: matches.length > 1, requiresConfirmation: true }, null, 2)
-            : `恢复未执行。确认后加 --yes。\n\n${formatTrashEntries(matches)}`,
+            ? JSON.stringify({ matches, duplicateSessionIds, requiresExactTrashId: true, requiresConfirmation: true }, null, 2)
+            : `恢复未执行。确认执行必须使用表中的精确 trashId 后加 --yes。\n\n${formatTrashEntries(matches)}`,
         );
         return 0;
       }
 
       const result = await restoreTrashEntry(rootArg, rest[0]);
       io.stdout(asJson ? JSON.stringify(result, null, 2) : formatTrashRestoreResult(result));
-      return 0;
+      return mutationExitCode(result);
     }
 
     case "purge": {
@@ -611,15 +687,15 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
         const duplicateSessionIds = summarizeTrashDuplicateSessions(matches);
         io.stdout(
           asJson
-            ? JSON.stringify({ matches, duplicateSessionIds, requiresExactTrashId: matches.length > 1, requiresConfirmation: true }, null, 2)
-            : `永久清除未执行。确认后加 --yes。\n\n${formatTrashEntries(matches)}`,
+            ? JSON.stringify({ matches, duplicateSessionIds, requiresExactTrashId: true, requiresConfirmation: true }, null, 2)
+            : `永久清除未执行。确认执行必须使用表中的精确 trashId 后加 --yes。\n\n${formatTrashEntries(matches)}`,
         );
         return 0;
       }
 
       const result = await purgeTrashEntry(rootArg, rest[0]);
       io.stdout(asJson ? JSON.stringify(result, null, 2) : formatTrashPurgeResult(result));
-      return 0;
+      return mutationExitCode(result);
     }
 
     case "cleanup-index": {
@@ -627,20 +703,32 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
         throw new Error("cleanup-index 至少需要 1 个 session-id。");
       }
 
+      if (values.yes) {
+        assertCanonicalSessionIds(rest);
+      }
+
       const sessions = resolveSessions(scan, rest);
       if (!values.yes) {
         const preview = previewCleanupSessionIndexes(scan, sessions);
+        const activeSessionIds = sessions.filter((session) => session.kind === "active").map((session) => session.id);
         io.stdout(
           asJson
-            ? JSON.stringify({ preview, requiresConfirmation: true }, null, 2)
-            : formatCleanupIndexPreview(preview),
+            ? JSON.stringify({
+              preview,
+              requiresConfirmation: true,
+              requiresFullSessionIds: true,
+              activeSessionIds,
+              requiresAllowActive: activeSessionIds.length > 0,
+            }, null, 2)
+            : `${formatCleanupIndexPreview(preview)}\n确认执行必须使用完整 UUID${activeSessionIds.length > 0 ? "，并为 active session 加 --allow-active" : ""}。`,
         );
         return 0;
       }
 
-      const result = await cleanupSessionIndexes(scan, sessions);
+      assertConfirmedSessionSelection(rest, sessions, { allowActive: values["allow-active"] });
+      const result = await cleanupSessionIndexes(scan, sessions, { allowActive: values["allow-active"] });
       io.stdout(asJson ? JSON.stringify(result, null, 2) : formatCleanupIndexResult(result));
-      return 0;
+      return mutationExitCode(result);
     }
 
     case "cleanup-stale": {
@@ -656,7 +744,7 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
 
       const result = await cleanupStaleIndexes(scan);
       io.stdout(asJson ? JSON.stringify(result, null, 2) : formatCleanupResult(result));
-      return 0;
+      return mutationExitCode(result);
     }
 
     case "verify": {

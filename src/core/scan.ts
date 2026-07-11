@@ -1,5 +1,5 @@
 import path from "node:path";
-import { readFile, readdir, stat } from "node:fs/promises";
+import { lstat, readdir } from "node:fs/promises";
 
 import { safeJsonParse, splitJsonLines } from "./jsonl.js";
 import {
@@ -8,6 +8,16 @@ import {
   collectPossibleUnknownGlobalStateReferences,
 } from "./global-state.js";
 import { deriveProjectIdentity } from "./project.js";
+import {
+  captureManagedPath,
+  createTrustedRootContext,
+  getRegisteredTrustedRoots,
+  isPathSafetyError,
+  readManagedText,
+  revalidateManagedPath,
+  toManagedRelativePath,
+  type TrustedRootContext,
+} from "./path-safety.js";
 import { resolveCodexRoot } from "./root.js";
 import { scanShellSnapshots } from "./shell-snapshots.js";
 import { deriveSourceInfo } from "./sources.js";
@@ -21,30 +31,86 @@ import type {
   SessionFileTarget,
   SessionIndexData,
   SessionIndexRecord,
+  ScanSafetyIssue,
+  ScanSurface,
   SessionTitleCandidate,
   SessionTitleSource,
 } from "./types.js";
 
-async function readOptionalText(filePath: string | null): Promise<string | null> {
+function recordScanSafetyIssue(
+  issues: ScanSafetyIssue[],
+  surface: ScanSurface,
+  error: unknown,
+): void {
+  if (!isPathSafetyError(error)) return;
+  issues.push({
+    surface,
+    path: error.path,
+    code: error.code,
+    reason: error.reason,
+  });
+}
+
+async function readOptionalText(
+  filePath: string | null,
+  context: TrustedRootContext,
+  warnings: string[],
+  unsafeSurfaces: ScanSafetyIssue[],
+  surface: ScanSurface,
+): Promise<string | null> {
   if (!filePath) {
     return null;
   }
 
-  return readFile(filePath, "utf8");
+  try {
+    return await readManagedText(context, toManagedRelativePath(context, filePath));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+    if (!isPathSafetyError(error)) throw error;
+    warnings.push(error.message);
+    recordScanSafetyIssue(unsafeSurfaces, surface, error);
+    return null;
+  }
 }
 
-async function* walkDirectory(directoryPath: string): AsyncGenerator<string> {
-  const entries = await readdir(directoryPath, { withFileTypes: true });
+async function* walkDirectory(
+  context: TrustedRootContext,
+  relativeDirectoryPath: string,
+  warnings: string[],
+  unsafeSurfaces: ScanSafetyIssue[],
+  surface: ScanSurface,
+): AsyncGenerator<{ absolutePath: string; relativePath: string }> {
+  let directorySnapshot;
+  try {
+    directorySnapshot = await captureManagedPath(context, relativeDirectoryPath, {
+      expectedKind: "directory",
+      allowMissing: false,
+    });
+  } catch (error) {
+    if (!isPathSafetyError(error)) throw error;
+    warnings.push(error.message);
+    recordScanSafetyIssue(unsafeSurfaces, surface, error);
+    return;
+  }
+  const entries = await readdir(directorySnapshot.absolutePath, { withFileTypes: true });
+  await revalidateManagedPath(context, directorySnapshot);
 
   for (const entry of entries) {
-    const nextPath = path.join(directoryPath, entry.name);
-
-    if (entry.isDirectory()) {
-      yield* walkDirectory(nextPath);
+    const relativePath = path.join(relativeDirectoryPath, entry.name);
+    let snapshot;
+    try {
+      snapshot = await captureManagedPath(context, relativePath, { allowMissing: false });
+    } catch (error) {
+      if (!isPathSafetyError(error)) throw error;
+      warnings.push(error.message);
+      recordScanSafetyIssue(unsafeSurfaces, surface, error);
       continue;
     }
-
-    yield nextPath;
+    if (snapshot.identity?.kind === "directory") {
+      yield* walkDirectory(context, relativePath, warnings, unsafeSurfaces, surface);
+    } else if (snapshot.identity?.kind === "file") {
+      yield { absolutePath: snapshot.absolutePath, relativePath: snapshot.relativePath };
+    }
   }
 }
 
@@ -68,7 +134,9 @@ function getSessionFileFormat(filePath: string): Pick<SessionFileTarget, "format
 async function scanSessionDirectory(
   directoryPath: string | null,
   bucket: "sessions" | "archived_sessions",
-  rootPath: string,
+  context: TrustedRootContext,
+  warnings: string[],
+  unsafeSurfaces: ScanSafetyIssue[],
 ): Promise<Map<string, SessionFileTarget[]>> {
   const byId = new Map<string, SessionFileTarget[]>();
 
@@ -76,7 +144,23 @@ async function scanSessionDirectory(
     return byId;
   }
 
-  for await (const absolutePath of walkDirectory(directoryPath)) {
+  let relativeDirectoryPath: string;
+  try {
+    relativeDirectoryPath = toManagedRelativePath(context, directoryPath);
+  } catch (error) {
+    if (!isPathSafetyError(error)) throw error;
+    warnings.push(error.message);
+    recordScanSafetyIssue(unsafeSurfaces, bucket, error);
+    return byId;
+  }
+
+  for await (const { absolutePath, relativePath } of walkDirectory(
+    context,
+    relativeDirectoryPath,
+    warnings,
+    unsafeSurfaces,
+    bucket,
+  )) {
     const fileFormat = getSessionFileFormat(absolutePath);
     if (!fileFormat) {
       continue;
@@ -89,16 +173,23 @@ async function scanSessionDirectory(
       continue;
     }
 
-    const fileStat = await stat(absolutePath);
+    const snapshot = await captureManagedPath(context, relativePath, {
+      expectedKind: "file",
+      allowMissing: false,
+    });
+    const fileStat = await lstat(snapshot.absolutePath);
+    await revalidateManagedPath(context, snapshot);
     const target: SessionFileTarget = {
       id: sessionId,
       bucket,
       ...fileFormat,
-      absolutePath,
-      relativePath: path.relative(rootPath, absolutePath),
+      absolutePath: snapshot.absolutePath,
+      relativePath: snapshot.relativePath,
       fileName,
       size: fileStat.size,
       lastModified: fileStat.mtimeMs,
+      device: fileStat.dev,
+      inode: fileStat.ino,
     };
 
     const existing = byId.get(sessionId) ?? [];
@@ -330,15 +421,17 @@ function buildSession(
 
 export async function scanCodexRoot(rootArg?: string): Promise<ScanResult> {
   const root = await resolveCodexRoot(rootArg);
-  const warnings: string[] = [];
+  const warnings: string[] = [...root.warnings];
+  const unsafeSurfaces: ScanSafetyIssue[] = [...root.unsafeSurfaces];
+  const rootContext = getRegisteredTrustedRoots(root)?.root ?? await createTrustedRootContext(root.rootPath);
 
   const [activeFiles, archivedFiles, sessionIndexText, historyText, shellSnapshotFiles, globalStateText] = await Promise.all([
-    scanSessionDirectory(root.sessionsDir, "sessions", root.rootPath),
-    scanSessionDirectory(root.archivedDir, "archived_sessions", root.rootPath),
-    readOptionalText(root.sessionIndexPath),
-    readOptionalText(root.historyPath),
-    scanShellSnapshots(root.shellSnapshotsDir, root.rootPath),
-    readOptionalText(root.globalStatePath),
+    scanSessionDirectory(root.sessionsDir, "sessions", rootContext, warnings, unsafeSurfaces),
+    scanSessionDirectory(root.archivedDir, "archived_sessions", rootContext, warnings, unsafeSurfaces),
+    readOptionalText(root.sessionIndexPath, rootContext, warnings, unsafeSurfaces, "session_index"),
+    readOptionalText(root.historyPath, rootContext, warnings, unsafeSurfaces, "history"),
+    scanShellSnapshots(root.shellSnapshotsDir, root.rootPath, rootContext, warnings, unsafeSurfaces),
+    readOptionalText(root.globalStatePath, rootContext, warnings, unsafeSurfaces, "global_state"),
   ]);
 
   const sessionIndex = parseSessionIndex(sessionIndexText);
@@ -417,6 +510,10 @@ export async function scanCodexRoot(rootArg?: string): Promise<ScanResult> {
       dir: root.shellSnapshotsDir,
       filesById: shellSnapshotFiles,
     },
-    warnings: [...root.warnings, ...warnings],
+    safety: {
+      complete: unsafeSurfaces.length === 0,
+      unsafeSurfaces,
+    },
+    warnings: [...new Set(warnings)],
   };
 }

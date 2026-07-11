@@ -1,0 +1,178 @@
+name: Publish security candidate
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-metadata:
+    name: Verify tag identity and protected main ancestry
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the immutable tag with branch history
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Require the tag commit to belong to origin/main
+        shell: bash
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          git merge-base --is-ancestor "${GITHUB_SHA}" refs/remotes/origin/main
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          test "${GITHUB_REF_NAME}" = "v${PACKAGE_VERSION}"
+          grep -F "## ${PACKAGE_VERSION}" CHANGELOG.md
+
+  verify-matrix:
+    name: Release verify / ${{ matrix.os }} / Node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            node: 20
+          - os: ubuntu-latest
+            node: 22
+          - os: ubuntu-latest
+            node: 24
+          - os: macos-latest
+            node: 24
+          - os: windows-latest
+            node: 24
+    steps:
+      - name: Check out the exact tag commit
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install exact locked dependencies
+        run: npm ci
+
+      - name: Run cross-platform release gates
+        run: |
+          npm run typecheck
+          npm test
+          npm run build
+          npm run pack:check
+
+      - name: Enforce coverage on the release baseline
+        if: matrix.os == 'ubuntu-latest' && matrix.node == 24
+        run: npm run test:coverage
+
+  production-audit:
+    name: Release production dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the exact tag commit
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install exact locked dependencies
+        run: npm ci
+
+      - name: Reject high or critical production advisories
+        run: npm audit --omit=dev --audit-level=high
+
+  publish-candidate:
+    name: Verify and publish to security-verify
+    needs: [release-metadata, verify-matrix, production-audit]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check out the immutable tag
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Set up Node.js for npm Trusted Publishing
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - name: Use an npm CLI version that supports Trusted Publishing
+        run: npm install --global npm@11.16.0
+
+      - name: Install exact locked dependencies
+        run: npm ci
+
+      - name: Rebuild and recheck the publish artifact
+        run: |
+          npm run typecheck
+          npm run build
+          npm run pack:check
+
+      - name: Build the reviewed tarball and record its identity
+        id: package
+        shell: bash
+        run: |
+          TARBALL_NAME="$(npm pack --ignore-scripts --pack-destination "${RUNNER_TEMP}")"
+          TARBALL_PATH="${RUNNER_TEMP}/${TARBALL_NAME}"
+          TARBALL_SHA256="$(sha256sum "${TARBALL_PATH}" | cut -d ' ' -f 1)"
+          echo "path=${TARBALL_PATH}" >> "${GITHUB_OUTPUT}"
+          echo "name=${TARBALL_NAME}" >> "${GITHUB_OUTPUT}"
+          echo "sha256=${TARBALL_SHA256}" >> "${GITHUB_OUTPUT}"
+          npm pack --dry-run --json --ignore-scripts > "${RUNNER_TEMP}/npm-pack-manifest.json"
+          printf '%s  %s\n' "${TARBALL_SHA256}" "${TARBALL_NAME}" > "${RUNNER_TEMP}/${TARBALL_NAME}.sha256"
+
+      - name: Publish with the non-default security-verify tag
+        run: npm publish "${{ steps.package.outputs.path }}" --tag security-verify
+
+      - name: Install the exact registry version and smoke both entrypoints
+        shell: bash
+        run: |
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          SMOKE_ROOT="${RUNNER_TEMP}/registry-smoke"
+          EMPTY_CODEX_ROOT="${RUNNER_TEMP}/empty-codex-root"
+          mkdir -p "${SMOKE_ROOT}"
+          mkdir -p "${EMPTY_CODEX_ROOT}"
+          npm install --prefix "${SMOKE_ROOT}" "codex-sessions-manager@${PACKAGE_VERSION}"
+          test "$(node "${SMOKE_ROOT}/node_modules/codex-sessions-manager/dist/cli/index.js" --version)" = "${PACKAGE_VERSION}"
+          test "$(node "${SMOKE_ROOT}/node_modules/codex-sessions-manager/dist/mcp/server.js" --version)" = "${PACKAGE_VERSION}"
+          node "${SMOKE_ROOT}/node_modules/codex-sessions-manager/dist/cli/index.js" doctor --root "${EMPTY_CODEX_ROOT}" --json > "${RUNNER_TEMP}/registry-doctor.json"
+          node -e "const report=require(process.argv[1]); if (report.rootPath !== process.argv[2]) process.exit(1)" "${RUNNER_TEMP}/registry-doctor.json" "${EMPTY_CODEX_ROOT}"
+
+      - name: Compare the registry tarball with the reviewed tarball
+        shell: bash
+        run: |
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          mkdir -p "${RUNNER_TEMP}/registry-pack"
+          REGISTRY_NAME="$(npm pack "codex-sessions-manager@${PACKAGE_VERSION}" --pack-destination "${RUNNER_TEMP}/registry-pack")"
+          REGISTRY_SHA256="$(sha256sum "${RUNNER_TEMP}/registry-pack/${REGISTRY_NAME}" | cut -d ' ' -f 1)"
+          test "${REGISTRY_SHA256}" = "${{ steps.package.outputs.sha256 }}"
+
+      - name: Preserve only the public package evidence
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: npm-security-candidate-${{ github.ref_name }}
+          path: |
+            ${{ steps.package.outputs.path }}
+            ${{ runner.temp }}/${{ steps.package.outputs.name }}.sha256
+            ${{ runner.temp }}/npm-pack-manifest.json
+          if-no-files-found: error
+          retention-days: 30

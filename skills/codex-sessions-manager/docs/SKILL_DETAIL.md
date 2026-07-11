@@ -89,7 +89,7 @@ Read-only stale check. If stale, no current delete preview is produced.
 ### delete
 
 ```bash
-codex-sessions delete <session-id...> [--root PATH] [--trash] [--yes]
+codex-sessions delete <full-session-uuid...> [--root PATH] [--trash] [--yes] [--allow-active]
 ```
 
 Without `--yes`: preview only. With `--yes`: executes after internal rescan. `--trash --yes` for recoverable deletion. Does not recurse to family.
@@ -98,8 +98,8 @@ Without `--yes`: preview only. With `--yes`: executes after internal rescan. `--
 
 ```bash
 codex-sessions trash-list [--root PATH]
-codex-sessions restore <trash-id-or-session-id> [--root PATH] --yes
-codex-sessions purge <trash-id-or-session-id> [--root PATH] --yes
+codex-sessions restore <exact-trash-id> [--root PATH] --yes
+codex-sessions purge <exact-trash-id> [--root PATH] --yes
 ```
 
 When one session ID maps to multiple trash entries, use the exact `trashId`. Restore refuses live conflicts. Purge removes only the trash entry.
@@ -107,7 +107,7 @@ When one session ID maps to multiple trash entries, use the exact `trashId`. Res
 ### cleanup-index / cleanup-stale
 
 ```bash
-codex-sessions cleanup-index <session-id...> [--root PATH] [--yes]
+codex-sessions cleanup-index <full-session-uuid...> [--root PATH] [--yes] [--allow-active]
 codex-sessions cleanup-stale [--root PATH] [--yes]
 ```
 
@@ -123,7 +123,7 @@ Reports remaining files, JSONL rows, SQLite rows (including goals DB), shell sna
 
 ## MCP Tools Reference
 
-### Read-only profile (15 tools, default)
+### Read-only profile (16 tools, default)
 
 | Tool | Purpose |
 |------|---------|
@@ -142,8 +142,9 @@ Reports remaining files, JSONL rows, SQLite rows (including goals DB), shell sna
 | `preview_delete_plan` | Plan-file stale check |
 | `list_trash` | List trash entries |
 | `verify_sessions` | Post-delete verification |
+| `get_recovery_status` | Inspect an interrupted mutation without changing it |
 
-### Admin-only (5 additional tools, requires `--profile admin`)
+### Admin-only (6 additional tools, requires `--profile admin`)
 
 | Tool | Purpose |
 |------|---------|
@@ -152,6 +153,7 @@ Reports remaining files, JSONL rows, SQLite rows (including goals DB), shell sna
 | `purge_trash` | Permanently remove trash entry |
 | `cleanup_session_indexes` | Rewrite JSONL indexes for specific sessions |
 | `cleanup_stale_indexes` | Remove stale JSONL entries |
+| `recover_operation` | Recover the exact interrupted operation after explicit confirmation |
 
 All admin tools require `confirm=true` to execute; without it they return preview only.
 
@@ -174,7 +176,9 @@ Removable only when the session ID is the whole object key and value shape match
 
 ## Safety Model Summary
 
-- Rollback is best-effort, not crash-safe transaction.
+- Confirmed session mutations require canonical full UUIDs; active-session deletion needs an additional explicit override.
+- Mutations use an exclusive lock, durable journal, atomic file replacement, and operation-specific recovery data.
+- A committed operation with partial or failed verification is reported as committed, with the verification status and scope attached.
 - No preview token binding between preview and confirmed calls; confirmed delete rescans.
 - If global-state changes during confirmed delete or cannot be parsed, the write is refused.
 - `logs_N.sqlite` execution logs are retained by default.

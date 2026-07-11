@@ -1,24 +1,53 @@
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, rm } from "node:fs/promises";
 
 import {
   collectExactKeyGlobalStateReferences,
   collectGlobalStateReferences,
   collectPossibleUnknownGlobalStateReferences,
+  buildGlobalStateRemoval,
   removeGlobalStateReferences,
   toExactKeyPreview,
 } from "./global-state.js";
 import { buildDeleteFamilyWarnings } from "./family.js";
+import { assertConfirmedSessionSelection, assertDestructivePlatformSupported } from "./destructive-policy.js";
 import { filterJsonLines, safeJsonParse, splitJsonLines } from "./jsonl.js";
+import {
+  acquireMutationLock,
+  assertCanonicalSessionIds,
+  atomicWriteManagedFileIfUnchanged,
+  atomicWriteManagedTextIfUnchanged,
+  MutationSafetyError,
+  type MutationLock,
+} from "./mutation-safety.js";
+import {
+  captureManagedPath,
+  createTrustedRootContext,
+  getRegisteredTrustedRoots,
+  requireMutationTrustedRoots,
+  readManagedFile,
+  readManagedText,
+  revalidateManagedPath,
+  toManagedRelativePath,
+  type ManagedPathSnapshot,
+  type TrustedRootContext,
+} from "./path-safety.js";
 import { scanShellSnapshots } from "./shell-snapshots.js";
+import { createRecoveryFileTransition, type OperationRecoveryPayloadV1 } from "./recovery.js";
+import { resolveSessions } from "./query.js";
+import { scanCodexRoot } from "./scan.js";
 import {
   collectSqliteDeletionCounts,
   collectSqliteDeletionTotals,
-  deleteSessionsFromSqlite,
+  deleteGoalRows,
+  deleteStateRows,
+  exportSqliteRecordsForRestore,
+  reconcileSqliteRecordsForRecovery,
   validateSqliteDeletion,
 } from "./sqlite.js";
 import { DeleteSessionsError } from "./types.js";
 import type {
   CleanupResult,
+  CleanupExecutionResult,
   DeleteExecutionResult,
   DeletePreview,
   DeletePreviewItem,
@@ -29,9 +58,28 @@ import type {
   SessionFileTarget,
   ShellSnapshotFile,
   SessionIndexCleanupResult,
+  SessionIndexCleanupExecutionResult,
   SessionIndexRecord,
   SqliteDeletionCounts,
+  MutationErrorCode,
 } from "./types.js";
+
+const MUTATION_ERROR_CODES = new Set<MutationErrorCode>([
+  "UNSAFE_PATH",
+  "STALE_PLAN",
+  "MALFORMED_ID",
+  "ACTIVE_SESSION",
+  "RECOVERY_REQUIRED",
+  "POST_COMMIT_VERIFY_FAILED",
+]);
+
+function structuredErrorCode(error: unknown, fallback: MutationErrorCode): MutationErrorCode {
+  if (error && typeof error === "object" && "code" in error) {
+    const code = String(error.code) as MutationErrorCode;
+    if (MUTATION_ERROR_CODES.has(code)) return code;
+  }
+  return fallback;
+}
 
 function sumSqliteCounts(counts: SqliteDeletionCounts): number {
   return (
@@ -64,20 +112,82 @@ function formatDeleteError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function readOptionalText(filePath: string | null): Promise<string | null> {
-  if (!filePath) {
-    return null;
+async function getReadTrustedRoot(scan: ScanResult): Promise<TrustedRootContext> {
+  return getRegisteredTrustedRoots(scan.root)?.root ?? createTrustedRootContext(scan.root.rootPath);
+}
+
+function getMutationTrustedRoot(scan: ScanResult): TrustedRootContext {
+  return requireMutationTrustedRoots(scan).root;
+}
+
+async function assertDeleteSelectionCurrent(
+  scan: ScanResult,
+  targetIds: ReadonlySet<string>,
+  preview: DeletePreview,
+  allowActive: boolean | undefined,
+): Promise<void> {
+  const refreshedScan = await scanCodexRoot(scan.root.rootPath);
+  const originalRoots = requireMutationTrustedRoots(scan);
+  const refreshedRoots = requireMutationTrustedRoots(refreshedScan);
+  const sameIdentity = (
+    left: TrustedRootContext | null,
+    right: TrustedRootContext | null,
+  ): boolean => left === null || right === null
+    ? left === right
+    : left.realPath === right.realPath
+      && left.identity.dev === right.identity.dev
+      && left.identity.ino === right.identity.ino;
+  if (
+    !sameIdentity(originalRoots.root, refreshedRoots.root)
+    || !sameIdentity(originalRoots.sqliteHome, refreshedRoots.sqliteHome)
+  ) {
+    throw new MutationSafetyError(
+      "STALE_PLAN",
+      "trusted Codex root or SQLite home identity changed after preview",
+    );
   }
+  const refreshedSessions = resolveSessions(refreshedScan, [...targetIds]);
+  assertConfirmedSessionSelection(refreshedSessions.map((session) => session.id), refreshedSessions, {
+    allowActive,
+  });
+  const refreshedPreview = buildDeletePreview(refreshedScan, refreshedSessions);
+  if (JSON.stringify(refreshedPreview) !== JSON.stringify(preview)) {
+    throw new MutationSafetyError(
+      "STALE_PLAN",
+      "selected session surfaces or active/archive state changed after preview",
+    );
+  }
+}
 
+async function readOptionalManagedText(
+  context: TrustedRootContext,
+  filePath: string | null,
+): Promise<string | null> {
+  if (!filePath) return null;
   try {
-    return await readFile(filePath, "utf8");
+    return await readManagedText(context, toManagedRelativePath(context, filePath));
   } catch (error) {
-    if (isMissingFileError(error)) {
-      return null;
-    }
-
+    if (isMissingFileError(error)) return null;
     throw error;
   }
+}
+
+async function assertScannedFileUnchanged(
+  context: TrustedRootContext,
+  target: Pick<SessionFileTarget | ShellSnapshotFile, "relativePath" | "size" | "lastModified" | "device" | "inode">,
+  snapshot: ManagedPathSnapshot,
+): Promise<void> {
+  if (!snapshot.exists) return;
+  const current = await lstat(snapshot.absolutePath);
+  if (
+    current.size !== target.size
+    || (target.lastModified !== null && current.mtimeMs !== target.lastModified)
+    || (target.device !== undefined && current.dev !== target.device)
+    || (target.inode !== undefined && current.ino !== target.inode)
+  ) {
+    throw new MutationSafetyError("STALE_PLAN", `managed file changed after scan: ${target.relativePath}`);
+  }
+  await revalidateManagedPath(context, snapshot);
 }
 
 export function buildDeletePreview(scan: ScanResult, sessions: SessionEntry[]): DeletePreview {
@@ -168,13 +278,19 @@ function collectGlobalStateReferencesForValidation(text: string | null): {
 }
 
 async function restoreDeletedFiles(
+  trustedRoot: TrustedRootContext,
   deletedFiles: Array<{
-    target: Pick<SessionFileTarget | ShellSnapshotFile, "absolutePath">;
+    target: Pick<SessionFileTarget | ShellSnapshotFile, "relativePath">;
     bytes: Uint8Array;
   }>,
 ): Promise<void> {
   for (const fileSnapshot of deletedFiles) {
-    await writeFile(fileSnapshot.target.absolutePath, fileSnapshot.bytes);
+    await atomicWriteManagedFileIfUnchanged(
+      trustedRoot,
+      fileSnapshot.target.relativePath,
+      null,
+      fileSnapshot.bytes,
+    );
   }
 }
 
@@ -209,13 +325,22 @@ export async function validateDeletion(
   scan: ScanResult,
   sessions: SessionEntry[],
 ): Promise<DeleteValidationItem[]> {
+  const trustedRoot = await getReadTrustedRoot(scan);
   const targetIds = sessions.map((session) => session.id);
   const [sessionIndexText, historyText] = await Promise.all([
-    readOptionalText(scan.root.sessionIndexPath),
-    readOptionalText(scan.root.historyPath),
+    readOptionalManagedText(trustedRoot, scan.root.sessionIndexPath),
+    readOptionalManagedText(trustedRoot, scan.root.historyPath),
   ]);
-  const globalStateRefs = collectGlobalStateReferencesForValidation(await readOptionalText(scan.root.globalStatePath));
-  const shellSnapshotFiles = await scanShellSnapshots(scan.root.shellSnapshotsDir, scan.root.rootPath);
+  const globalStateRefs = collectGlobalStateReferencesForValidation(
+    await readOptionalManagedText(trustedRoot, scan.root.globalStatePath),
+  );
+  const validationWarnings: string[] = [];
+  const shellSnapshotFiles = await scanShellSnapshots(
+    scan.root.shellSnapshotsDir,
+    scan.root.rootPath,
+    trustedRoot,
+    validationWarnings,
+  );
   const sqliteCounts = validateSqliteDeletion(
     scan.root.sqlitePath,
     targetIds,
@@ -228,7 +353,14 @@ export async function validateDeletion(
       const fileChecks = await Promise.all(
         session.fileTargets.map(async (target) => {
           try {
-            await readFile(target.absolutePath);
+            const snapshot = await captureManagedPath(trustedRoot, target.relativePath, {
+              expectedKind: "file",
+              allowMissing: true,
+            });
+            if (snapshot.exists) {
+              await readManagedFile(trustedRoot, target.relativePath);
+            }
+            if (!snapshot.exists) return null;
             return target.relativePath;
           } catch (error) {
             if (isMissingFileError(error)) {
@@ -243,6 +375,7 @@ export async function validateDeletion(
       const exactKeyRefs = globalStateRefs.exactKeyRefsById.get(session.id) ?? [];
       const possibleUnknownGlobalStateRefs = globalStateRefs.possibleUnknownRefsById.get(session.id) ?? [];
       const warnings = [
+        ...validationWarnings,
         ...(globalStateRefs.warning ? [globalStateRefs.warning] : []),
         ...(exactKeyRefs.length > 0
           ? [`global state 仍有 ${exactKeyRefs.length} 个 P11 exact-key 引用，需先预览并显式确认。`]
@@ -272,16 +405,95 @@ export async function validateDeletion(
   );
 }
 
+function verificationScope() {
+  return {
+    sessionFiles: true,
+    shellSnapshots: true,
+    sessionIndex: true,
+    history: true,
+    globalState: true,
+    sqlite: true,
+    retainedSurfaces: ["dedicated logs", "unknown global-state references", "memory", "remote-control"],
+  };
+}
+
+function deletionVerificationStatus(validation: DeleteValidationItem[]): "passed" | "partial" | "failed" {
+  let partial = false;
+  for (const item of validation) {
+    const sqliteRemaining =
+      item.sqlite.threadRows
+      + item.sqlite.spawnEdgeRows
+      + item.sqlite.assignedAgentJobs
+      + item.sqlite.dynamicToolRows
+      + item.sqlite.stage1Rows
+      + item.sqlite.threadGoalRows;
+    if (
+      item.filePathsRemaining.length > 0
+      || item.shellSnapshotFilesRemaining.length > 0
+      || item.globalStateRefsRemaining > 0
+      || item.exactKeyGlobalStateRefsRemaining > 0
+      || item.sessionIndexRowsRemaining > 0
+      || item.historyRowsRemaining > 0
+      || sqliteRemaining > 0
+    ) {
+      return "failed";
+    }
+    if (
+      item.globalStateWarning
+      || item.possibleUnknownGlobalStateRefsRemaining !== 0
+      || item.warnings.length > 0
+    ) {
+      partial = true;
+    }
+  }
+  return partial ? "partial" : "passed";
+}
+
+async function captureSqlitePaths(scan: ScanResult): Promise<Array<{
+  context: TrustedRootContext;
+  snapshot: ManagedPathSnapshot;
+}>> {
+  const paths = [scan.root.sqlitePath, scan.root.logsSqlitePath, scan.root.goalsSqlitePath].filter(
+    (value): value is string => Boolean(value),
+  );
+  if (paths.length === 0) return [];
+  const context = requireMutationTrustedRoots(scan).sqliteHome;
+  if (!context) {
+    throw new MutationSafetyError("UNSAFE_PATH", "destructive operation requires the registered SQLite trusted root");
+  }
+  return Promise.all(paths.map(async (filePath) => ({
+    context,
+    snapshot: await captureManagedPath(context, toManagedRelativePath(context, filePath), {
+      expectedKind: "file",
+      allowMissing: false,
+    }),
+  })));
+}
+
 export async function deleteSessions(
   scan: ScanResult,
   sessions: SessionEntry[],
+  options: {
+    lock?: MutationLock;
+    allowActive?: boolean;
+    recoveryKind?: "delete" | "trash";
+    recoveryTrash?: OperationRecoveryPayloadV1["trash"];
+  } = {},
 ): Promise<DeleteExecutionResult> {
+  assertConfirmedSessionSelection(
+    sessions.map((session) => session.id),
+    sessions,
+    { allowActive: options.allowActive },
+  );
+  assertCanonicalSessionIds(sessions.map((session) => session.id));
+  const trustedRoot = getMutationTrustedRoot(scan);
   const targetIds = new Set(sessions.map((session) => session.id));
   const preview = buildDeletePreview(scan, sessions);
   try {
     assertNoUnknownOnlyCleanup(preview);
   } catch (error) {
-    throw new DeleteSessionsError(formatDeleteError(error), {
+    throw new DeleteSessionsError(`删除失败，未执行 mutation：${formatDeleteError(error)}`, {
+      code: structuredErrorCode(error, "UNSAFE_PATH"),
       liveDeleteStarted: false,
       liveDeleteRolledBack: false,
       cause: error,
@@ -289,52 +501,84 @@ export async function deleteSessions(
   }
 
   let liveDeleteStarted = false;
-  let fileSnapshots: Array<{ target: SessionFileTarget; bytes: Uint8Array | null }>;
-  let shellSnapshotSnapshots: Array<{ target: ShellSnapshotFile; bytes: Uint8Array | null }>;
+  let fileSnapshots: Array<{ target: SessionFileTarget; snapshot: ManagedPathSnapshot; bytes: Uint8Array | null }>;
+  let shellSnapshotSnapshots: Array<{ target: ShellSnapshotFile; snapshot: ManagedPathSnapshot; bytes: Uint8Array | null }>;
   let originalSessionIndexText: string | null;
   let originalHistoryText: string | null;
   const originalGlobalStateText = scan.globalState.text;
   let sessionIndexResult: ReturnType<typeof filterJsonLines<SessionIndexRecord>>;
   let historyResult: ReturnType<typeof filterJsonLines<HistoryRecord>>;
+  let sqliteSnapshots: Awaited<ReturnType<typeof captureSqlitePaths>>;
+  let sqliteRecoveryBundle: ReturnType<typeof exportSqliteRecordsForRestore>["state"];
+  let globalStateAfterText: string | null = originalGlobalStateText;
+  let lock: MutationLock | undefined = options.lock;
+  const ownsLock = !lock;
 
   try {
+    lock ??= await acquireMutationLock(
+      trustedRoot,
+      "delete",
+      [...targetIds],
+      requireMutationTrustedRoots(scan).sqliteHome,
+    );
+    await lock.setStage("prepared");
+    await assertDeleteSelectionCurrent(scan, targetIds, preview, options.allowActive);
     fileSnapshots = await Promise.all(
       sessions.flatMap((session) =>
-        session.fileTargets.map(async (target) => ({
-          target,
-          bytes: await (async () => {
-            try {
-              return new Uint8Array(await readFile(target.absolutePath));
-            } catch (error) {
-              if (isMissingFileError(error)) {
-                return null;
-              }
-
-              throw error;
-            }
-          })(),
-        })),
+        session.fileTargets.map(async (target) => {
+          const snapshot = await captureManagedPath(trustedRoot, target.relativePath, {
+            expectedKind: "file",
+            allowMissing: true,
+          });
+          await assertScannedFileUnchanged(trustedRoot, target, snapshot);
+          return {
+            target,
+            snapshot,
+            bytes: snapshot.exists ? new Uint8Array(await readManagedFile(trustedRoot, target.relativePath)) : null,
+          };
+        }),
       ),
     );
     const shellSnapshotTargets = sessions.flatMap((session) => scan.shellSnapshots.filesById.get(session.id) ?? []);
     shellSnapshotSnapshots = await Promise.all(
-      shellSnapshotTargets.map(async (target) => ({
-        target,
-        bytes: await (async () => {
-          try {
-            return new Uint8Array(await readFile(target.absolutePath));
-          } catch (error) {
-            if (isMissingFileError(error)) {
-              return null;
-            }
-
-            throw error;
-          }
-        })(),
-      })),
+      shellSnapshotTargets.map(async (target) => {
+        const snapshot = await captureManagedPath(trustedRoot, target.relativePath, {
+          expectedKind: "file",
+          allowMissing: true,
+        });
+        await assertScannedFileUnchanged(trustedRoot, target, snapshot);
+        return {
+          target,
+          snapshot,
+          bytes: snapshot.exists ? new Uint8Array(await readManagedFile(trustedRoot, target.relativePath)) : null,
+        };
+      }),
     );
-    originalSessionIndexText = await readOptionalText(scan.root.sessionIndexPath);
-    originalHistoryText = await readOptionalText(scan.root.historyPath);
+    originalSessionIndexText = await readOptionalManagedText(trustedRoot, scan.root.sessionIndexPath);
+    originalHistoryText = await readOptionalManagedText(trustedRoot, scan.root.historyPath);
+    if (scan.root.globalStatePath) {
+      await captureManagedPath(trustedRoot, toManagedRelativePath(trustedRoot, scan.root.globalStatePath), {
+        expectedKind: "file",
+        allowMissing: false,
+      });
+    }
+    sqliteSnapshots = await captureSqlitePaths(scan);
+    const sqliteBundles = sessions.map((session) =>
+      exportSqliteRecordsForRestore(
+        scan.root.sqlitePath,
+        session.id,
+        null,
+        scan.root.goalsSqlitePath,
+      ).state);
+    sqliteRecoveryBundle = {
+      threads: sqliteBundles.flatMap((bundle) => bundle.threads),
+      logs: [],
+      threadSpawnEdges: sqliteBundles.flatMap((bundle) => bundle.threadSpawnEdges),
+      agentJobItems: sqliteBundles.flatMap((bundle) => bundle.agentJobItems),
+      threadDynamicTools: sqliteBundles.flatMap((bundle) => bundle.threadDynamicTools),
+      stage1Outputs: sqliteBundles.flatMap((bundle) => bundle.stage1Outputs),
+      threadGoals: sqliteBundles.flatMap((bundle) => bundle.threadGoals),
+    };
 
     sessionIndexResult = filterJsonLines<SessionIndexRecord>(
       originalSessionIndexText,
@@ -344,8 +588,15 @@ export async function deleteSessions(
       originalHistoryText,
       (record) => !record?.session_id || !targetIds.has(record.session_id),
     );
+    if (originalGlobalStateText !== null) {
+      globalStateAfterText = buildGlobalStateRemoval(originalGlobalStateText, targetIds).nextText;
+    }
   } catch (error) {
-    throw new DeleteSessionsError(formatDeleteError(error), {
+    if (lock && ownsLock) {
+      await lock.release("rolled_back", { phase: "preparing", error: formatDeleteError(error) }).catch(() => undefined);
+    }
+    throw new DeleteSessionsError(`删除失败，未执行 mutation：${formatDeleteError(error)}`, {
+      code: structuredErrorCode(error, "UNSAFE_PATH"),
       liveDeleteStarted: false,
       liveDeleteRolledBack: false,
       cause: error,
@@ -355,30 +606,111 @@ export async function deleteSessions(
   let sessionIndexWritten = false;
   let historyWritten = false;
   let globalStateWritten = false;
-  const deletedFiles: Array<{ target: Pick<SessionFileTarget | ShellSnapshotFile, "absolutePath">; bytes: Uint8Array }> = [];
+  let sqliteMutationStarted = false;
+  const deletedFiles: Array<{ target: Pick<SessionFileTarget | ShellSnapshotFile, "relativePath">; bytes: Uint8Array }> = [];
 
   try {
+    const registered = requireMutationTrustedRoots(scan);
+    const sqliteContext = registered.sqliteHome;
+    if ((scan.root.sqlitePath || scan.root.goalsSqlitePath) && !sqliteContext) {
+      throw new MutationSafetyError("UNSAFE_PATH", "destructive operation requires the registered SQLite trusted root");
+    }
+    const recoveryFiles = [
+      ...fileSnapshots.map((entry) =>
+        createRecoveryFileTransition(entry.target.relativePath, entry.bytes, null)),
+      ...shellSnapshotSnapshots.map((entry) =>
+        createRecoveryFileTransition(entry.target.relativePath, entry.bytes, null)),
+      ...(scan.root.sessionIndexPath && originalSessionIndexText !== null
+        ? [createRecoveryFileTransition(
+            toManagedRelativePath(trustedRoot, scan.root.sessionIndexPath),
+            originalSessionIndexText,
+            sessionIndexResult.text,
+          )]
+        : []),
+      ...(scan.root.historyPath && originalHistoryText !== null
+        ? [createRecoveryFileTransition(
+            toManagedRelativePath(trustedRoot, scan.root.historyPath),
+            originalHistoryText,
+            historyResult.text,
+          )]
+        : []),
+      ...(scan.root.globalStatePath && originalGlobalStateText !== null && globalStateAfterText !== null
+        ? [createRecoveryFileTransition(
+            toManagedRelativePath(trustedRoot, scan.root.globalStatePath),
+            originalGlobalStateText,
+            globalStateAfterText,
+          )]
+        : []),
+    ];
+    await lock!.writeRecoveryPayload({
+      schemaVersion: "codex-sessions-recovery.v1",
+      operationId: lock!.operationId,
+      kind: options.recoveryKind ?? "delete",
+      strategy: "rollback",
+      rootRealPath: trustedRoot.realPath,
+      targetIds: [...targetIds],
+      files: recoveryFiles,
+      ...(options.recoveryTrash ? { trash: options.recoveryTrash } : {}),
+      ...(sqliteContext
+        ? {
+            sqlite: {
+              sqliteHomeRealPath: sqliteContext.realPath,
+              sqliteHomeIdentity: { dev: sqliteContext.identity.dev, ino: sqliteContext.identity.ino },
+              stateRelativePath: scan.root.sqlitePath
+                ? toManagedRelativePath(sqliteContext, scan.root.sqlitePath)
+                : null,
+              goalsRelativePath: scan.root.goalsSqlitePath
+                ? toManagedRelativePath(sqliteContext, scan.root.goalsSqlitePath)
+                : null,
+              records: sqliteRecoveryBundle as unknown as Record<string, unknown>,
+            },
+          }
+        : {}),
+    } satisfies OperationRecoveryPayloadV1);
+    // The recovery journal can take long enough for active/archive state to
+    // change. Recheck at the final boundary before the first user-data write.
+    await assertDeleteSelectionCurrent(scan, targetIds, preview, options.allowActive);
     liveDeleteStarted = true;
+    await lock!.setStage("committing");
     if (scan.root.sessionIndexPath && originalSessionIndexText !== null && sessionIndexResult.removedCount > 0) {
-      await writeFile(scan.root.sessionIndexPath, sessionIndexResult.text, "utf8");
+      await lock!.checkpoint("session-index", "started");
+      await atomicWriteManagedTextIfUnchanged(
+        trustedRoot,
+        toManagedRelativePath(trustedRoot, scan.root.sessionIndexPath),
+        originalSessionIndexText,
+        sessionIndexResult.text,
+      );
       sessionIndexWritten = true;
+      await lock!.checkpoint("session-index", "committed");
     }
 
     if (scan.root.historyPath && originalHistoryText !== null && historyResult.removedCount > 0) {
-      await writeFile(scan.root.historyPath, historyResult.text, "utf8");
+      await lock!.checkpoint("history", "started");
+      await atomicWriteManagedTextIfUnchanged(
+        trustedRoot,
+        toManagedRelativePath(trustedRoot, scan.root.historyPath),
+        originalHistoryText,
+        historyResult.text,
+      );
       historyWritten = true;
+      await lock!.checkpoint("history", "committed");
     }
 
     if (scan.root.globalStatePath && originalGlobalStateText !== null) {
+      await lock!.checkpoint("global-state", "started");
       const globalStateResult = await removeGlobalStateReferences(scan.root.globalStatePath, targetIds, {
         expectedText: originalGlobalStateText,
+        trustedRoot,
       });
       globalStateWritten = globalStateResult.removedCount > 0;
+      await lock!.checkpoint("global-state", "committed", { changed: globalStateWritten });
     }
 
     for (const fileSnapshot of fileSnapshots) {
       try {
-        await rm(fileSnapshot.target.absolutePath, { force: true });
+        await lock!.checkpoint("session-file", "started", { relativePath: fileSnapshot.target.relativePath });
+        await revalidateManagedPath(trustedRoot, fileSnapshot.snapshot);
+        await rm(fileSnapshot.snapshot.absolutePath, { force: true });
 
         if (fileSnapshot.bytes) {
           deletedFiles.push({
@@ -386,6 +718,7 @@ export async function deleteSessions(
             bytes: fileSnapshot.bytes,
           });
         }
+        await lock!.checkpoint("session-file", "committed", { relativePath: fileSnapshot.target.relativePath });
       } catch (error) {
         if (isMissingFileError(error)) {
           continue;
@@ -397,7 +730,9 @@ export async function deleteSessions(
 
     for (const fileSnapshot of shellSnapshotSnapshots) {
       try {
-        await rm(fileSnapshot.target.absolutePath, { force: true });
+        await lock!.checkpoint("shell-snapshot", "started", { relativePath: fileSnapshot.target.relativePath });
+        await revalidateManagedPath(trustedRoot, fileSnapshot.snapshot);
+        await rm(fileSnapshot.snapshot.absolutePath, { force: true });
 
         if (fileSnapshot.bytes) {
           deletedFiles.push({
@@ -405,6 +740,7 @@ export async function deleteSessions(
             bytes: fileSnapshot.bytes,
           });
         }
+        await lock!.checkpoint("shell-snapshot", "committed", { relativePath: fileSnapshot.target.relativePath });
       } catch (error) {
         if (isMissingFileError(error)) {
           continue;
@@ -414,38 +750,109 @@ export async function deleteSessions(
       }
     }
 
-    if (scan.root.sqlitePath || scan.root.logsSqlitePath || scan.root.goalsSqlitePath) {
-      deleteSessionsFromSqlite(scan.root.sqlitePath, [...targetIds], scan.root.logsSqlitePath, scan.root.goalsSqlitePath);
+    if (scan.root.sqlitePath || scan.root.goalsSqlitePath) {
+      for (const entry of sqliteSnapshots) {
+        await revalidateManagedPath(entry.context, entry.snapshot);
+      }
+      sqliteMutationStarted = true;
+      if (scan.root.goalsSqlitePath && scan.root.goalsSqlitePath !== scan.root.sqlitePath) {
+        await lock!.checkpoint("sqlite-goals", "started");
+        deleteGoalRows(scan.root.goalsSqlitePath, [...targetIds]);
+        await lock!.checkpoint("sqlite-goals", "committed");
+      }
+      await lock!.checkpoint("sqlite-state", "started");
+      deleteStateRows(scan.root.sqlitePath, [...targetIds]);
+      await lock!.checkpoint("sqlite-state", "committed");
     }
   } catch (error) {
-    if (globalStateWritten && scan.root.globalStatePath && originalGlobalStateText !== null) {
-      await writeFile(scan.root.globalStatePath, originalGlobalStateText, "utf8");
+    try {
+      if (sqliteMutationStarted) {
+        reconcileSqliteRecordsForRecovery(
+          scan.root.sqlitePath,
+          scan.root.goalsSqlitePath,
+          sqliteRecoveryBundle,
+        );
+      }
+      if (globalStateWritten && scan.root.globalStatePath && originalGlobalStateText !== null) {
+        await atomicWriteManagedTextIfUnchanged(
+          trustedRoot,
+          toManagedRelativePath(trustedRoot, scan.root.globalStatePath),
+          globalStateAfterText,
+          originalGlobalStateText,
+        );
+      }
+      if (historyWritten && scan.root.historyPath && originalHistoryText !== null) {
+        await atomicWriteManagedTextIfUnchanged(
+          trustedRoot,
+          toManagedRelativePath(trustedRoot, scan.root.historyPath),
+          historyResult.text,
+          originalHistoryText,
+        );
+      }
+      if (sessionIndexWritten && scan.root.sessionIndexPath && originalSessionIndexText !== null) {
+        await atomicWriteManagedTextIfUnchanged(
+          trustedRoot,
+          toManagedRelativePath(trustedRoot, scan.root.sessionIndexPath),
+          sessionIndexResult.text,
+          originalSessionIndexText,
+        );
+      }
+      if (deletedFiles.length > 0) {
+        await restoreDeletedFiles(trustedRoot, deletedFiles);
+      }
+      if (ownsLock) await lock!.release("rolled_back", { error: formatDeleteError(error) });
+    } catch (rollbackError) {
+      if (ownsLock) {
+        await lock!.release("recovery_required", {
+          error: formatDeleteError(error),
+          rollbackError: formatDeleteError(rollbackError),
+        }).catch(() => undefined);
+      }
+      throw new DeleteSessionsError(
+        `删除失败，回滚也失败；RECOVERY_REQUIRED：${formatDeleteError(rollbackError)}。原始错误：${formatDeleteError(error)}`,
+        { code: "RECOVERY_REQUIRED", liveDeleteStarted, liveDeleteRolledBack: false, cause: error },
+      );
     }
 
-    if (historyWritten && scan.root.historyPath && originalHistoryText !== null) {
-      await writeFile(scan.root.historyPath, originalHistoryText, "utf8");
-    }
-
-    if (sessionIndexWritten && scan.root.sessionIndexPath && originalSessionIndexText !== null) {
-      await writeFile(scan.root.sessionIndexPath, originalSessionIndexText, "utf8");
-    }
-
-    if (deletedFiles.length > 0) {
-      await restoreDeletedFiles(deletedFiles);
-    }
-
-    throw new DeleteSessionsError(`删除失败，已尝试回滚：${formatDeleteError(error)}`, {
+    throw new DeleteSessionsError(`删除失败，已回滚：${formatDeleteError(error)}`, {
+      code: structuredErrorCode(error, "UNSAFE_PATH"),
       liveDeleteStarted,
       liveDeleteRolledBack: true,
       cause: error,
     });
   }
 
-  return {
-    preview,
-    validation: await validateDeletion(scan, sessions),
-    confirmed: true,
-  };
+  await lock!.setStage("verifying");
+  try {
+    const validation = await validateDeletion(scan, sessions);
+    const verificationStatus = deletionVerificationStatus(validation);
+    const warnings = verificationStatus === "passed"
+      ? []
+      : ["操作已完成，但验证未覆盖或未清除所有报告项；请查看 verificationScope 与 validation。"];
+    if (ownsLock) await lock!.release("committed", { verificationStatus });
+    return {
+      preview,
+      validation,
+      confirmed: true,
+      operationStatus: "committed",
+      verificationStatus,
+      verificationScope: verificationScope(),
+      warnings,
+      errorCode: verificationStatus === "failed" ? "POST_COMMIT_VERIFY_FAILED" : null,
+    };
+  } catch (error) {
+    if (ownsLock) await lock!.release("committed", { verificationStatus: "failed", error: formatDeleteError(error) });
+    return {
+      preview,
+      validation: [],
+      confirmed: true,
+      operationStatus: "committed",
+      verificationStatus: "failed",
+      verificationScope: verificationScope(),
+      warnings: [`操作已完成，但验证失败：${formatDeleteError(error)}`],
+      errorCode: "POST_COMMIT_VERIFY_FAILED",
+    };
+  }
 }
 
 export function previewCleanupStaleIndexes(scan: ScanResult): CleanupResult {
@@ -468,8 +875,154 @@ export function previewCleanupStaleIndexes(scan: ScanResult): CleanupResult {
   };
 }
 
-export async function cleanupStaleIndexes(scan: ScanResult): Promise<CleanupResult> {
+async function rewriteSessionIndexes(
+  scan: ScanResult,
+  sessionIds: string[],
+  nextSessionIndexText: string,
+  nextHistoryText: string,
+  kind: "cleanup-stale" | "cleanup-index",
+  assertBeforeCommit?: () => Promise<void>,
+): Promise<void> {
+  assertCanonicalSessionIds(sessionIds);
+  const trustedRoot = getMutationTrustedRoot(scan);
+  const [currentSessionIndexText, currentHistoryText] = await Promise.all([
+    readOptionalManagedText(trustedRoot, scan.root.sessionIndexPath),
+    readOptionalManagedText(trustedRoot, scan.root.historyPath),
+  ]);
+  if (currentSessionIndexText !== scan.sessionIndex.text || currentHistoryText !== scan.history.text) {
+    throw new MutationSafetyError("STALE_PLAN", "session indexes changed after scan; run the preview again");
+  }
+
+  const lock = await acquireMutationLock(
+    trustedRoot,
+    kind,
+    sessionIds,
+    requireMutationTrustedRoots(scan).sqliteHome,
+  );
+  let sessionIndexWritten = false;
+  let historyWritten = false;
+  try {
+    const recoveryFiles = [
+      ...(scan.root.sessionIndexPath && currentSessionIndexText !== null
+        ? [createRecoveryFileTransition(
+            toManagedRelativePath(trustedRoot, scan.root.sessionIndexPath),
+            currentSessionIndexText,
+            nextSessionIndexText,
+          )]
+        : []),
+      ...(scan.root.historyPath && currentHistoryText !== null
+        ? [createRecoveryFileTransition(
+            toManagedRelativePath(trustedRoot, scan.root.historyPath),
+            currentHistoryText,
+            nextHistoryText,
+          )]
+        : []),
+    ];
+    await lock.writeRecoveryPayload({
+      schemaVersion: "codex-sessions-recovery.v1",
+      operationId: lock.operationId,
+      kind,
+      strategy: "rollforward",
+      rootRealPath: trustedRoot.realPath,
+      targetIds: sessionIds,
+      files: recoveryFiles,
+    } satisfies OperationRecoveryPayloadV1);
+    await assertBeforeCommit?.();
+    await lock.setStage("committing");
+    if (scan.root.sessionIndexPath && currentSessionIndexText !== null) {
+      await lock.checkpoint("session-index", "started");
+      await atomicWriteManagedTextIfUnchanged(
+        trustedRoot,
+        toManagedRelativePath(trustedRoot, scan.root.sessionIndexPath),
+        currentSessionIndexText,
+        nextSessionIndexText,
+      );
+      sessionIndexWritten = true;
+      await lock.checkpoint("session-index", "committed");
+    }
+    if (scan.root.historyPath && currentHistoryText !== null) {
+      await lock.checkpoint("history", "started");
+      await atomicWriteManagedTextIfUnchanged(
+        trustedRoot,
+        toManagedRelativePath(trustedRoot, scan.root.historyPath),
+        currentHistoryText,
+        nextHistoryText,
+      );
+      historyWritten = true;
+      await lock.checkpoint("history", "committed");
+    }
+    await lock.release("committed");
+  } catch (error) {
+    try {
+      if (historyWritten && scan.root.historyPath && currentHistoryText !== null) {
+        await atomicWriteManagedTextIfUnchanged(
+          trustedRoot,
+          toManagedRelativePath(trustedRoot, scan.root.historyPath),
+          nextHistoryText,
+          currentHistoryText,
+        );
+      }
+      if (sessionIndexWritten && scan.root.sessionIndexPath && currentSessionIndexText !== null) {
+        await atomicWriteManagedTextIfUnchanged(
+          trustedRoot,
+          toManagedRelativePath(trustedRoot, scan.root.sessionIndexPath),
+          nextSessionIndexText,
+          currentSessionIndexText,
+        );
+      }
+      await lock.release("rolled_back", { error: formatDeleteError(error) });
+    } catch (rollbackError) {
+      await lock.release("recovery_required", {
+        error: formatDeleteError(error),
+        rollbackError: formatDeleteError(rollbackError),
+      }).catch(() => undefined);
+      throw new MutationSafetyError(
+        "RECOVERY_REQUIRED",
+        `index cleanup failed and rollback failed: ${formatDeleteError(rollbackError)}; original: ${formatDeleteError(error)}`,
+      );
+    }
+    throw error;
+  }
+}
+
+async function verifySessionIndexesRemoved(
+  scan: ScanResult,
+  sessionIds: string[],
+): Promise<{ verificationStatus: "passed" | "failed"; warnings: string[] }> {
+  try {
+    const trustedRoot = await getReadTrustedRoot(scan);
+    const [sessionIndexText, historyText] = await Promise.all([
+      readOptionalManagedText(trustedRoot, scan.root.sessionIndexPath),
+      readOptionalManagedText(trustedRoot, scan.root.historyPath),
+    ]);
+    const remaining = sessionIds.flatMap((sessionId) => {
+      const sessionIndexRows = countSessionIndexRows(sessionIndexText, sessionId);
+      const historyRows = countHistoryRows(historyText, sessionId);
+      return sessionIndexRows > 0 || historyRows > 0
+        ? [`${sessionId}: session_index=${sessionIndexRows}, history=${historyRows}`]
+        : [];
+    });
+    return remaining.length === 0
+      ? { verificationStatus: "passed", warnings: [] }
+      : {
+          verificationStatus: "failed",
+          warnings: [`操作已完成，但索引验证仍发现目标记录：${remaining.join("; ")}`],
+        };
+  } catch (error) {
+    return {
+      verificationStatus: "failed",
+      warnings: [`操作已完成，但索引验证失败：${formatDeleteError(error)}`],
+    };
+  }
+}
+
+export async function cleanupStaleIndexes(scan: ScanResult): Promise<CleanupExecutionResult> {
+  assertDestructivePlatformSupported();
   const preview = previewCleanupStaleIndexes(scan);
+  const refreshedPreview = previewCleanupStaleIndexes(await scanCodexRoot(scan.root.rootPath));
+  if (JSON.stringify(refreshedPreview) !== JSON.stringify(preview)) {
+    throw new MutationSafetyError("STALE_PLAN", "stale-session index targets changed after preview");
+  }
   const staleSet = new Set(preview.staleSessionIds);
   const sessionIndexResult = filterJsonLines<SessionIndexRecord>(
     scan.sessionIndex.text,
@@ -480,15 +1033,39 @@ export async function cleanupStaleIndexes(scan: ScanResult): Promise<CleanupResu
     (record) => !record?.session_id || !staleSet.has(record.session_id),
   );
 
-  if (scan.root.sessionIndexPath && scan.sessionIndex.text !== null) {
-    await writeFile(scan.root.sessionIndexPath, sessionIndexResult.text, "utf8");
-  }
+  await rewriteSessionIndexes(
+    scan,
+    preview.staleSessionIds,
+    sessionIndexResult.text,
+    historyResult.text,
+    "cleanup-stale",
+    async () => {
+      const finalPreview = previewCleanupStaleIndexes(await scanCodexRoot(scan.root.rootPath));
+      if (JSON.stringify(finalPreview) !== JSON.stringify(preview)) {
+        throw new MutationSafetyError("STALE_PLAN", "stale-session targets changed before commit");
+      }
+    },
+  );
 
-  if (scan.root.historyPath && scan.history.text !== null) {
-    await writeFile(scan.root.historyPath, historyResult.text, "utf8");
-  }
+  const verification = await verifySessionIndexesRemoved(scan, preview.staleSessionIds);
 
-  return preview;
+  return {
+    ...preview,
+    operationStatus: "committed",
+    verificationStatus: verification.verificationStatus,
+    verificationScope: {
+      sessionFiles: false,
+      shellSnapshots: false,
+      sessionIndex: true,
+      history: true,
+      globalState: false,
+      sqlite: false,
+      operationJournal: true,
+      retainedSurfaces: ["session files", "global state", "SQLite", "memory", "logs_N.sqlite"],
+    },
+    warnings: verification.warnings,
+    errorCode: verification.verificationStatus === "failed" ? "POST_COMMIT_VERIFY_FAILED" : null,
+  };
 }
 
 export function previewCleanupSessionIndexes(
@@ -517,7 +1094,13 @@ export function previewCleanupSessionIndexes(
 export async function cleanupSessionIndexes(
   scan: ScanResult,
   sessions: SessionEntry[],
-): Promise<SessionIndexCleanupResult> {
+  options: { allowActive?: boolean } = {},
+): Promise<SessionIndexCleanupExecutionResult> {
+  assertConfirmedSessionSelection(
+    sessions.map((session) => session.id),
+    sessions,
+    { allowActive: options.allowActive },
+  );
   const preview = previewCleanupSessionIndexes(scan, sessions);
   const targetSet = new Set(preview.sessionIds);
   const sessionIndexResult = filterJsonLines<SessionIndexRecord>(
@@ -529,13 +1112,55 @@ export async function cleanupSessionIndexes(
     (record) => !record?.session_id || !targetSet.has(record.session_id),
   );
 
-  if (scan.root.sessionIndexPath && scan.sessionIndex.text !== null) {
-    await writeFile(scan.root.sessionIndexPath, sessionIndexResult.text, "utf8");
+  const refreshedScan = await scanCodexRoot(scan.root.rootPath);
+  const refreshedSessions = resolveSessions(refreshedScan, preview.sessionIds);
+  assertConfirmedSessionSelection(preview.sessionIds, refreshedSessions, { allowActive: options.allowActive });
+  if (
+    JSON.stringify(previewCleanupSessionIndexes(refreshedScan, refreshedSessions))
+    !== JSON.stringify(preview)
+  ) {
+    throw new MutationSafetyError("STALE_PLAN", "selected session index targets or active/archive state changed after preview");
   }
 
-  if (scan.root.historyPath && scan.history.text !== null) {
-    await writeFile(scan.root.historyPath, historyResult.text, "utf8");
-  }
+  await rewriteSessionIndexes(
+    scan,
+    preview.sessionIds,
+    sessionIndexResult.text,
+    historyResult.text,
+    "cleanup-index",
+    async () => {
+      const finalScan = await scanCodexRoot(scan.root.rootPath);
+      const finalSessions = resolveSessions(finalScan, preview.sessionIds);
+      assertConfirmedSessionSelection(preview.sessionIds, finalSessions, { allowActive: options.allowActive });
+      if (
+        JSON.stringify(previewCleanupSessionIndexes(finalScan, finalSessions))
+        !== JSON.stringify(preview)
+      ) {
+        throw new MutationSafetyError(
+          "STALE_PLAN",
+          "selected session index targets or active/archive state changed before commit",
+        );
+      }
+    },
+  );
 
-  return preview;
+  const verification = await verifySessionIndexesRemoved(scan, preview.sessionIds);
+
+  return {
+    ...preview,
+    operationStatus: "committed",
+    verificationStatus: verification.verificationStatus,
+    verificationScope: {
+      sessionFiles: false,
+      shellSnapshots: false,
+      sessionIndex: true,
+      history: true,
+      globalState: false,
+      sqlite: false,
+      operationJournal: true,
+      retainedSurfaces: ["session files", "global state", "SQLite", "memory", "logs_N.sqlite"],
+    },
+    warnings: verification.warnings,
+    errorCode: verification.verificationStatus === "failed" ? "POST_COMMIT_VERIFY_FAILED" : null,
+  };
 }

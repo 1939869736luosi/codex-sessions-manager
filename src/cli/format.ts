@@ -1,6 +1,7 @@
 import type {
   BackupBundle,
   CleanupResult,
+  CleanupExecutionResult,
   DeleteExecutionResult,
   DeletePreview,
   DeleteValidationItem,
@@ -20,6 +21,7 @@ import type {
   SessionFamilyQuery,
   SessionResidueAudit,
   SessionIndexCleanupResult,
+  SessionIndexCleanupExecutionResult,
   SourceSummary,
   TimelineItem,
   TrashDeleteResult,
@@ -217,7 +219,7 @@ export function formatDoctor(report: DoctorReport): string {
 
   return [
     `Root: ${report.rootPath}`,
-    `SQLite home: ${report.sqlite.sqliteHomePath} (${report.sqlite.sqliteHomeSource})`,
+    `SQLite home: ${report.sqlite.sqliteHomePath} (${report.sqlite.sqliteHomeSource}, trusted=${report.sqlite.sqliteHomeTrusted})`,
     ...(report.sqlite.sqliteHomeConfigPath ? [`SQLite home config: ${report.sqlite.sqliteHomeConfigPath}`] : []),
     "",
     printTable(pathRows),
@@ -233,6 +235,10 @@ export function formatDoctor(report: DoctorReport): string {
     `known global state refs: ${report.globalState.knownRefs.length}`,
     `exact-key global state refs: ${report.globalState.exactKeyRefs.length}`,
     `possible unknown global state refs: ${report.globalState.possibleUnknownRefs.length}`,
+    `recovery pending: ${report.recovery.pending ? "是" : "否"}`,
+    ...(report.recovery.pending
+      ? [`recovery operation: ${report.recovery.operationId} (${report.recovery.kind}, ${report.recovery.stage})`]
+      : []),
     report.warnings.length ? `\n警告:\n- ${report.warnings.join("\n- ")}` : "\n警告: 无",
   ].join("\n");
 }
@@ -787,7 +793,11 @@ export function formatDeleteResult(result: DeleteExecutionResult): string {
   return [
     formatPreview(result.preview),
     "",
-    "验证结果:",
+    `操作状态: ${result.operationStatus}`,
+    `验证状态: ${result.verificationStatus}`,
+    ...(result.errorCode ? [`错误码: ${result.errorCode}`] : []),
+    ...(result.warnings.length ? ["警告:", ...result.warnings.map((warning) => `- ${warning}`)] : []),
+    "验证明细:",
     ...result.validation.map((item) => {
       const sqliteRemaining = sumSqlite(item.sqlite);
       const allClean =
@@ -801,7 +811,7 @@ export function formatDeleteResult(result: DeleteExecutionResult): string {
         item.historyRowsRemaining === 0 &&
         sqliteRemaining === 0;
       const warnings = item.warnings.length ? `, warnings=${item.warnings.join(" | ")}` : "";
-      return `- ${item.title}: ${allClean ? "已清理干净" : "仍有残留"} (files=${item.filePathsRemaining.length}, shell_snapshots=${item.shellSnapshotFilesRemaining.length}, global_state_refs=${formatGlobalStateRemaining(item)}, possible_unknown_global_state_refs=${item.possibleUnknownGlobalStateRefsRemaining}, session_index=${item.sessionIndexRowsRemaining}, history=${item.historyRowsRemaining}, sqlite=${sqliteRemaining}${formatRetainedSqlite(item.sqlite)}${warnings})`;
+      return `- ${item.title}: ${allClean ? "声明范围验证通过" : "声明范围仍有项目或未覆盖项"} (files=${item.filePathsRemaining.length}, shell_snapshots=${item.shellSnapshotFilesRemaining.length}, global_state_refs=${formatGlobalStateRemaining(item)}, possible_unknown_global_state_refs=${item.possibleUnknownGlobalStateRefsRemaining}, session_index=${item.sessionIndexRowsRemaining}, history=${item.historyRowsRemaining}, sqlite=${sqliteRemaining}${formatRetainedSqlite(item.sqlite)}${warnings})`;
     }),
   ].join("\n");
 }
@@ -1153,9 +1163,11 @@ export function formatRootDeletePreview(preview: RootDeletePreview): string {
   ].join("\n");
 }
 
-export function formatCleanupResult(result: CleanupResult): string {
+export function formatCleanupResult(result: CleanupExecutionResult): string {
   return [
-    `已清理 ${result.staleSessionIds.length} 条失效会话索引`,
+    `索引清理操作状态: ${result.operationStatus}`,
+    `验证状态: ${result.verificationStatus}`,
+    `处理失效会话: ${result.staleSessionIds.length}`,
     `- 移除 session_index 记录: ${result.removedSessionIndexRows}`,
     `- 移除 history 记录: ${result.removedHistoryRows}`,
   ].join("\n");
@@ -1170,9 +1182,11 @@ export function formatCleanupPreview(result: CleanupResult): string {
   ].join("\n");
 }
 
-export function formatCleanupIndexResult(result: SessionIndexCleanupResult): string {
+export function formatCleanupIndexResult(result: SessionIndexCleanupExecutionResult): string {
   return [
-    `已处理 ${result.sessionIds.length} 条会话的索引痕迹`,
+    `索引清理操作状态: ${result.operationStatus}`,
+    `验证状态: ${result.verificationStatus}`,
+    `处理会话: ${result.sessionIds.length}`,
     `- 移除 session_index 记录: ${result.removedSessionIndexRows}`,
     `- 移除 history 记录: ${result.removedHistoryRows}`,
   ].join("\n");
@@ -1219,12 +1233,15 @@ export function formatTrashEntries(entries: TrashEntrySummary[]): string {
   }
 
   const table = printTable([
-    ["trash_id", "创建时间", "sessions", "标题"],
+    ["trash_id", "状态", "创建时间", "sessions", "标题 / 错误"],
     ...entries.map((entry) => [
       entry.trashId,
+      entry.status,
       formatDate(entry.createdAt),
       entry.sessionIds.join(", "),
-      entry.sessions.map((session) => session.title).join(" | "),
+      entry.status === "invalid"
+        ? entry.invalidReason ?? "manifest invalid"
+        : entry.sessions.map((session) => session.title).join(" | "),
     ]),
   ]);
   const duplicateSessionIds = summarizeTrashDuplicateSessions(entries);
@@ -1241,8 +1258,13 @@ export function formatTrashEntries(entries: TrashEntrySummary[]): string {
 }
 
 export function formatTrashRestoreResult(result: TrashRestoreResult): string {
+  const headline = result.verificationStatus === "passed"
+    ? "恢复已提交，声明范围验证通过"
+    : "恢复已提交，但验证不完整";
   return [
-    `已恢复: ${result.trashEntry.trashId}`,
+    `${headline}: ${result.trashEntry.trashId}`,
+    `- operationStatus: ${result.operationStatus}`,
+    `- verificationStatus: ${result.verificationStatus}`,
     `- session_id: ${result.restoredSessionIds.join(", ")}`,
     `- 原始文件: ${result.restoredSessionFiles}`,
     `- shell snapshot: ${result.restoredShellSnapshots}`,
@@ -1258,7 +1280,9 @@ export function formatTrashRestoreResult(result: TrashRestoreResult): string {
 
 export function formatTrashPurgeResult(result: TrashPurgeResult): string {
   return [
-    `已永久清除回收站记录: ${result.trashEntry.trashId}`,
+    `永久清除操作状态: ${result.operationStatus}`,
+    `- verificationStatus: ${result.verificationStatus}`,
+    `- trash_id: ${result.trashEntry.trashId}`,
     `- session_id: ${result.trashEntry.sessionIds.join(", ")}`,
   ].join("\n");
 }

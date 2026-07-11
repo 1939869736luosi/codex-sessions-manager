@@ -2,7 +2,7 @@
 
 import process from "node:process";
 
-import { runCli } from "./run.js";
+import { cliUnhandledErrorExitCode, runCli } from "./run.js";
 
 runCli(process.argv.slice(2)).then(
   (code) => {
@@ -10,6 +10,6 @@ runCli(process.argv.slice(2)).then(
   },
   (error) => {
     console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
+    process.exitCode = cliUnhandledErrorExitCode(error);
   },
 );

@@ -1,5 +1,7 @@
 import Database from "better-sqlite3";
+import { lstatSync } from "node:fs";
 
+import { MutationSafetyError } from "./mutation-safety.js";
 import { deriveSourceInfo } from "./sources.js";
 import type { SqliteDeletionCounts, SqliteTableInspection, ThreadRow, ThreadSpawnEdgeRow } from "./types.js";
 
@@ -46,12 +48,91 @@ export type SqliteRecordBundle = {
   threadGoals: Record<string, unknown>[];
 };
 
+const SQLITE_JSON_BYTES_TAG = "$codexSessionsManagerBytesV1";
+
+function encodeSqliteJsonValue(value: unknown): unknown {
+  if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+    return { [SQLITE_JSON_BYTES_TAG]: Buffer.from(value).toString("base64") };
+  }
+  if (Array.isArray(value)) return value.map(encodeSqliteJsonValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .map(([key, nested]) => [key, encodeSqliteJsonValue(nested)]),
+  );
+}
+
+function decodeSqliteJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(decodeSqliteJsonValue);
+  if (!value || typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).length === 1 && typeof record[SQLITE_JSON_BYTES_TAG] === "string") {
+    const encoded = record[SQLITE_JSON_BYTES_TAG];
+    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(encoded)) {
+      throw new MutationSafetyError("RECOVERY_REQUIRED", "stored SQLite byte value has invalid base64");
+    }
+    const bytes = Buffer.from(encoded, "base64");
+    if (bytes.toString("base64") !== encoded) {
+      throw new MutationSafetyError("RECOVERY_REQUIRED", "stored SQLite byte value is not canonical base64");
+    }
+    return bytes;
+  }
+  return Object.fromEntries(
+    Object.entries(record).map(([key, nested]) => [key, decodeSqliteJsonValue(nested)]),
+  );
+}
+
+export function encodeSqliteRecordsForJson(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+  return encodeSqliteJsonValue(rows) as Record<string, unknown>[];
+}
+
+export function decodeSqliteRecordsFromJson(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+  return decodeSqliteJsonValue(rows) as Record<string, unknown>[];
+}
+
+export function encodeSqliteRecordBundleForJson(bundle: SqliteRecordBundle): SqliteRecordBundle {
+  return encodeSqliteJsonValue(bundle) as SqliteRecordBundle;
+}
+
+export function decodeSqliteRecordBundleFromJson(bundle: SqliteRecordBundle): SqliteRecordBundle {
+  return decodeSqliteJsonValue(bundle) as SqliteRecordBundle;
+}
+
+const SQLITE_SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal"] as const;
+
+function assertSafeSqliteFile(filePath: string, label: string): void {
+  let fileStat;
+  try {
+    fileStat = lstatSync(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT" && label !== "main database") return;
+    throw new MutationSafetyError(
+      "UNSAFE_PATH",
+      `${label} cannot be inspected safely (${filePath}): ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (fileStat.isSymbolicLink() || !fileStat.isFile()) {
+    throw new MutationSafetyError("UNSAFE_PATH", `${label} must be a regular file without symlinks (${filePath})`);
+  }
+  if (fileStat.nlink > 1) {
+    throw new MutationSafetyError("UNSAFE_PATH", `${label} has multiple hard links (${filePath})`);
+  }
+}
+
+function assertSafeSqliteFiles(sqlitePath: string): void {
+  assertSafeSqliteFile(sqlitePath, "main database");
+  for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+    assertSafeSqliteFile(`${sqlitePath}${suffix}`, `SQLite ${suffix.slice(1)} sidecar`);
+  }
+}
+
 function withDatabase<T>(sqlitePath: string | null, readonly: boolean, callback: (db: Database.Database) => T): T {
   if (!sqlitePath) {
     throw new Error("SQLite path is not available.");
   }
 
-  const db = new Database(sqlitePath, { readonly });
+  assertSafeSqliteFiles(sqlitePath);
+  const db = new Database(sqlitePath, { readonly, fileMustExist: true });
 
   try {
     db.pragma("foreign_keys = ON");
@@ -553,7 +634,7 @@ export function sumSqliteDeletionCounts(counts: SqliteDeletionCounts): number {
   );
 }
 
-function deleteStateRows(sqlitePath: string | null, sessionIds: string[]): void {
+export function deleteStateRows(sqlitePath: string | null, sessionIds: string[]): void {
   if (!sqlitePath || sessionIds.length === 0) {
     return;
   }
@@ -589,7 +670,7 @@ function deleteStateRows(sqlitePath: string | null, sessionIds: string[]): void 
   });
 }
 
-function deleteGoalRows(sqlitePath: string | null, sessionIds: string[]): void {
+export function deleteGoalRows(sqlitePath: string | null, sessionIds: string[]): void {
   if (!sqlitePath || sessionIds.length === 0) {
     return;
   }
@@ -881,6 +962,51 @@ function restoreAgentJobItems(sqlitePath: string | null, rows: Record<string, un
   });
 }
 
+function removeRestoredRowsIfUnchanged(
+  sqlitePath: string | null,
+  tableName: string,
+  rows: Record<string, unknown>[],
+): void {
+  if (!sqlitePath || rows.length === 0) return;
+  withDatabase(sqlitePath, false, (db) => {
+    const transaction = db.transaction(() => {
+      if (!tableExists(db, tableName)) {
+        throw new MutationSafetyError(
+          "RECOVERY_REQUIRED",
+          `SQLite rollback cannot verify ${tableName}: table is missing`,
+        );
+      }
+      const tableColumns = new Set(getTableColumns(db, tableName));
+      for (const row of rows) {
+        const key = getRestoreKey(tableName, row);
+        if (!key || key.columns.some((column) => !tableColumns.has(column))) {
+          throw new MutationSafetyError(
+            "RECOVERY_REQUIRED",
+            `SQLite rollback cannot identify restored ${tableName} row`,
+          );
+        }
+        const whereSql = key.columns.map((column) => `${quoteIdentifier(column)} is ?`).join(" and ");
+        const current = db
+          .prepare(`select * from ${quoteIdentifier(tableName)} where ${whereSql}`)
+          .get(...key.values) as Record<string, unknown> | undefined;
+        if (!current) continue;
+        const comparisonColumns = Object.keys(row).filter((column) => tableColumns.has(column));
+        const differs = comparisonColumns.some(
+          (column) => !recoveryValueEquals(current[column], row[column]),
+        );
+        if (differs) {
+          throw new MutationSafetyError(
+            "RECOVERY_REQUIRED",
+            `SQLite rollback found a concurrent change in ${tableName} (${key.label})`,
+          );
+        }
+        db.prepare(`delete from ${quoteIdentifier(tableName)} where ${whereSql}`).run(...key.values);
+      }
+    });
+    transaction();
+  });
+}
+
 export function deleteSessionsFromSqlite(
   sqlitePath: string | null,
   sessionIds: string[],
@@ -1051,49 +1177,73 @@ export function restoreSqliteRecords(
     }
   }
 
-  if (sqlitePath) {
-    withDatabase(sqlitePath, false, (db) => {
-      const transaction = db.transaction(() => {
-        apply("threads", "threads", restoreRowsInDatabase(db, "threads", bundle.state.threads));
-        apply("logs", "logs", restoreRowsInDatabase(db, "logs", bundle.state.logs));
-        apply("threadDynamicTools", "thread_dynamic_tools", restoreRowsInDatabase(db, "thread_dynamic_tools", bundle.state.threadDynamicTools));
-        apply("stage1Outputs", "stage1_outputs", restoreRowsInDatabase(db, "stage1_outputs", bundle.state.stage1Outputs));
-        apply("agentJobItems", "agent_job_items", restoreAgentJobItemsInDatabase(db, bundle.state.agentJobItems));
-        apply("threadSpawnEdges", "thread_spawn_edges", restoreRowsInDatabase(db, "thread_spawn_edges", bundle.state.threadSpawnEdges));
-        if (!usesDedicatedGoals) {
-          apply("threadGoals", "thread_goals", restoreRowsInDatabase(db, "thread_goals", bundle.state.threadGoals));
-        }
+  let dedicatedLogsApplied = false;
+  let dedicatedGoalsApplied = false;
+  try {
+    // Separate databases commit before the state database. If a later write
+    // fails, their exact rows can be conditionally removed without touching
+    // unrelated or concurrently changed rows.
+    if (logsSqlitePath && logsSqlitePath !== sqlitePath) {
+      withDatabase(logsSqlitePath, false, (db) => {
+        const transaction = db.transaction(() => {
+          apply("dedicatedLogs", "logs", restoreRowsInDatabase(db, "logs", bundle.dedicatedLogs));
+        });
+        transaction();
       });
-      transaction();
-    });
-  } else {
-    apply("threads", "threads", restoreRows(null, "threads", bundle.state.threads));
-    apply("logs", "logs", restoreRows(null, "logs", bundle.state.logs));
-    apply("threadDynamicTools", "thread_dynamic_tools", restoreRows(null, "thread_dynamic_tools", bundle.state.threadDynamicTools));
-    apply("stage1Outputs", "stage1_outputs", restoreRows(null, "stage1_outputs", bundle.state.stage1Outputs));
-    apply("agentJobItems", "agent_job_items", restoreAgentJobItems(null, bundle.state.agentJobItems));
-    apply("threadSpawnEdges", "thread_spawn_edges", restoreRows(null, "thread_spawn_edges", bundle.state.threadSpawnEdges));
-    if (!usesDedicatedGoals) {
-      apply("threadGoals", "thread_goals", restoreRows(null, "thread_goals", bundle.state.threadGoals));
+      dedicatedLogsApplied = restored.dedicatedLogs > 0;
     }
-  }
 
-  if (logsSqlitePath && logsSqlitePath !== sqlitePath) {
-    withDatabase(logsSqlitePath, false, (db) => {
-      const transaction = db.transaction(() => {
-        apply("dedicatedLogs", "logs", restoreRowsInDatabase(db, "logs", bundle.dedicatedLogs));
+    if (usesDedicatedGoals) {
+      withDatabase(goalsSqlitePath, false, (db) => {
+        const transaction = db.transaction(() => {
+          apply("threadGoals", "thread_goals", restoreRowsInDatabase(db, "thread_goals", bundle.state.threadGoals));
+        });
+        transaction();
       });
-      transaction();
-    });
-  }
+      dedicatedGoalsApplied = restored.threadGoals > 0;
+    }
 
-  if (usesDedicatedGoals) {
-    withDatabase(goalsSqlitePath, false, (db) => {
-      const transaction = db.transaction(() => {
-        apply("threadGoals", "thread_goals", restoreRowsInDatabase(db, "thread_goals", bundle.state.threadGoals));
+    if (sqlitePath) {
+      withDatabase(sqlitePath, false, (db) => {
+        const transaction = db.transaction(() => {
+          apply("threads", "threads", restoreRowsInDatabase(db, "threads", bundle.state.threads));
+          apply("logs", "logs", restoreRowsInDatabase(db, "logs", bundle.state.logs));
+          apply("threadDynamicTools", "thread_dynamic_tools", restoreRowsInDatabase(db, "thread_dynamic_tools", bundle.state.threadDynamicTools));
+          apply("stage1Outputs", "stage1_outputs", restoreRowsInDatabase(db, "stage1_outputs", bundle.state.stage1Outputs));
+          apply("agentJobItems", "agent_job_items", restoreAgentJobItemsInDatabase(db, bundle.state.agentJobItems));
+          apply("threadSpawnEdges", "thread_spawn_edges", restoreRowsInDatabase(db, "thread_spawn_edges", bundle.state.threadSpawnEdges));
+          if (!usesDedicatedGoals) {
+            apply("threadGoals", "thread_goals", restoreRowsInDatabase(db, "thread_goals", bundle.state.threadGoals));
+          }
+        });
+        transaction();
       });
-      transaction();
-    });
+    } else {
+      apply("threads", "threads", restoreRows(null, "threads", bundle.state.threads));
+      apply("logs", "logs", restoreRows(null, "logs", bundle.state.logs));
+      apply("threadDynamicTools", "thread_dynamic_tools", restoreRows(null, "thread_dynamic_tools", bundle.state.threadDynamicTools));
+      apply("stage1Outputs", "stage1_outputs", restoreRows(null, "stage1_outputs", bundle.state.stage1Outputs));
+      apply("agentJobItems", "agent_job_items", restoreAgentJobItems(null, bundle.state.agentJobItems));
+      apply("threadSpawnEdges", "thread_spawn_edges", restoreRows(null, "thread_spawn_edges", bundle.state.threadSpawnEdges));
+      if (!usesDedicatedGoals) {
+        apply("threadGoals", "thread_goals", restoreRows(null, "thread_goals", bundle.state.threadGoals));
+      }
+    }
+  } catch (error) {
+    try {
+      if (dedicatedGoalsApplied) {
+        removeRestoredRowsIfUnchanged(goalsSqlitePath, "thread_goals", bundle.state.threadGoals);
+      }
+      if (dedicatedLogsApplied) {
+        removeRestoredRowsIfUnchanged(logsSqlitePath, "logs", bundle.dedicatedLogs);
+      }
+    } catch (rollbackError) {
+      throw new MutationSafetyError(
+        "RECOVERY_REQUIRED",
+        `SQLite restore failed and exact cross-database rollback was unsafe: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+      );
+    }
+    throw error;
   }
 
   return {
@@ -1101,4 +1251,271 @@ export function restoreSqliteRecords(
     skipped,
     skippedTables: [...skippedTables].sort(),
   };
+}
+
+function assertRowsPresentAndUnchanged(
+  db: Database.Database,
+  tableName: string,
+  rows: Record<string, unknown>[],
+  skippedTables: ReadonlySet<string>,
+): void {
+  if (rows.length === 0 || skippedTables.has(tableName)) return;
+  if (!tableExists(db, tableName)) {
+    throw new MutationSafetyError("RECOVERY_REQUIRED", `SQLite verification is missing table ${tableName}`);
+  }
+  const tableColumns = new Set(getTableColumns(db, tableName));
+  for (const row of rows) {
+    const key = getRestoreKey(tableName, row);
+    if (!key || key.columns.some((column) => !tableColumns.has(column))) {
+      throw new MutationSafetyError("RECOVERY_REQUIRED", `SQLite verification cannot identify ${tableName} row`);
+    }
+    const whereSql = key.columns.map((column) => `${quoteIdentifier(column)} is ?`).join(" and ");
+    const current = db
+      .prepare(`select * from ${quoteIdentifier(tableName)} where ${whereSql}`)
+      .get(...key.values) as Record<string, unknown> | undefined;
+    if (!current) {
+      throw new MutationSafetyError(
+        "RECOVERY_REQUIRED",
+        `SQLite verification is missing ${tableName} (${key.label})`,
+      );
+    }
+    const comparisonColumns = Object.keys(row).filter((column) => tableColumns.has(column));
+    const differingColumns = comparisonColumns.filter(
+      (column) => !recoveryValueEquals(current[column], row[column]),
+    );
+    if (differingColumns.length > 0) {
+      throw new MutationSafetyError(
+        "RECOVERY_REQUIRED",
+        `SQLite verification found changed ${tableName} (${key.label}): ${differingColumns.join(", ")}`,
+      );
+    }
+  }
+}
+
+export function validateRestoredSqliteRecords(
+  sqlitePath: string | null,
+  goalsSqlitePath: string | null,
+  bundle: SqliteRecordBundle,
+  skippedTableNames: readonly string[] = [],
+): void {
+  const skippedTables = new Set(skippedTableNames);
+  const usesDedicatedGoals = Boolean(goalsSqlitePath && goalsSqlitePath !== sqlitePath);
+  if (sqlitePath) {
+    withDatabase(sqlitePath, true, (db) => {
+      assertRowsPresentAndUnchanged(db, "threads", bundle.threads, skippedTables);
+      assertRowsPresentAndUnchanged(db, "logs", bundle.logs, skippedTables);
+      assertRowsPresentAndUnchanged(db, "thread_dynamic_tools", bundle.threadDynamicTools, skippedTables);
+      assertRowsPresentAndUnchanged(db, "stage1_outputs", bundle.stage1Outputs, skippedTables);
+      assertRowsPresentAndUnchanged(db, "agent_job_items", bundle.agentJobItems, skippedTables);
+      assertRowsPresentAndUnchanged(db, "thread_spawn_edges", bundle.threadSpawnEdges, skippedTables);
+      if (!usesDedicatedGoals) {
+        assertRowsPresentAndUnchanged(db, "thread_goals", bundle.threadGoals, skippedTables);
+      }
+    });
+  }
+  if (usesDedicatedGoals) {
+    withDatabase(goalsSqlitePath, true, (db) => {
+      assertRowsPresentAndUnchanged(db, "thread_goals", bundle.threadGoals, skippedTables);
+    });
+  }
+}
+
+export interface SqliteRecoveryReconcileResult {
+  inserted: number;
+  matched: number;
+  assignmentsRestored: number;
+}
+
+function emptyRecoveryReconcileResult(): SqliteRecoveryReconcileResult {
+  return { inserted: 0, matched: 0, assignmentsRestored: 0 };
+}
+
+function addRecoveryReconcileResults(
+  left: SqliteRecoveryReconcileResult,
+  right: SqliteRecoveryReconcileResult,
+): SqliteRecoveryReconcileResult {
+  return {
+    inserted: left.inserted + right.inserted,
+    matched: left.matched + right.matched,
+    assignmentsRestored: left.assignmentsRestored + right.assignmentsRestored,
+  };
+}
+
+function recoveryValueEquals(actual: unknown, expected: unknown): boolean {
+  const normalizedExpected = expected === undefined ? null : expected;
+  if (Buffer.isBuffer(actual) && Buffer.isBuffer(normalizedExpected)) {
+    return actual.equals(normalizedExpected);
+  }
+  if (actual instanceof Uint8Array && normalizedExpected instanceof Uint8Array) {
+    return Buffer.from(actual).equals(Buffer.from(normalizedExpected));
+  }
+  return Object.is(actual, normalizedExpected);
+}
+
+function describeRecoveryKey(key: { label: string }): string {
+  return key.label.replaceAll("\n", " ");
+}
+
+function throwRecoveryConflict(
+  tableName: string,
+  key: { label: string },
+  columns: string[],
+): never {
+  throw new MutationSafetyError(
+    "RECOVERY_REQUIRED",
+    `SQLite recovery conflict in ${tableName} (${describeRecoveryKey(key)}); differing columns: ${columns.join(", ")}`,
+  );
+}
+
+function reconcileRowsForRecovery(
+  db: Database.Database,
+  tableName: string,
+  rows: Record<string, unknown>[],
+): SqliteRecoveryReconcileResult {
+  const result = emptyRecoveryReconcileResult();
+  if (rows.length === 0) return result;
+  if (!tableExists(db, tableName)) {
+    throw new MutationSafetyError(
+      "RECOVERY_REQUIRED",
+      `SQLite recovery cannot reconcile ${tableName}: expected table is missing`,
+    );
+  }
+
+  const tableColumns = new Set(getTableColumns(db, tableName));
+  for (const row of rows) {
+    const key = getRestoreKey(tableName, row);
+    if (!key || key.columns.some((column) => !tableColumns.has(column))) {
+      throw new MutationSafetyError(
+        "RECOVERY_REQUIRED",
+        `SQLite recovery cannot identify an expected ${tableName} row by a supported key`,
+      );
+    }
+
+    const commonColumns = Object.keys(row).filter((column) => tableColumns.has(column));
+    if (commonColumns.length === 0) {
+      throw new MutationSafetyError(
+        "RECOVERY_REQUIRED",
+        `SQLite recovery cannot reconcile ${tableName} (${describeRecoveryKey(key)}): no common columns`,
+      );
+    }
+
+    const whereSql = key.columns.map((column) => `${quoteIdentifier(column)} is ?`).join(" and ");
+    const existing = db
+      .prepare(`select * from ${quoteIdentifier(tableName)} where ${whereSql}`)
+      .get(...key.values) as Record<string, unknown> | undefined;
+
+    if (!existing) {
+      const columnSql = commonColumns.map(quoteIdentifier).join(", ");
+      const valueSql = commonColumns.map(() => "?").join(", ");
+      db.prepare(`insert into ${quoteIdentifier(tableName)} (${columnSql}) values (${valueSql})`).run(
+        ...commonColumns.map((column) => row[column] ?? null),
+      );
+      result.inserted += 1;
+      continue;
+    }
+
+    const assignmentRecovery = tableName === "agent_job_items" && tableColumns.has("assigned_thread_id");
+    const comparisonColumns = assignmentRecovery
+      ? commonColumns.filter((column) => column !== "assigned_thread_id")
+      : commonColumns;
+    const differingColumns = comparisonColumns.filter(
+      (column) => !recoveryValueEquals(existing[column], row[column]),
+    );
+    if (differingColumns.length > 0) {
+      throwRecoveryConflict(tableName, key, differingColumns);
+    }
+
+    if (assignmentRecovery) {
+      const actualAssignment = existing.assigned_thread_id ?? null;
+      const expectedAssignment = row.assigned_thread_id ?? null;
+      if (actualAssignment === null && expectedAssignment !== null) {
+        const updateWhereSql = key.columns.map((column) => `${quoteIdentifier(column)} is ?`).join(" and ");
+        const update = db
+          .prepare(
+            `update ${quoteIdentifier(tableName)}
+             set assigned_thread_id = ?
+             where ${updateWhereSql} and assigned_thread_id is null`,
+          )
+          .run(expectedAssignment, ...key.values);
+        if (update.changes !== 1) {
+          throw new MutationSafetyError(
+            "RECOVERY_REQUIRED",
+            `SQLite recovery could not restore agent assignment in ${tableName} (${describeRecoveryKey(key)})`,
+          );
+        }
+        result.assignmentsRestored += 1;
+        continue;
+      }
+      if (!recoveryValueEquals(actualAssignment, expectedAssignment)) {
+        throwRecoveryConflict(tableName, key, ["assigned_thread_id"]);
+      }
+    }
+
+    result.matched += 1;
+  }
+
+  return result;
+}
+
+function reconcileDatabaseForRecovery(
+  sqlitePath: string | null,
+  tableRows: Array<{ tableName: string; rows: Record<string, unknown>[] }>,
+): SqliteRecoveryReconcileResult {
+  const hasExpectedRows = tableRows.some(({ rows }) => rows.length > 0);
+  if (!hasExpectedRows) return emptyRecoveryReconcileResult();
+  if (!sqlitePath) {
+    throw new MutationSafetyError(
+      "RECOVERY_REQUIRED",
+      "SQLite recovery cannot reconcile expected rows because the database path is unavailable",
+    );
+  }
+
+  try {
+    return withDatabase(sqlitePath, false, (db) => {
+      const transaction = db.transaction(() => {
+        let result = emptyRecoveryReconcileResult();
+        for (const { tableName, rows } of tableRows) {
+          result = addRecoveryReconcileResults(result, reconcileRowsForRecovery(db, tableName, rows));
+        }
+        return result;
+      });
+      return transaction();
+    });
+  } catch (error) {
+    if (error instanceof MutationSafetyError) throw error;
+    throw new MutationSafetyError(
+      "RECOVERY_REQUIRED",
+      `SQLite recovery failed for ${sqlitePath}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+/**
+ * Idempotently reconciles rows recorded by a recovery journal.
+ *
+ * Dedicated logs databases are deliberately outside this API. State and goals
+ * databases commit in separate SQLite transactions so a retry can reconcile
+ * either committed side without overwriting newer, conflicting values.
+ */
+export function reconcileSqliteRecordsForRecovery(
+  sqlitePath: string | null,
+  goalsSqlitePath: string | null,
+  bundle: SqliteRecordBundle,
+): SqliteRecoveryReconcileResult {
+  const usesDedicatedGoals = Boolean(goalsSqlitePath && goalsSqlitePath !== sqlitePath);
+  const stateResult = reconcileDatabaseForRecovery(sqlitePath, [
+    { tableName: "threads", rows: bundle.threads },
+    { tableName: "logs", rows: bundle.logs },
+    { tableName: "thread_dynamic_tools", rows: bundle.threadDynamicTools },
+    { tableName: "stage1_outputs", rows: bundle.stage1Outputs },
+    { tableName: "agent_job_items", rows: bundle.agentJobItems },
+    { tableName: "thread_spawn_edges", rows: bundle.threadSpawnEdges },
+    ...(usesDedicatedGoals ? [] : [{ tableName: "thread_goals", rows: bundle.threadGoals }]),
+  ]);
+  if (!usesDedicatedGoals) return stateResult;
+
+  const goalsResult = reconcileDatabaseForRecovery(goalsSqlitePath, [
+    { tableName: "thread_goals", rows: bundle.threadGoals },
+  ]);
+  return addRecoveryReconcileResults(stateResult, goalsResult);
 }

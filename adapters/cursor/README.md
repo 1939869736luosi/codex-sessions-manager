@@ -32,5 +32,5 @@ For destructive tools, change the args to `["--profile", "admin"]`.
 ## Notes
 
 - Cursor supports MCP servers natively via `.cursor/mcp.json`.
-- The read-only profile exposes 15 tools for safe session inspection.
+- The read-only profile exposes 16 tools for safe session inspection and recovery-state inspection.
 - The CLI remains available as a fallback via Cursor's terminal.

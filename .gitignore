@@ -8,3 +8,12 @@ coverage/
 
 # Local audit and decision notes. Do not publish by default.
 docs/local/
+
+# Private session exports, security working notes, and encrypted archives.
+session-exports/
+security_best_practices_report.md
+private-archives/
+advisory-drafts/
+compat/runs/private/
+*.tar.gpg
+*.tar.gpg.sha256

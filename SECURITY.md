@@ -50,12 +50,24 @@ The intended safety model is:
 - Read-only commands must not modify local Codex state.
 - Destructive CLI commands require `--yes`.
 - Destructive MCP tools require explicit confirmation.
+- Confirmed destructive session operations require canonical full UUIDs, and
+  active-session deletion requires an additional explicit override.
+- MCP's read-only profile does not register destructive tools.
+- Windows v0.6.1 is read-only: core and CLI mutations fail closed, and MCP does not register destructive tools even when `--profile admin` is requested. Mutation support will remain disabled until the real Windows reparse-point and crash matrix is verified.
 - Delete plans and previews are not authorization tokens.
-- Confirmed deletion rescans current state before writing.
+- Confirmed mutation fixes a canonical trusted root, rejects unsafe managed
+  links and path escapes, and repeats path and identity checks before writing.
 - Unknown global-state references remain warnings unless an exact-key safety
   rule makes them eligible.
 - Restore must check conflicts before writing live data.
-- Rollback should preserve the original state if a delete or cleanup operation
-  fails midway.
+- Mutations use an exclusive lock, a durable journal, atomic file replacement,
+  and operation-specific recovery data. If the final state cannot be proven,
+  further mutation is blocked until recovery completes.
+
+The path checks substantially narrow filesystem races but do not promise
+absolute protection against another malicious process running as the same user
+and continuously replacing entries between checks. The project currently uses
+fail-closed managed-path checks rather than native descriptor-relative
+`openat`/`unlinkat` operations.
 
 Reports that break any of these boundaries are in scope.

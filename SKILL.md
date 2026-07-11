@@ -54,13 +54,15 @@ codex-sessions export <id> [--output ./backup.json]
 codex-sessions plan-delete <id...> [--include-children] [--include-family] [--json]
 codex-sessions plan-delete --source-kind K --limit N [--json]
 codex-sessions preview-plan <file> [--json]
-codex-sessions delete <id...> [--trash] [--yes]
+codex-sessions delete <full-uuid...> [--trash] [--yes] [--allow-active]
 codex-sessions trash-list
-codex-sessions restore <id> --yes
-codex-sessions purge <id> --yes
-codex-sessions cleanup-index <id...> [--yes]
+codex-sessions restore <exact-trash-id> --yes
+codex-sessions purge <exact-trash-id> --yes
+codex-sessions cleanup-index <full-uuid...> [--yes] [--allow-active]
 codex-sessions cleanup-stale [--yes]
 codex-sessions verify <id...>
+codex-sessions recovery-status [--json]
+codex-sessions recover <exact-operation-id> --yes
 ```
 
 ## Safety Rules
@@ -71,13 +73,15 @@ codex-sessions verify <id...>
 - Delete never recursively adds parent, child, or family sessions. List every intended ID explicitly.
 - P11 exact-key global-state refs are removable only through explicit-ID confirmed delete.
 - Unknown global-state refs are warnings only; do not delete them automatically.
-- Rollback is best-effort, not crash-safe transaction.
+- Confirmed session mutations require full canonical UUIDs. Active-session deletion also requires `--allow-active` / `allowActive=true`.
+- An interrupted write keeps an exclusive lock and durable recovery record. Inspect it before running the exact confirmed recovery operation.
+- A committed operation with partial or failed verification remains committed and must be reported that way.
 
 ## MCP (Optional, Advanced)
 
 ```bash
-codex-sessions-mcp                       # default: read-only profile (15 tools)
-codex-sessions-mcp --profile admin       # all 20 tools including destructive ops
+codex-sessions-mcp                       # default: read-only profile (16 tools)
+codex-sessions-mcp --profile admin       # all 22 tools including destructive ops
 ```
 
 Invalid `--profile` values exit with code 1. Default is read-only for safety.

@@ -1,6 +1,7 @@
-import { readFile } from "node:fs/promises";
+import path from "node:path";
 
 import { safeJsonParse, splitJsonLines } from "./jsonl.js";
+import { createTrustedRootContext, readManagedText } from "./path-safety.js";
 import type { SessionEntry, SessionFileTarget, TimelineItem } from "./types.js";
 
 const TOOL_OUTPUT_LIMIT = 900;
@@ -154,7 +155,7 @@ function getPrimaryFileTarget(session: SessionEntry): SessionFileTarget | null {
   );
 }
 
-export async function readSessionTimeline(session: SessionEntry): Promise<TimelineItem[]> {
+export async function readSessionTimeline(session: SessionEntry, rootPath?: string): Promise<TimelineItem[]> {
   const primaryFile = getPrimaryFileTarget(session);
 
   if (!primaryFile) {
@@ -166,7 +167,10 @@ export async function readSessionTimeline(session: SessionEntry): Promise<Timeli
     }));
   }
 
-  const text = await readFile(primaryFile.absolutePath, "utf8");
+  const relativeParts = primaryFile.relativePath.split(/[\\/]+/u).filter(Boolean);
+  const inferredRoot = path.resolve(primaryFile.absolutePath, ...relativeParts.map(() => ".."));
+  const trustedRoot = await createTrustedRootContext(rootPath ?? inferredRoot);
+  const text = await readManagedText(trustedRoot, primaryFile.relativePath);
   const items: TimelineItem[] = [];
 
   for (const line of splitJsonLines(text)) {

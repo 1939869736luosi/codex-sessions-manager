@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -13,6 +13,9 @@ import { buildDeletePlanFile, writeDeletePlanFile } from "../src/core/plan-file.
 import { buildPlanDelete } from "../src/core/plan-delete.js";
 import { resolveSessions } from "../src/core/query.js";
 import { scanCodexRoot } from "../src/core/scan.js";
+import { acquireMutationLock } from "../src/core/mutation-safety.js";
+import { createTrustedRootContext } from "../src/core/path-safety.js";
+import { createRecoveryFileTransition } from "../src/core/recovery.js";
 import { createFixture, FIXTURE_IDS, writeExactGlobalStateFixture, type Fixture } from "./helpers/fixture.js";
 
 async function createConnectedClient(profile: McpProfile = "admin") {
@@ -34,6 +37,54 @@ describe("mcp server", () => {
     await fixture.cleanup();
   });
 
+  it("exposes recovery status read-only and recovery execution only in admin", async () => {
+    const context = await createTrustedRootContext(fixture.rootDir);
+    const before = await readFile(fixture.paths.sessionIndex, "utf8");
+    const after = `${before}mcp-recovered-marker\n`;
+    const lock = await acquireMutationLock(context, "cleanup-index", [FIXTURE_IDS.ACTIVE_ID]);
+    await lock.writeRecoveryPayload({
+      schemaVersion: "codex-sessions-recovery.v1",
+      operationId: lock.operationId,
+      kind: "cleanup-index",
+      strategy: "rollforward",
+      rootRealPath: context.realPath,
+      targetIds: [FIXTURE_IDS.ACTIVE_ID],
+      files: [createRecoveryFileTransition("session_index.jsonl", before, after)],
+    });
+    await lock.setStage("committing");
+    const readOnly = await createConnectedClient("read-only");
+    const admin = await createConnectedClient("admin");
+    try {
+      const status = await readOnly.client.callTool({
+        name: "get_recovery_status",
+        arguments: { root: fixture.rootDir },
+      });
+      expect(status.structuredContent?.status).toMatchObject({ pending: true, operationId: lock.operationId });
+      const blocked = await readOnly.client.callTool({
+        name: "recover_operation",
+        arguments: { root: fixture.rootDir, operationId: lock.operationId, confirm: true },
+      });
+      expect(blocked.isError).toBe(true);
+
+      const preview = await admin.client.callTool({
+        name: "recover_operation",
+        arguments: { root: fixture.rootDir, operationId: lock.operationId },
+      });
+      expect(preview.structuredContent).toMatchObject({ requiresConfirmation: true });
+      const recovered = await admin.client.callTool({
+        name: "recover_operation",
+        arguments: { root: fixture.rootDir, operationId: lock.operationId, confirm: true },
+      });
+      expect(recovered.structuredContent?.result).toMatchObject({
+        operationStatus: "committed",
+        recoveredBy: "rollforward",
+      });
+      await expect(readFile(fixture.paths.sessionIndex, "utf8")).resolves.toBe(after);
+    } finally {
+      await Promise.all([readOnly.client.close(), readOnly.server.close(), admin.client.close(), admin.server.close()]);
+    }
+  });
+
   it("creates the codex-sessions MCP server instance", () => {
     const server = createServer();
     expect(server).toBeDefined();
@@ -45,7 +96,7 @@ describe("mcp server", () => {
     expect(getMcpVersionText()).toBe(packageJson.version);
   });
 
-  it("recognizes symlinked MCP bin paths as the entrypoint", async () => {
+  it.runIf(process.platform !== "win32")("recognizes symlinked MCP bin paths as the entrypoint", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-mcp-entrypoint-"));
     const targetPath = path.join(tempDir, "server.js");
     const symlinkPath = path.join(tempDir, "codex-sessions-mcp");
@@ -205,8 +256,8 @@ describe("mcp server", () => {
         sqlite: { activeStatePath: string; activeLogsPath: string; stateTables: Array<{ table: string; exists: boolean }> };
         globalState: { possibleUnknownRefs: Array<{ path: string }> };
       };
-      expect(report.sqlite.activeStatePath).toBe(fixture.paths.sqlite);
-      expect(report.sqlite.activeLogsPath).toBe(fixture.paths.logsSqlite);
+      expect(report.sqlite.activeStatePath).toBe(await realpath(fixture.paths.sqlite));
+      expect(report.sqlite.activeLogsPath).toBe(await realpath(fixture.paths.logsSqlite as string));
       expect(report.sqlite.stateTables.some((table) => table.table === "threads" && table.exists)).toBe(true);
       expect(report.globalState.possibleUnknownRefs.some((ref) => ref.path === "$.some-user-setting")).toBe(true);
     } finally {
@@ -1193,6 +1244,7 @@ describe("mcp server", () => {
           root: fixture.rootDir,
           sessionIds: [FIXTURE_IDS.ACTIVE_ID],
           confirm: true,
+          allowActive: true,
         },
       });
 
@@ -1227,6 +1279,164 @@ describe("mcp server", () => {
     }
   });
 
+  it("allows short session prefixes only for unconfirmed MCP previews", async () => {
+    const { client, server } = await createConnectedClient();
+    const shortId = FIXTURE_IDS.ACTIVE_ID.slice(0, 12);
+
+    try {
+      const preview = await client.callTool({
+        name: "delete_sessions",
+        arguments: {
+          root: fixture.rootDir,
+          sessionIds: [shortId],
+        },
+      });
+      expect(preview.structuredContent).toMatchObject({
+        requiresConfirmation: true,
+        requiresFullSessionIds: true,
+        requiresAllowActive: true,
+        activeSessionIds: [FIXTURE_IDS.ACTIVE_ID],
+        preview: { items: [{ sessionId: FIXTURE_IDS.ACTIVE_ID }] },
+      });
+
+      const confirmed = await client.callTool({
+        name: "delete_sessions",
+        arguments: {
+          root: fixture.rootDir,
+          sessionIds: [shortId],
+          confirm: true,
+        },
+      });
+      expect(confirmed.isError).toBe(true);
+      expect(confirmed.content[0]).toMatchObject({
+        type: "text",
+        text: expect.stringMatching(/MALFORMED_ID|full UUID/),
+      });
+      const malformed = await client.callTool({
+        name: "delete_sessions",
+        arguments: {
+          root: fixture.rootDir,
+          sessionIds: ["../victim"],
+          confirm: true,
+        },
+      });
+      expect(malformed.isError).toBe(true);
+      expect(malformed.content[0]).toMatchObject({
+        type: "text",
+        text: expect.stringMatching(/MALFORMED_ID|full UUID/),
+      });
+      await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("requires allowActive=true for confirmed MCP deletion of active sessions", async () => {
+    const { client, server } = await createConnectedClient();
+
+    try {
+      const refused = await client.callTool({
+        name: "delete_sessions",
+        arguments: {
+          root: fixture.rootDir,
+          sessionIds: [FIXTURE_IDS.ACTIVE_ID],
+          trash: true,
+          confirm: true,
+        },
+      });
+      expect(refused.isError).toBe(true);
+      expect(refused.content[0]).toMatchObject({
+        type: "text",
+        text: expect.stringMatching(/ACTIVE_SESSION|allowActive/),
+      });
+      await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
+
+      const allowed = await client.callTool({
+        name: "delete_sessions",
+        arguments: {
+          root: fixture.rootDir,
+          sessionIds: [FIXTURE_IDS.ACTIVE_ID],
+          confirm: true,
+          allowActive: true,
+        },
+      });
+      expect(allowed.isError).not.toBe(true);
+      await expect(readFile(fixture.paths.activeSessionFile, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("requires exact trashId for confirmed MCP restore even with one match", async () => {
+    const { client, server } = await createConnectedClient();
+
+    try {
+      const deletion = await client.callTool({
+        name: "delete_sessions",
+        arguments: {
+          root: fixture.rootDir,
+          sessionIds: [FIXTURE_IDS.ACTIVE_ID],
+          trash: true,
+          confirm: true,
+          allowActive: true,
+        },
+      });
+      const trashId = (deletion.structuredContent?.result as { trashEntry: { trashId: string } }).trashEntry.trashId;
+
+      const preview = await client.callTool({
+        name: "restore_sessions",
+        arguments: {
+          root: fixture.rootDir,
+          id: FIXTURE_IDS.ACTIVE_ID.slice(0, 12),
+        },
+      });
+      expect(preview.structuredContent).toMatchObject({
+        requiresConfirmation: true,
+        requiresExactTrashId: true,
+      });
+
+      const refused = await client.callTool({
+        name: "restore_sessions",
+        arguments: {
+          root: fixture.rootDir,
+          id: FIXTURE_IDS.ACTIVE_ID,
+          confirm: true,
+        },
+      });
+      expect(refused.isError).toBe(true);
+      expect(refused.content[0]).toMatchObject({
+        type: "text",
+        text: expect.stringMatching(/MALFORMED_ID|精确 trashId/),
+      });
+
+      const restored = await client.callTool({
+        name: "restore_sessions",
+        arguments: { root: fixture.rootDir, id: trashId, confirm: true },
+      });
+      expect(restored.isError).not.toBe(true);
+
+      const purgeBySession = await client.callTool({
+        name: "purge_trash",
+        arguments: { root: fixture.rootDir, id: FIXTURE_IDS.ACTIVE_ID, confirm: true },
+      });
+      expect(purgeBySession.isError).toBe(true);
+      expect(purgeBySession.content[0]).toMatchObject({
+        type: "text",
+        text: expect.stringMatching(/MALFORMED_ID|精确 trashId/),
+      });
+      const purged = await client.callTool({
+        name: "purge_trash",
+        arguments: { root: fixture.rootDir, id: trashId, confirm: true },
+      });
+      expect(purged.isError).not.toBe(true);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("moves sessions to trash only when confirmation is explicit", async () => {
     const { client, server } = await createConnectedClient();
 
@@ -1250,6 +1460,7 @@ describe("mcp server", () => {
           sessionIds: [FIXTURE_IDS.ACTIVE_ID],
           trash: true,
           confirm: true,
+          allowActive: true,
         },
       });
       const trashList = await client.callTool({
@@ -1272,15 +1483,17 @@ describe("mcp server", () => {
     const { client, server } = await createConnectedClient();
 
     try {
-      await client.callTool({
+      const deletion = await client.callTool({
         name: "delete_sessions",
         arguments: {
           root: fixture.rootDir,
           sessionIds: [FIXTURE_IDS.ACTIVE_ID],
           trash: true,
           confirm: true,
+          allowActive: true,
         },
       });
+      const trashId = (deletion.structuredContent?.result as { trashEntry: { trashId: string } }).trashEntry.trashId;
 
       const restorePreview = await client.callTool({
         name: "restore_sessions",
@@ -1296,7 +1509,7 @@ describe("mcp server", () => {
         name: "restore_sessions",
         arguments: {
           root: fixture.rootDir,
-          id: FIXTURE_IDS.ACTIVE_ID,
+          id: trashId,
           confirm: true,
         },
       });
@@ -1307,7 +1520,7 @@ describe("mcp server", () => {
         name: "purge_trash",
         arguments: {
           root: fixture.rootDir,
-          id: FIXTURE_IDS.ACTIVE_ID,
+          id: trashId,
           confirm: true,
         },
       });
@@ -1336,6 +1549,7 @@ describe("mcp server", () => {
           sessionIds: [FIXTURE_IDS.ACTIVE_ID],
           trash: true,
           confirm: true,
+          allowActive: true,
         },
       });
       const firstTrashId = (firstDelete.structuredContent?.result as { trashEntry: { trashId: string } }).trashEntry.trashId;
@@ -1356,6 +1570,7 @@ describe("mcp server", () => {
           sessionIds: [FIXTURE_IDS.ACTIVE_ID],
           trash: true,
           confirm: true,
+          allowActive: true,
         },
       });
       const secondTrashId = (secondDelete.structuredContent?.result as { trashEntry: { trashId: string } }).trashEntry.trashId;
@@ -1533,6 +1748,59 @@ describe("mcp server", () => {
     }
   });
 
+  it("requires full UUID and allowActive=true for confirmed MCP index cleanup", async () => {
+    const { client, server } = await createConnectedClient();
+    const shortId = FIXTURE_IDS.ACTIVE_ID.slice(0, 12);
+
+    try {
+      const preview = await client.callTool({
+        name: "cleanup_session_indexes",
+        arguments: { root: fixture.rootDir, sessionIds: [shortId] },
+      });
+      expect(preview.structuredContent).toMatchObject({
+        requiresConfirmation: true,
+        requiresFullSessionIds: true,
+        requiresAllowActive: true,
+        activeSessionIds: [FIXTURE_IDS.ACTIVE_ID],
+        preview: { sessionIds: [FIXTURE_IDS.ACTIVE_ID] },
+      });
+
+      const shortConfirmed = await client.callTool({
+        name: "cleanup_session_indexes",
+        arguments: {
+          root: fixture.rootDir,
+          sessionIds: [shortId],
+          confirm: true,
+          allowActive: true,
+        },
+      });
+      expect(shortConfirmed.isError).toBe(true);
+      expect(shortConfirmed.content[0]).toMatchObject({
+        type: "text",
+        text: expect.stringMatching(/MALFORMED_ID|full UUID/),
+      });
+
+      const activeConfirmed = await client.callTool({
+        name: "cleanup_session_indexes",
+        arguments: {
+          root: fixture.rootDir,
+          sessionIds: [FIXTURE_IDS.ACTIVE_ID],
+          confirm: true,
+        },
+      });
+      expect(activeConfirmed.isError).toBe(true);
+      expect(activeConfirmed.content[0]).toMatchObject({
+        type: "text",
+        text: expect.stringMatching(/ACTIVE_SESSION|allowActive/),
+      });
+      expect(await readFile(fixture.paths.sessionIndex, "utf8")).toContain(FIXTURE_IDS.ACTIVE_ID);
+      expect(await readFile(fixture.paths.history, "utf8")).toContain(FIXTURE_IDS.ACTIVE_ID);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("executes cleanup_session_indexes only with confirm=true", async () => {
     const { client, server } = await createConnectedClient();
 
@@ -1543,6 +1811,7 @@ describe("mcp server", () => {
           root: fixture.rootDir,
           sessionIds: [FIXTURE_IDS.ACTIVE_ID],
           confirm: true,
+          allowActive: true,
         },
       });
       const cleanup = result.structuredContent?.result as {
@@ -1565,13 +1834,13 @@ describe("mcp server", () => {
 });
 
 describe("mcp server --profile", () => {
-  const ADMIN_TOOLS = ["delete_sessions", "restore_sessions", "purge_trash", "cleanup_session_indexes", "cleanup_stale_indexes"];
+  const ADMIN_TOOLS = ["delete_sessions", "restore_sessions", "purge_trash", "cleanup_session_indexes", "cleanup_stale_indexes", "recover_operation"];
   const READ_ONLY_TOOLS = [
     "inspect_root", "list_sessions", "summarize_sources", "list_projects",
     "get_session", "get_session_family", "audit_session", "audit_root",
     "preview_root_delete", "export_session_backup", "preview_delete_sessions",
     "plan_delete_sessions", "preview_delete_plan", "list_trash",
-    "verify_sessions",
+    "verify_sessions", "get_recovery_status",
   ];
 
   it("read-only profile registers only read-only tools", async () => {
@@ -1605,14 +1874,17 @@ describe("mcp server --profile", () => {
     }
   });
 
-  it("read-only profile has 15 tools, admin has 20", async () => {
+  it("read-only profile has 16 tools, admin has 22", async () => {
     const { client: roClient, server: roServer } = await createConnectedClient("read-only");
     const { client: adminClient, server: adminServer } = await createConnectedClient("admin");
     try {
       const roTools = await roClient.listTools();
       const adminTools = await adminClient.listTools();
-      expect(roTools.tools.length).toBe(15);
-      expect(adminTools.tools.length).toBe(20);
+      expect(roTools.tools.length).toBe(16);
+      expect(adminTools.tools.length).toBe(22);
+      expect(roTools.tools.map((tool) => tool.name)).toContain("get_recovery_status");
+      expect(roTools.tools.map((tool) => tool.name)).not.toContain("recover_operation");
+      expect(adminTools.tools.map((tool) => tool.name)).toContain("recover_operation");
     } finally {
       await roClient.close();
       await roServer.close();
@@ -1626,7 +1898,12 @@ describe("mcp server --profile", () => {
     try {
       const result = await client.callTool({
         name: "delete_sessions",
-        arguments: { sessionIds: ["unused-id"], confirm: false },
+        arguments: {
+          sessionIds: ["019d1111-2222-7333-8444-aaaaaaaaaaaa"],
+          confirm: true,
+          trash: true,
+          allowActive: true,
+        },
       });
       expect(result.isError).toBe(true);
       expect(result.content[0]).toMatchObject({

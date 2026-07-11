@@ -1,5 +1,10 @@
-import { readFile, writeFile } from "node:fs/promises";
-
+import { atomicWriteManagedTextIfUnchanged, MutationSafetyError } from "./mutation-safety.js";
+import {
+  captureManagedPath,
+  readManagedText,
+  toManagedRelativePath,
+  type TrustedRootContext,
+} from "./path-safety.js";
 import type { GlobalStateExactKeyPreview, GlobalStateExactKeyRuleId, GlobalStateReference } from "./types.js";
 
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -444,43 +449,58 @@ function removeKnownAndExactGlobalStateReferences(
   };
 }
 
-export async function removeGlobalStateReferences(
-  filePath: string,
+export function buildGlobalStateRemoval(
+  originalText: string,
   targetIds: Set<string>,
-  options: { expectedText?: string | null } = {},
-): Promise<{
-  originalText: string;
+): {
+  nextText: string;
   removedCount: number;
   removedRefs: GlobalStateReference[];
-}> {
-  const originalText = await readFile(filePath, "utf8");
-  if (options.expectedText !== undefined && options.expectedText !== originalText) {
-    throw new Error(
-      "global state 在预览后发生变化，拒绝写入；请重新运行 delete 预览，确认 exact key/path 后再加 --yes。",
-    );
-  }
-
+} {
   let parsed: unknown;
   try {
     parsed = JSON.parse(originalText) as unknown;
   } catch (error) {
     throw new Error(`global state 无法解析，拒绝写入；请先运行 doctor 或 audit 查看原因：${error instanceof Error ? error.message : String(error)}`);
   }
-
-  const removedRefs = [
-    ...targetIds.values(),
-  ].flatMap((sessionId) => [
+  const removedRefs = [...targetIds.values()].flatMap((sessionId) => [
     ...(collectGlobalStateReferences(originalText).get(sessionId) ?? []),
     ...(collectExactKeyGlobalStateReferences(originalText).get(sessionId) ?? []),
   ]);
   const result = removeKnownAndExactGlobalStateReferences(parsed, targetIds);
+  return {
+    nextText: `${JSON.stringify(result.value, null, 2)}\n`,
+    removedCount: result.removed,
+    removedRefs,
+  };
+}
 
-  if (result.removed > 0) {
+export async function removeGlobalStateReferences(
+  filePath: string,
+  targetIds: Set<string>,
+  options: { expectedText?: string | null; trustedRoot: TrustedRootContext; relativePath?: string },
+): Promise<{
+  originalText: string;
+  removedCount: number;
+  removedRefs: GlobalStateReference[];
+}> {
+  const relativePath = options.relativePath ?? toManagedRelativePath(options.trustedRoot, filePath);
+  const originalText = await readManagedText(options.trustedRoot, relativePath);
+  if (options.expectedText !== undefined && options.expectedText !== originalText) {
+    throw new MutationSafetyError(
+      "STALE_PLAN",
+      "global state 在预览后发生变化，拒绝写入；请重新运行 delete 预览，确认 exact key/path 后再加 --yes。",
+    );
+  }
+
+  const result = buildGlobalStateRemoval(originalText, targetIds);
+
+  if (result.removedCount > 0) {
     try {
-      await writeFile(filePath, `${JSON.stringify(result.value, null, 2)}\n`, "utf8");
+      await atomicWriteManagedTextIfUnchanged(options.trustedRoot, relativePath, originalText, result.nextText);
     } catch (error) {
       try {
-        await writeFile(filePath, originalText, "utf8");
+        await atomicWriteManagedTextIfUnchanged(options.trustedRoot, relativePath, result.nextText, originalText);
       } catch (rollbackError) {
         throw new Error(
           `global state 写入失败，回滚也失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}。原始错误：${error instanceof Error ? error.message : String(error)}`,
@@ -492,8 +512,8 @@ export async function removeGlobalStateReferences(
 
   return {
     originalText,
-    removedCount: result.removed,
-    removedRefs,
+    removedCount: result.removedCount,
+    removedRefs: result.removedRefs,
   };
 }
 
@@ -539,20 +559,38 @@ function restoreExactKeyReference(nextObject: Record<string, unknown>, ref: Glob
 export async function restoreGlobalStateReferences(
   filePath: string | null,
   refs: GlobalStateReference[],
+  options: { trustedRoot: TrustedRootContext; relativePath?: string },
 ): Promise<number> {
   if (!filePath || refs.length === 0) {
     return 0;
   }
 
-  let parsed: unknown = {};
-  try {
-    parsed = JSON.parse(await readFile(filePath, "utf8")) as unknown;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
-      throw error;
-    }
+  const relativePath = options.relativePath ?? toManagedRelativePath(options.trustedRoot, filePath);
+  const snapshot = await captureManagedPath(options.trustedRoot, relativePath, {
+    expectedKind: "file",
+    allowMissing: true,
+    rejectHardlinks: true,
+  });
+  const originalText = snapshot.exists
+    ? await readManagedText(options.trustedRoot, relativePath)
+    : null;
+  const built = buildGlobalStateRestoration(originalText, refs);
+
+  if (built.restoredCount > 0) {
+    await atomicWriteManagedTextIfUnchanged(options.trustedRoot, relativePath, originalText, built.nextText);
   }
 
+  return built.restoredCount;
+}
+
+export function buildGlobalStateRestoration(
+  originalText: string | null,
+  refs: GlobalStateReference[],
+): { nextText: string; restoredCount: number } {
+  let parsed: unknown = {};
+  if (originalText?.trim()) {
+    parsed = JSON.parse(originalText) as unknown;
+  }
   const nextObject: Record<string, unknown> = isPlainObject(parsed) ? { ...parsed } : {};
   let restored = 0;
 
@@ -588,9 +626,8 @@ export async function restoreGlobalStateReferences(
     }
   }
 
-  if (restored > 0) {
-    await writeFile(filePath, `${JSON.stringify(nextObject, null, 2)}\n`, "utf8");
-  }
-
-  return restored;
+  return {
+    nextText: `${JSON.stringify(nextObject, null, 2)}\n`,
+    restoredCount: restored,
+  };
 }

@@ -37,6 +37,7 @@ export interface CodexRootPaths {
   rootPath: string;
   sqliteHomePath: string;
   sqliteHomeSource: "CODEX_SQLITE_HOME" | "config.toml" | "root";
+  sqliteHomeTrusted: boolean;
   sqliteHomeConfigPath: string | null;
   sessionsDir: string;
   archivedDir: string | null;
@@ -48,7 +49,34 @@ export interface CodexRootPaths {
   memoriesSqlitePath: string | null;
   globalStatePath: string | null;
   shellSnapshotsDir: string | null;
+  unsafeSurfaces: ScanSafetyIssue[];
   warnings: string[];
+}
+
+export type ScanSurface =
+  | "trusted-root"
+  | "sessions"
+  | "archived_sessions"
+  | "shell_snapshots"
+  | "session_index"
+  | "history"
+  | "global_state"
+  | "sqlite_home"
+  | "sqlite_state"
+  | "sqlite_logs"
+  | "sqlite_goals"
+  | "sqlite_memories";
+
+export interface ScanSafetyIssue {
+  surface: ScanSurface;
+  path: string;
+  code: "UNSAFE_PATH" | "STALE_PLAN";
+  reason: string;
+}
+
+export interface ScanSafetyState {
+  complete: boolean;
+  unsafeSurfaces: ScanSafetyIssue[];
 }
 
 export interface SessionIndexRecord {
@@ -107,6 +135,8 @@ export interface SessionFileTarget {
   fileName: string;
   size: number;
   lastModified: number | null;
+  device?: number;
+  inode?: number;
 }
 
 export interface ShellSnapshotFile {
@@ -116,6 +146,8 @@ export interface ShellSnapshotFile {
   fileName: string;
   size: number;
   lastModified: number | null;
+  device?: number;
+  inode?: number;
 }
 
 export interface SessionEntry {
@@ -226,6 +258,7 @@ export interface ScanResult {
   sqlite: SqliteScanData;
   globalState: GlobalStateScanData;
   shellSnapshots: ShellSnapshotsScanData;
+  safety: ScanSafetyState;
   warnings: string[];
 }
 
@@ -754,14 +787,17 @@ export interface PlanDeleteResult {
 
 export interface DeletePlanSurfaceFingerprint {
   path: string | null;
+  availability: "available" | "missing" | "unsafe";
+  unsafeReason: string | null;
   exists: boolean;
   size: number | null;
   mtimeMs: number | null;
+  sha256: string | null;
   parseable: boolean;
 }
 
 export interface DeletePlanRootFingerprint {
-  rootRealpath: string;
+  rootRealpath: string | null;
   sqliteHomeRealpath: string | null;
   sqliteHomeSource: CodexRootPaths["sqliteHomeSource"];
   sessionIndex: DeletePlanSurfaceFingerprint;
@@ -818,24 +854,95 @@ export interface DeleteValidationItem {
   sqlite: SqliteDeletionCounts;
 }
 
+export type OperationStatus = "not_started" | "committed" | "rolled_back" | "recovery_required";
+export type VerificationStatus = "passed" | "partial" | "failed" | "not_run";
+export type MutationErrorCode =
+  | "UNSAFE_PATH"
+  | "STALE_PLAN"
+  | "MALFORMED_ID"
+  | "ACTIVE_SESSION"
+  | "RECOVERY_REQUIRED"
+  | "POST_COMMIT_VERIFY_FAILED";
+
+/** Shared machine-readable failure contract for destructive operations. */
+export class OperationError extends Error {
+  readonly code: MutationErrorCode;
+  readonly operationStatus: OperationStatus;
+  readonly verificationStatus: VerificationStatus;
+
+  constructor(
+    code: MutationErrorCode,
+    message: string,
+    options: {
+      operationStatus?: OperationStatus;
+      verificationStatus?: VerificationStatus;
+      cause?: unknown;
+    } = {},
+  ) {
+    super(`${code}: ${message}`);
+    this.name = "OperationError";
+    this.code = code;
+    this.operationStatus = options.operationStatus ?? "not_started";
+    this.verificationStatus = options.verificationStatus ?? "not_run";
+    if (options.cause !== undefined) this.cause = options.cause;
+  }
+}
+
+export function isOperationError(error: unknown): error is OperationError {
+  return error instanceof OperationError;
+}
+
+export interface VerificationScope {
+  sessionFiles: boolean;
+  shellSnapshots: boolean;
+  sessionIndex: boolean;
+  history: boolean;
+  globalState: boolean;
+  sqlite: boolean;
+  trashEntry?: boolean;
+  operationJournal?: boolean;
+  retainedSurfaces: string[];
+}
+
+export interface MutationResultMetadata {
+  operationStatus: OperationStatus;
+  verificationStatus: VerificationStatus;
+  verificationScope: VerificationScope;
+  warnings: string[];
+  errorCode: MutationErrorCode | null;
+}
+
 export interface DeleteExecutionResult {
   preview: DeletePreview;
   validation: DeleteValidationItem[];
   confirmed: true;
+  operationStatus: OperationStatus;
+  verificationStatus: VerificationStatus;
+  verificationScope: VerificationScope;
+  warnings: string[];
+  errorCode: MutationErrorCode | null;
 }
 
-export class DeleteSessionsError extends Error {
+export class DeleteSessionsError extends OperationError {
   readonly liveDeleteStarted: boolean;
   readonly liveDeleteRolledBack: boolean;
 
-  constructor(message: string, options: { liveDeleteStarted: boolean; liveDeleteRolledBack: boolean; cause?: unknown }) {
-    super(message);
+  constructor(message: string, options: {
+    code: MutationErrorCode;
+    liveDeleteStarted: boolean;
+    liveDeleteRolledBack: boolean;
+    cause?: unknown;
+  }) {
+    super(options.code, message, {
+      operationStatus: options.liveDeleteStarted
+        ? (options.liveDeleteRolledBack ? "rolled_back" : "recovery_required")
+        : "not_started",
+      verificationStatus: "not_run",
+      cause: options.cause,
+    });
     this.name = "DeleteSessionsError";
     this.liveDeleteStarted = options.liveDeleteStarted;
     this.liveDeleteRolledBack = options.liveDeleteRolledBack;
-    if (options.cause !== undefined) {
-      this.cause = options.cause;
-    }
   }
 }
 
@@ -933,6 +1040,8 @@ export interface TrashEntrySummary {
   rootPath: string;
   sessionIds: string[];
   sessions: TrashSessionManifest[];
+  status: "valid" | "invalid";
+  invalidReason?: string;
 }
 
 export interface TrashDuplicateSessionSummary {
@@ -941,12 +1050,12 @@ export interface TrashDuplicateSessionSummary {
   trashIds: string[];
 }
 
-export interface TrashDeleteResult {
+export interface TrashDeleteResult extends MutationResultMetadata {
   trashEntry: TrashEntrySummary;
   deletion: DeleteExecutionResult;
 }
 
-export interface TrashRestoreResult {
+export interface TrashRestoreResult extends MutationResultMetadata {
   trashEntry: TrashEntrySummary;
   restoredSessionIds: string[];
   restoredSessionFiles: number;
@@ -977,10 +1086,9 @@ export interface TrashRestoreResult {
     dedicatedLogs: number;
   };
   skippedSqliteTables: string[];
-  warnings: string[];
 }
 
-export interface TrashPurgeResult {
+export interface TrashPurgeResult extends MutationResultMetadata {
   trashEntry: TrashEntrySummary;
   purged: boolean;
 }
@@ -991,11 +1099,15 @@ export interface CleanupResult {
   removedHistoryRows: number;
 }
 
+export interface CleanupExecutionResult extends CleanupResult, MutationResultMetadata {}
+
 export interface SessionIndexCleanupResult {
   sessionIds: string[];
   removedSessionIndexRows: number;
   removedHistoryRows: number;
 }
+
+export interface SessionIndexCleanupExecutionResult extends SessionIndexCleanupResult, MutationResultMetadata {}
 
 export interface SqliteTableInspection {
   table: string;
@@ -1006,6 +1118,15 @@ export interface SqliteTableInspection {
 
 export interface DoctorReport {
   rootPath: string;
+  recovery: {
+    pending: boolean;
+    operationId: string | null;
+    kind: string | null;
+    stage: string | null;
+    targetIds: string[];
+    hasRecoveryPayload: boolean;
+    invalidReason: string | null;
+  };
   paths: {
     sessionsDir: { path: string; exists: boolean; readable: boolean };
     archivedSessionsDir: { path: string; exists: boolean; readable: boolean };
@@ -1018,6 +1139,7 @@ export interface DoctorReport {
   sqlite: {
     sqliteHomePath: string;
     sqliteHomeSource: CodexRootPaths["sqliteHomeSource"];
+    sqliteHomeTrusted: boolean;
     sqliteHomeConfigPath: string | null;
     stateCandidates: string[];
     activeStatePath: string | null;

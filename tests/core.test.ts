@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { appendFile, chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import Database from "better-sqlite3";
@@ -94,9 +94,9 @@ describe("core integration", () => {
 
     expect(scan.root.sqliteHomePath).toBe(sqliteHome);
     expect(scan.root.sqliteHomeSource).toBe("config.toml");
-    expect(scan.root.sqlitePath).toBe(statePath);
+    expect(scan.root.sqlitePath).toBe(await realpath(statePath));
     expect(resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID])[0].sqliteTitle).toBe(`Title ${FIXTURE_IDS.ACTIVE_ID}`);
-    expect(doctor.sqlite.activeMemoriesPath).toBe(memoriesPath);
+    expect(doctor.sqlite.activeMemoriesPath).toBe(await realpath(memoriesPath));
     expect(doctor.sqlite.memoriesTables).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ table: "stage1_outputs", exists: true }),
@@ -119,7 +119,7 @@ describe("core integration", () => {
       process.env.CODEX_SQLITE_HOME = sqliteHome;
       const scan = await scanCodexRoot(fixture.rootDir);
       expect(scan.root.sqliteHomeSource).toBe("CODEX_SQLITE_HOME");
-      expect(scan.root.sqlitePath).toBe(statePath);
+      expect(scan.root.sqlitePath).toBe(await realpath(statePath));
       expect(resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID])[0].sqliteTitle).toBe(`Title ${FIXTURE_IDS.ACTIVE_ID}`);
     } finally {
       if (oldSqliteHome === undefined) {
@@ -146,7 +146,7 @@ describe("core integration", () => {
       const scan = await scanCodexRoot(fixture.rootDir);
       expect(scan.root.sqliteHomePath).toBe(configSqliteHome);
       expect(scan.root.sqliteHomeSource).toBe("config.toml");
-      expect(scan.root.sqlitePath).toBe(configStatePath);
+      expect(scan.root.sqlitePath).toBe(await realpath(configStatePath));
       expect(resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID])[0].sqliteTitle).toBe(`Title ${FIXTURE_IDS.ACTIVE_ID}`);
     } finally {
       if (oldSqliteHome === undefined) {
@@ -170,7 +170,7 @@ describe("core integration", () => {
       relativePath: path.relative(fixture.rootDir, compressedPath),
     });
 
-    const trashResult = await moveSessionsToTrash(scan, [active]);
+    const trashResult = await moveSessionsToTrash(scan, [active], { allowActive: true });
     await expect(readFile(compressedPath)).rejects.toMatchObject({ code: "ENOENT" });
 
     await restoreTrashEntry(fixture.rootDir, trashResult.trashEntry.trashId);
@@ -1360,7 +1360,7 @@ describe("core integration", () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID]);
     const preview = buildDeletePreview(scan, sessions);
-    const result = await deleteSessions(scan, sessions);
+    const result = await deleteSessions(scan, sessions, { allowActive: true });
     const globalState = JSON.parse(await readFile(fixture.paths.globalState, "utf8")) as {
       "pinned-thread-ids": string[];
       "queued-follow-ups": Record<string, unknown>;
@@ -1406,7 +1406,7 @@ describe("core integration", () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.UNRELATED_ID]);
     const preview = buildDeletePreview(scan, sessions);
-    const result = await deleteSessions(scan, sessions);
+    const result = await deleteSessions(scan, sessions, { allowActive: true });
     const globalState = JSON.parse(await readFile(fixture.paths.globalState, "utf8")) as {
       "pinned-thread-ids": string[];
       "queued-follow-ups": Record<string, unknown>;
@@ -1466,7 +1466,7 @@ describe("core integration", () => {
 
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.EXACT_GLOBAL_STATE_ID]);
-    const result = await deleteSessions(scan, sessions);
+    const result = await deleteSessions(scan, sessions, { allowActive: true });
     const globalState = JSON.parse(await readFile(fixture.paths.globalState, "utf8")) as {
       "electron-persisted-atom-state": {
         "prompt-history": Record<string, unknown>;
@@ -1527,7 +1527,7 @@ describe("core integration", () => {
 
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.EXACT_GLOBAL_STATE_ID]);
-    const trashResult = await moveSessionsToTrash(scan, sessions);
+    const trashResult = await moveSessionsToTrash(scan, sessions, { allowActive: true });
     const manifestPath = path.join(fixture.rootDir, ".codex-sessions-trash", trashResult.trashEntry.trashId, "manifest.json");
     const trashBundle = JSON.parse(await readFile(manifestPath, "utf8")) as {
       globalStateRefs: Array<{ sessionId: string; path: string; ruleId?: string; safetyClass?: string; value: unknown }>;
@@ -1594,7 +1594,7 @@ describe("core integration", () => {
       "utf8",
     );
 
-    await expect(moveSessionsToTrash(scan, sessions)).rejects.toThrow("回收站记录已清理");
+    await expect(moveSessionsToTrash(scan, sessions, { allowActive: true })).rejects.toThrow("回收站记录已清理");
     await expect(listTrashEntries(fixture.rootDir)).resolves.toEqual([]);
     await expect(readFile(fixture.paths.globalState, "utf8")).resolves.toContain("not an exact path");
   });
@@ -1604,7 +1604,7 @@ describe("core integration", () => {
 
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.EXACT_GLOBAL_STATE_ID]);
-    const trashResult = await moveSessionsToTrash(scan, sessions);
+    const trashResult = await moveSessionsToTrash(scan, sessions, { allowActive: true });
     const manifestPath = path.join(fixture.rootDir, ".codex-sessions-trash", trashResult.trashEntry.trashId, "manifest.json");
     const trashBundle = JSON.parse(await readFile(manifestPath, "utf8")) as {
       globalStateRefs: Array<Record<string, unknown>>;
@@ -1632,7 +1632,7 @@ describe("core integration", () => {
 
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.EXACT_GLOBAL_STATE_ID]);
-    const trashResult = await moveSessionsToTrash(scan, sessions);
+    const trashResult = await moveSessionsToTrash(scan, sessions, { allowActive: true });
     const manifestPath = path.join(fixture.rootDir, ".codex-sessions-trash", trashResult.trashEntry.trashId, "manifest.json");
     const trashBundle = JSON.parse(await readFile(manifestPath, "utf8")) as {
       globalStateRefs: Array<Record<string, unknown>>;
@@ -1667,7 +1667,7 @@ describe("core integration", () => {
 
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.EXACT_GLOBAL_STATE_ID]);
-    const trashResult = await moveSessionsToTrash(scan, sessions);
+    const trashResult = await moveSessionsToTrash(scan, sessions, { allowActive: true });
     await writeFile(
       fixture.paths.globalState,
       `${JSON.stringify(
@@ -1696,7 +1696,7 @@ describe("core integration", () => {
 
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.EXACT_GLOBAL_STATE_ID]);
-    const trashResult = await moveSessionsToTrash(scan, sessions);
+    const trashResult = await moveSessionsToTrash(scan, sessions, { allowActive: true });
     await writeExactGlobalStateFixture(fixture.paths.globalState);
 
     await expect(restoreTrashEntry(fixture.rootDir, trashResult.trashEntry.trashId)).rejects.toThrow("global state exact-key");
@@ -1710,7 +1710,7 @@ describe("core integration", () => {
 
     expect(buildDeletePreview(scan, sessions).totals.exactKeyGlobalStateRefs).toBe(0);
     expect(buildDeletePreview(scan, sessions).totals.possibleUnknownGlobalStateRefs).toBe(2);
-    await expect(deleteSessions(scan, sessions)).rejects.toThrow("拒绝删除 unknown global-state");
+    await expect(deleteSessions(scan, sessions, { allowActive: true })).rejects.toThrow("拒绝删除 unknown global-state");
     const after = await readFile(fixture.paths.globalState, "utf8");
     expect(after).toContain(FIXTURE_IDS.BAD_HEARTBEAT_GLOBAL_STATE_ID);
   });
@@ -1721,7 +1721,7 @@ describe("core integration", () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.BAD_HEARTBEAT_GLOBAL_STATE_ID]);
 
-    await expect(moveSessionsToTrash(scan, sessions)).rejects.toThrow("回收站记录已清理");
+    await expect(moveSessionsToTrash(scan, sessions, { allowActive: true })).rejects.toThrow("回收站记录已清理");
     await expect(listTrashEntries(fixture.rootDir)).resolves.toEqual([]);
     await expect(readFile(fixture.paths.globalState, "utf8")).resolves.toContain(FIXTURE_IDS.BAD_HEARTBEAT_GLOBAL_STATE_ID);
   });
@@ -1738,7 +1738,7 @@ describe("core integration", () => {
     expect(preview.items[0].possibleUnknownGlobalStateRefPaths).toEqual([
       `$.electron-persisted-atom-state.prompt-history.${FIXTURE_IDS.EXACT_GLOBAL_STATE_ID}[2]`,
     ]);
-    await expect(deleteSessions(scan, sessions)).rejects.toThrow("拒绝删除 unknown global-state");
+    await expect(deleteSessions(scan, sessions, { allowActive: true })).rejects.toThrow("拒绝删除 unknown global-state");
     await expect(readFile(fixture.paths.globalState, "utf8")).resolves.toContain(FIXTURE_IDS.PROMPT_HISTORY_VALUE_ID);
   });
 
@@ -1752,7 +1752,7 @@ describe("core integration", () => {
     expect(preview.totals.exactKeyGlobalStateRefs).toBe(0);
     expect(preview.totals.possibleUnknownGlobalStateRefs).toBe(1);
     expect(preview.items[0].possibleUnknownGlobalStateRefPaths).toEqual(["$.electron-local-remote-control-installation-id"]);
-    await expect(deleteSessions(scan, sessions)).rejects.toThrow("拒绝删除 unknown global-state");
+    await expect(deleteSessions(scan, sessions, { allowActive: true })).rejects.toThrow("拒绝删除 unknown global-state");
     await expect(readFile(fixture.paths.globalState, "utf8")).resolves.toContain(FIXTURE_IDS.INSTALLATION_GLOBAL_STATE_ID);
   });
 
@@ -1775,7 +1775,7 @@ describe("core integration", () => {
       "utf8",
     );
 
-    await expect(deleteSessions(scan, sessions)).rejects.toThrow("预览后发生变化");
+    await expect(deleteSessions(scan, sessions, { allowActive: true })).rejects.toThrow(/STALE_PLAN|预览后发生变化/u);
     const after = await readFile(fixture.paths.globalState, "utf8");
     expect(after).toContain("not an exact path");
     expect(after).toContain(FIXTURE_IDS.EXACT_GLOBAL_STATE_ID);
@@ -1786,7 +1786,7 @@ describe("core integration", () => {
 
     const scan = await scanCodexRoot(fixture.rootDir);
     const session = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID])[0];
-    await expect(deleteSessions(scan, [session])).rejects.toThrow("删除失败");
+    await expect(deleteSessions(scan, [session], { allowActive: true })).rejects.toThrow("删除失败");
 
     const rescanned = await scanCodexRoot(fixture.rootDir);
     const validation = await validateDeletion(rescanned, [session]);
@@ -1808,7 +1808,7 @@ describe("core integration", () => {
   it("does not treat session IDs inside unrelated JSONL text as remaining rows", async () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     const session = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID])[0];
-    await cleanupSessionIndexes(scan, [session]);
+    await cleanupSessionIndexes(scan, [session], { allowActive: true });
     await appendFile(
       fixture.paths.sessionIndex,
       `${JSON.stringify({ id: FIXTURE_IDS.STALE_ID, thread_name: `mentions ${FIXTURE_IDS.ACTIVE_ID}` })}\n`,
@@ -1850,12 +1850,12 @@ describe("core integration", () => {
     expect(report.paths.history.readable).toBe(true);
     expect(report.paths.globalState.parseable).toBe(true);
     expect(report.paths.shellSnapshotsDir.readable).toBe(true);
-    expect(report.sqlite.stateCandidates).toContain(fixture.paths.sqlite);
-    expect(report.sqlite.logsCandidates).toContain(fixture.paths.logsSqlite);
-    expect(report.sqlite.goalsCandidates).toContain(fixture.paths.goalsSqlite);
-    expect(report.sqlite.activeStatePath).toBe(state12);
-    expect(report.sqlite.activeLogsPath).toBe(logs10);
-    expect(report.sqlite.activeGoalsPath).toBe(goals3);
+    expect(report.sqlite.stateCandidates).toContain(await realpath(fixture.paths.sqlite));
+    expect(report.sqlite.logsCandidates).toContain(await realpath(fixture.paths.logsSqlite as string));
+    expect(report.sqlite.goalsCandidates).toContain(await realpath(fixture.paths.goalsSqlite as string));
+    expect(report.sqlite.activeStatePath).toBe(await realpath(state12));
+    expect(report.sqlite.activeLogsPath).toBe(await realpath(logs10));
+    expect(report.sqlite.activeGoalsPath).toBe(await realpath(goals3));
     expect(report.sqlite.stateTables.map((table) => table.table)).toEqual(expectedTables);
     expect(report.sqlite.logsTables.map((table) => table.table)).toEqual(expectedTables);
     expect(report.sqlite.goalsTables.find((table) => table.table === "thread_goals")).toMatchObject({
@@ -1907,15 +1907,18 @@ describe("core integration", () => {
     expect(report.warnings.some((warning) => warning.includes("global state 无法解析"))).toBe(true);
   });
 
-  it("continues deleting indexes and sqlite when a file is already missing", async () => {
+  it("refuses the old delete plan when a rollout file disappears after scan", async () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     const session = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID])[0];
     await rm(fixture.paths.activeSessionFile);
 
-    const result = await deleteSessions(scan, [session]);
-    expect(result.validation[0].filePathsRemaining).toEqual([]);
-    expect(result.validation[0].sessionIndexRowsRemaining).toBe(0);
-    expect(result.validation[0].historyRowsRemaining).toBe(0);
+    await expect(deleteSessions(scan, [session], { allowActive: true })).rejects.toThrow(/STALE_PLAN/u);
+    await expect(readFile(fixture.paths.sessionIndex, "utf8")).resolves.toContain(FIXTURE_IDS.ACTIVE_ID);
+    await expect(readFile(fixture.paths.history, "utf8")).resolves.toContain(FIXTURE_IDS.ACTIVE_ID);
+    const stateDb = new Database(fixture.paths.sqlite, { readonly: true });
+    expect((stateDb.prepare("select count(*) as count from threads where id = ?").get(FIXTURE_IDS.ACTIVE_ID) as { count: number }).count)
+      .toBe(1);
+    stateDb.close();
   });
 
   it("restores files, indexes, and dedicated logs when sqlite deletion fails", async () => {
@@ -1932,7 +1935,7 @@ describe("core integration", () => {
 
     const scan = await scanCodexRoot(fixture.rootDir);
     const session = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID])[0];
-    await expect(deleteSessions(scan, [session])).rejects.toThrow("删除失败");
+    await expect(deleteSessions(scan, [session], { allowActive: true })).rejects.toThrow("删除失败");
 
     const validation = await validateDeletion(await scanCodexRoot(fixture.rootDir), [session]);
     expect(validation[0].filePathsRemaining).toHaveLength(1);
@@ -1949,7 +1952,7 @@ describe("core integration", () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     const session = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID])[0];
 
-    const cleanup = await cleanupSessionIndexes(scan, [session]);
+    const cleanup = await cleanupSessionIndexes(scan, [session], { allowActive: true });
     const verification = await validateDeletion(await scanCodexRoot(fixture.rootDir), [session]);
 
     expect(cleanup.removedSessionIndexRows).toBe(1);
@@ -1999,7 +2002,7 @@ describe("core integration", () => {
   it("moves a session to trash and restores every cleanup surface", async () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID]);
-    const trashResult = await moveSessionsToTrash(scan, sessions);
+    const trashResult = await moveSessionsToTrash(scan, sessions, { allowActive: true });
     const trashEntries = await listTrashEntries(fixture.rootDir);
     const liveValidation = await validateDeletion(await scanCodexRoot(fixture.rootDir), sessions);
 
@@ -2064,7 +2067,7 @@ describe("core integration", () => {
 
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID]);
-    await expect(moveSessionsToTrash(scan, sessions)).rejects.toThrow("回收站记录已清理");
+    await expect(moveSessionsToTrash(scan, sessions, { allowActive: true })).rejects.toThrow("回收站记录已清理");
 
     const validation = await validateDeletion(await scanCodexRoot(fixture.rootDir), sessions);
     const trashEntries = await listTrashEntries(fixture.rootDir);
@@ -2096,7 +2099,7 @@ describe("core integration", () => {
 
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID]);
-    await expect(moveSessionsToTrash(scan, sessions)).rejects.toThrow("移入回收站失败");
+    await expect(moveSessionsToTrash(scan, sessions, { allowActive: true })).rejects.toThrow("移入回收站失败");
 
     expect(await listTrashEntries(fixture.rootDir)).toEqual([]);
     await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
@@ -2106,7 +2109,7 @@ describe("core integration", () => {
   it("refuses restore when any live surface already exists", async () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID]);
-    const trashResult = await moveSessionsToTrash(scan, sessions);
+    const trashResult = await moveSessionsToTrash(scan, sessions, { allowActive: true });
 
     await writeFile(fixture.paths.activeSessionFile, "new live content\n", "utf8");
 
@@ -2122,7 +2125,7 @@ describe("core integration", () => {
   it("refuses restore when sqlite exists even if files are missing", async () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID]);
-    const trashResult = await moveSessionsToTrash(scan, sessions);
+    const trashResult = await moveSessionsToTrash(scan, sessions, { allowActive: true });
 
     const db = new Database(fixture.paths.sqlite);
     db.prepare(
@@ -2143,7 +2146,7 @@ describe("core integration", () => {
   it("does not restore or conflict on retained dedicated logs in new trash bundles", async () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID]);
-    const trashResult = await moveSessionsToTrash(scan, sessions);
+    const trashResult = await moveSessionsToTrash(scan, sessions, { allowActive: true });
 
     const restore = await restoreTrashEntry(fixture.rootDir, trashResult.trashEntry.trashId);
 
@@ -2160,7 +2163,7 @@ describe("core integration", () => {
   it("refuses restore when live spawn edges have the same unique key", async () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID, FIXTURE_IDS.ARCHIVED_ID]);
-    const trashResult = await moveSessionsToTrash(scan, sessions);
+    const trashResult = await moveSessionsToTrash(scan, sessions, { allowActive: true });
     const db = new Database(fixture.paths.sqlite);
     db.prepare(
       "insert into thread_spawn_edges (parent_thread_id, child_thread_id, status) values (?, ?, 'complete')",
@@ -2182,7 +2185,7 @@ describe("core integration", () => {
   it("rolls back files, jsonl, global state, and sqlite when a later state table restore fails", async () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID]);
-    const trashResult = await moveSessionsToTrash(scan, sessions);
+    const trashResult = await moveSessionsToTrash(scan, sessions, { allowActive: true });
     const db = new Database(fixture.paths.sqlite);
     db.exec(`
       create trigger fail_stage1_restore
@@ -2213,7 +2216,7 @@ describe("core integration", () => {
   it("rolls back state sqlite when dedicated goals restore fails after state rows were restored", async () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID]);
-    const trashResult = await moveSessionsToTrash(scan, sessions);
+    const trashResult = await moveSessionsToTrash(scan, sessions, { allowActive: true });
     const goalsDb = new Database(fixture.paths.goalsSqlite as string);
     goalsDb.exec(`
       create trigger fail_dedicated_goal_restore
@@ -2244,7 +2247,7 @@ describe("core integration", () => {
   it("dedupes sqlite relationship rows for multi-session trash bundles", async () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID, FIXTURE_IDS.ARCHIVED_ID]);
-    const trashResult = await moveSessionsToTrash(scan, sessions);
+    const trashResult = await moveSessionsToTrash(scan, sessions, { allowActive: true });
     const bundlePath = path.join(
       fixture.rootDir,
       ".codex-sessions-trash",
@@ -2271,10 +2274,10 @@ describe("core integration", () => {
   it("purges a trash entry without touching restored live sessions", async () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID]);
-    const trashResult = await moveSessionsToTrash(scan, sessions);
-    await restoreTrashEntry(fixture.rootDir, FIXTURE_IDS.ACTIVE_ID);
+    const trashResult = await moveSessionsToTrash(scan, sessions, { allowActive: true });
+    await restoreTrashEntry(fixture.rootDir, trashResult.trashEntry.trashId);
 
-    const purge = await purgeTrashEntry(fixture.rootDir, FIXTURE_IDS.ACTIVE_ID);
+    const purge = await purgeTrashEntry(fixture.rootDir, trashResult.trashEntry.trashId);
 
     expect(purge.purged).toBe(true);
     expect(await listTrashEntries(fixture.rootDir)).toEqual([]);
@@ -2284,7 +2287,11 @@ describe("core integration", () => {
 
   it("keeps restored trash entries and refuses ambiguous duplicate writes by session id", async () => {
     const firstScan = await scanCodexRoot(fixture.rootDir);
-    const firstTrash = await moveSessionsToTrash(firstScan, resolveSessions(firstScan, [FIXTURE_IDS.ACTIVE_ID]));
+    const firstTrash = await moveSessionsToTrash(
+      firstScan,
+      resolveSessions(firstScan, [FIXTURE_IDS.ACTIVE_ID]),
+      { allowActive: true },
+    );
 
     await restoreTrashEntry(fixture.rootDir, firstTrash.trashEntry.trashId);
     let entries = await listTrashEntries(fixture.rootDir);
@@ -2293,7 +2300,11 @@ describe("core integration", () => {
     await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
 
     const secondScan = await scanCodexRoot(fixture.rootDir);
-    const secondTrash = await moveSessionsToTrash(secondScan, resolveSessions(secondScan, [FIXTURE_IDS.ACTIVE_ID]));
+    const secondTrash = await moveSessionsToTrash(
+      secondScan,
+      resolveSessions(secondScan, [FIXTURE_IDS.ACTIVE_ID]),
+      { allowActive: true },
+    );
 
     entries = await listTrashEntries(fixture.rootDir);
     expect(entries.filter((entry) => entry.sessionIds.includes(FIXTURE_IDS.ACTIVE_ID))).toHaveLength(2);
@@ -2322,7 +2333,7 @@ describe("core integration", () => {
     try {
       const scan = await scanCodexRoot(partialFixture.rootDir);
       const sessions = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID]);
-      const trashResult = await moveSessionsToTrash(scan, sessions);
+      const trashResult = await moveSessionsToTrash(scan, sessions, { allowActive: true });
       const goalsDb = new Database(partialFixture.paths.goalsSqlite as string);
       goalsDb.exec("drop table thread_goals");
       goalsDb.close();
@@ -2349,7 +2360,7 @@ describe("core integration", () => {
   it("reports trash manifest corruption clearly before restore", async () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID]);
-    const trashResult = await moveSessionsToTrash(scan, sessions);
+    const trashResult = await moveSessionsToTrash(scan, sessions, { allowActive: true });
     await writeFile(
       path.join(fixture.rootDir, ".codex-sessions-trash", trashResult.trashEntry.trashId, "manifest.json"),
       "{ invalid json\n",
@@ -2362,7 +2373,7 @@ describe("core integration", () => {
   it("refuses trash manifests with inconsistent structure", async () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID]);
-    const trashResult = await moveSessionsToTrash(scan, sessions);
+    const trashResult = await moveSessionsToTrash(scan, sessions, { allowActive: true });
     const manifestPath = path.join(fixture.rootDir, ".codex-sessions-trash", trashResult.trashEntry.trashId, "manifest.json");
     const bundle = JSON.parse(await readFile(manifestPath, "utf8")) as {
       manifest: { sessions: Array<{ sessionId: string }> };
@@ -2380,7 +2391,7 @@ describe("core integration", () => {
   it("refuses to restore a trash entry created for another root", async () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID]);
-    const trashResult = await moveSessionsToTrash(scan, sessions);
+    const trashResult = await moveSessionsToTrash(scan, sessions, { allowActive: true });
     const manifestPath = path.join(fixture.rootDir, ".codex-sessions-trash", trashResult.trashEntry.trashId, "manifest.json");
     const bundle = JSON.parse(await readFile(manifestPath, "utf8")) as { manifest: { rootPath: string } };
     bundle.manifest.rootPath = "/tmp/another-codex-root";
@@ -2394,7 +2405,7 @@ describe("core integration", () => {
   it("refuses trash manifest paths that leave the root", async () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID]);
-    const trashResult = await moveSessionsToTrash(scan, sessions);
+    const trashResult = await moveSessionsToTrash(scan, sessions, { allowActive: true });
     const manifestPath = path.join(fixture.rootDir, ".codex-sessions-trash", trashResult.trashEntry.trashId, "manifest.json");
     const bundle = JSON.parse(await readFile(manifestPath, "utf8")) as {
       sessionFiles: Array<{ path: string }>;
@@ -2412,7 +2423,7 @@ describe("core integration", () => {
   it("dedupes jsonl and global state refs during restore", async () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     const sessions = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID]);
-    const trashResult = await moveSessionsToTrash(scan, sessions);
+    const trashResult = await moveSessionsToTrash(scan, sessions, { allowActive: true });
     const manifestPath = path.join(fixture.rootDir, ".codex-sessions-trash", trashResult.trashEntry.trashId, "manifest.json");
     const bundle = JSON.parse(await readFile(manifestPath, "utf8")) as {
       sessionIndexRecords: unknown[];

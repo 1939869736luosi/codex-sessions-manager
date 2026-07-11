@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { appendFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
 
-import { getHelpText, runCli } from "../src/cli/run.js";
+import { cliUnhandledErrorExitCode, getHelpText, mutationExitCode, runCli } from "../src/cli/run.js";
+import { acquireMutationLock, MutationSafetyError } from "../src/core/mutation-safety.js";
+import { createTrustedRootContext } from "../src/core/path-safety.js";
+import { createRecoveryFileTransition } from "../src/core/recovery.js";
 import { createFixture, FIXTURE_IDS, writeExactGlobalStateFixture, type Fixture } from "./helpers/fixture.js";
 
 function createIo() {
@@ -29,6 +32,55 @@ describe("cli", () => {
 
   afterEach(async () => {
     await fixture.cleanup();
+  });
+
+  it("maps exit 2/3 from structured error codes and never parses error messages", () => {
+    expect(cliUnhandledErrorExitCode(new MutationSafetyError("RECOVERY_REQUIRED", "needs recovery"))).toBe(3);
+    expect(cliUnhandledErrorExitCode(new MutationSafetyError("POST_COMMIT_VERIFY_FAILED", "verify failed"))).toBe(2);
+    expect(cliUnhandledErrorExitCode(new Error("RECOVERY_REQUIRED: text alone is not a stable code"))).toBe(1);
+    for (const code of ["UNSAFE_PATH", "STALE_PLAN", "MALFORMED_ID", "ACTIVE_SESSION"] as const) {
+      expect(cliUnhandledErrorExitCode(new MutationSafetyError(code, code))).toBe(1);
+    }
+  });
+
+  it("uses exit 2 for committed operations whose verification is partial or failed", () => {
+    expect(mutationExitCode({ verificationStatus: "passed" })).toBe(0);
+    expect(mutationExitCode({ verificationStatus: "partial" })).toBe(2);
+    expect(mutationExitCode({ verificationStatus: "failed" })).toBe(2);
+  });
+
+  it("previews and confirms durable recovery only with the exact operation id", async () => {
+    const context = await createTrustedRootContext(fixture.rootDir);
+    const before = await readFile(fixture.paths.sessionIndex, "utf8");
+    const after = `${before}recovered-marker\n`;
+    const lock = await acquireMutationLock(context, "cleanup-index", [FIXTURE_IDS.ACTIVE_ID]);
+    await lock.writeRecoveryPayload({
+      schemaVersion: "codex-sessions-recovery.v1",
+      operationId: lock.operationId,
+      kind: "cleanup-index",
+      strategy: "rollforward",
+      rootRealPath: context.realPath,
+      targetIds: [FIXTURE_IDS.ACTIVE_ID],
+      files: [createRecoveryFileTransition("session_index.jsonl", before, after)],
+    });
+    await lock.setStage("committing");
+
+    const statusIo = createIo();
+    expect(await runCli(["recovery-status", "--root", fixture.rootDir, "--json"], statusIo.io)).toBe(0);
+    expect(JSON.parse(statusIo.stdout.join("\n"))).toMatchObject({ pending: true, operationId: lock.operationId });
+
+    const previewIo = createIo();
+    expect(await runCli(["recover", lock.operationId, "--root", fixture.rootDir, "--json"], previewIo.io)).toBe(0);
+    expect(JSON.parse(previewIo.stdout.join("\n"))).toMatchObject({ requiresConfirmation: true });
+    await expect(readFile(fixture.paths.sessionIndex, "utf8")).resolves.toBe(before);
+
+    const recoverIo = createIo();
+    expect(await runCli(["recover", lock.operationId, "--root", fixture.rootDir, "--yes", "--json"], recoverIo.io)).toBe(0);
+    expect(JSON.parse(recoverIo.stdout.join("\n"))).toMatchObject({
+      operationStatus: "committed",
+      recoveredBy: "rollforward",
+    });
+    await expect(readFile(fixture.paths.sessionIndex, "utf8")).resolves.toBe(after);
   });
 
   it("prints the package version without scanning the Codex root", async () => {
@@ -271,6 +323,9 @@ describe("cli", () => {
       expect(planText).not.toContain("secret prompt text must not be printed");
       expect(planText).not.toContain("second prompt");
       expect(planText).not.toContain("archived prompt");
+      if (process.platform !== "win32") {
+        expect((await stat(planPath)).mode & 0o777).toBe(0o600);
+      }
 
       const beforeSessionIndex = await readFile(fixture.paths.sessionIndex, "utf8");
       const beforeHistory = await readFile(fixture.paths.history, "utf8");
@@ -424,6 +479,9 @@ describe("cli", () => {
     expect(help).toContain("codex-sessions --version");
     expect(help).toContain("codex-sessions plan-delete <session-id...> [--root PATH] [--json] [--write-plan FILE]");
     expect(help).toContain("codex-sessions preview-plan <plan-file> [--root PATH] [--json]");
+    expect(help).toContain("[--allow-active]");
+    expect(help).toContain("确认执行只接受完整 UUID");
+    expect(help).toContain("确认执行只接受精确 trashId");
     expect(help).toContain("--include-children");
     expect(help).toContain("plan-delete 是只读删除计划");
     expect(help).toContain("plan file 是审计材料");
@@ -914,6 +972,7 @@ describe("cli", () => {
     const packageJson = JSON.parse(await readFile("package.json", "utf8")) as {
       version: string;
       files: string[];
+      scripts: Record<string, string>;
     };
     const packageLock = JSON.parse(await readFile("package-lock.json", "utf8")) as {
       version: string;
@@ -922,10 +981,13 @@ describe("cli", () => {
     const trashSource = await readFile("src/core/trash.ts", "utf8");
     const mcpServerSource = await readFile("src/mcp/server.ts", "utf8");
     const versionSource = await readFile("src/version.ts", "utf8");
+    const buildSource = await readFile("scripts/build.mjs", "utf8");
     const unknownRules = await readFile("docs/UNKNOWN_GLOBAL_STATE_RULES.md", "utf8");
 
     expect(packageJson.files).toContain("docs/UNKNOWN_GLOBAL_STATE_RULES.md");
-    expect(packageJson).toHaveProperty("scripts.build", expect.stringContaining("chmod +x dist/cli/index.js dist/mcp/server.js"));
+    expect(packageJson.scripts.build).toBe("node scripts/build.mjs");
+    expect(buildSource).toContain("chmod(path.join(distDirectory, \"cli\", \"index.js\"), 0o755)");
+    expect(buildSource).toContain("chmod(path.join(distDirectory, \"mcp\", \"server.js\"), 0o755)");
     expect(packageLock.version).toBe(packageJson.version);
     expect(packageLock.packages[""].version).toBe(packageJson.version);
     expect(versionSource).toContain(`export const TOOL_VERSION = "${packageJson.version}"`);
@@ -954,9 +1016,12 @@ describe("cli", () => {
 
   it("deletes sessions when --yes is passed", async () => {
     const capture = createIo();
-    const exitCode = await runCli(["delete", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--yes"], capture.io);
+    const exitCode = await runCli(
+      ["delete", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--yes", "--allow-active"],
+      capture.io,
+    );
 
-    expect(exitCode).toBe(0);
+    expect(exitCode).toBe(2);
     expect(capture.stdout.join("\n")).toContain("possible_unknown_global_state_refs=1");
 
     const list = createIo();
@@ -993,8 +1058,8 @@ describe("cli", () => {
     expect(human.stdout.join("\n")).toContain("Root:");
     expect(human.stdout.join("\n")).toContain("possible unknown global state refs");
     expect(jsonExitCode).toBe(0);
-    expect(report.sqlite.activeStatePath).toBe(fixture.paths.sqlite);
-    expect(report.sqlite.activeLogsPath).toBe(fixture.paths.logsSqlite);
+    expect(report.sqlite.activeStatePath).toBe(await realpath(fixture.paths.sqlite));
+    expect(report.sqlite.activeLogsPath).toBe(await realpath(fixture.paths.logsSqlite as string));
     expect(report.sqlite.stateTables.some((table) => table.table === "threads" && table.exists)).toBe(true);
     expect(report.globalState.possibleUnknownRefs.some((ref) => ref.path === "$.some-user-setting")).toBe(true);
   });
@@ -1348,34 +1413,132 @@ describe("cli", () => {
     await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
   });
 
+  it("allows a unique short prefix only for delete preview", async () => {
+    const shortId = FIXTURE_IDS.ACTIVE_ID.slice(0, 12);
+    const preview = createIo();
+    const previewExitCode = await runCli(
+      ["delete", shortId, "--root", fixture.rootDir, "--json"],
+      preview.io,
+    );
+
+    expect(previewExitCode).toBe(0);
+    expect(JSON.parse(preview.stdout.join("\n"))).toMatchObject({
+      requiresConfirmation: true,
+      requiresFullSessionIds: true,
+      requiresAllowActive: true,
+      activeSessionIds: [FIXTURE_IDS.ACTIVE_ID],
+      preview: { items: [{ sessionId: FIXTURE_IDS.ACTIVE_ID }] },
+    });
+    await expect(
+      runCli(["delete", shortId, "--root", fixture.rootDir, "--yes"], createIo().io),
+    ).rejects.toThrow(/MALFORMED_ID|full UUID/);
+    await expect(
+      runCli(["delete", "../victim", "--root", fixture.rootDir, "--yes"], createIo().io),
+    ).rejects.toThrow(/MALFORMED_ID|full UUID/);
+    await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
+  });
+
+  it("requires an explicit active-session override for confirmed CLI deletion", async () => {
+    await expect(
+      runCli(
+        ["delete", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--trash", "--yes"],
+        createIo().io,
+      ),
+    ).rejects.toThrow(/ACTIVE_SESSION|allow-active/);
+    await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
+
+    const deletion = createIo();
+    const exitCode = await runCli(
+      [
+        "delete",
+        FIXTURE_IDS.ACTIVE_ID,
+        "--root",
+        fixture.rootDir,
+        "--yes",
+        "--allow-active",
+      ],
+      deletion.io,
+    );
+    expect(exitCode).toBe(2);
+    await expect(readFile(fixture.paths.activeSessionFile, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("does not require --allow-active for a confirmed archived-session UUID", async () => {
+    const result = createIo();
+    expect(
+      await runCli(["delete", FIXTURE_IDS.ARCHIVED_ID, "--root", fixture.rootDir, "--yes"], result.io),
+    ).toBe(0);
+    await expect(readFile(fixture.paths.archivedSessionFile, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("requires exact trashId even when one trash entry matches a session id", async () => {
+    const deletion = createIo();
+    await runCli(
+      [
+        "delete",
+        FIXTURE_IDS.ACTIVE_ID,
+        "--root",
+        fixture.rootDir,
+        "--trash",
+        "--yes",
+        "--allow-active",
+        "--json",
+      ],
+      deletion.io,
+    );
+    const trashId = (JSON.parse(deletion.stdout.join("\n")) as { trashEntry: { trashId: string } }).trashEntry.trashId;
+
+    const preview = createIo();
+    await runCli(["restore", FIXTURE_IDS.ACTIVE_ID.slice(0, 12), "--root", fixture.rootDir, "--json"], preview.io);
+    expect(JSON.parse(preview.stdout.join("\n"))).toMatchObject({
+      requiresConfirmation: true,
+      requiresExactTrashId: true,
+    });
+    await expect(
+      runCli(["restore", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--yes"], createIo().io),
+    ).rejects.toThrow(/MALFORMED_ID|精确 trashId/);
+
+    const restore = createIo();
+    expect(await runCli(["restore", trashId, "--root", fixture.rootDir, "--yes"], restore.io)).toBe(0);
+    await expect(
+      runCli(["purge", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--yes"], createIo().io),
+    ).rejects.toThrow(/MALFORMED_ID|精确 trashId/);
+    expect(await runCli(["purge", trashId, "--root", fixture.rootDir, "--yes"], createIo().io)).toBe(0);
+  });
+
   it("moves sessions to trash and restores them from the cli", async () => {
     const deletion = createIo();
     const deleteExitCode = await runCli(
-      ["delete", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--trash", "--yes"],
+      ["delete", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--trash", "--yes", "--allow-active"],
       deletion.io,
     );
     const trashList = createIo();
-    const trashListExitCode = await runCli(["trash-list", "--root", fixture.rootDir], trashList.io);
+    const trashListExitCode = await runCli(["trash-list", "--root", fixture.rootDir, "--json"], trashList.io);
+    const trashId = (JSON.parse(trashList.stdout.join("\n")) as { entries: Array<{ trashId: string }> }).entries[0].trashId;
 
-    expect(deleteExitCode).toBe(0);
+    expect(deleteExitCode).toBe(2);
     expect(deletion.stdout.join("\n")).toContain("已移入回收站");
     await expect(readFile(fixture.paths.activeSessionFile, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     expect(trashListExitCode).toBe(0);
     expect(trashList.stdout.join("\n")).toContain(FIXTURE_IDS.ACTIVE_ID);
 
     const restore = createIo();
-    const restoreExitCode = await runCli(["restore", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--yes"], restore.io);
+    const restoreExitCode = await runCli(["restore", trashId, "--root", fixture.rootDir, "--yes"], restore.io);
 
     expect(restoreExitCode).toBe(0);
-    expect(restore.stdout.join("\n")).toContain("已恢复");
+    expect(restore.stdout.join("\n")).toContain("恢复已提交，声明范围验证通过");
     await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
   });
 
   it("previews and purges trash from the cli without touching live sessions", async () => {
     const deletion = createIo();
-    await runCli(["delete", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--trash", "--yes"], deletion.io);
+    await runCli(
+      ["delete", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--trash", "--yes", "--allow-active", "--json"],
+      deletion.io,
+    );
+    const trashId = (JSON.parse(deletion.stdout.join("\n")) as { trashEntry: { trashId: string } }).trashEntry.trashId;
     const restore = createIo();
-    await runCli(["restore", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--yes"], restore.io);
+    await runCli(["restore", trashId, "--root", fixture.rootDir, "--yes"], restore.io);
 
     const preview = createIo();
     const previewExitCode = await runCli(["purge", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir], preview.io);
@@ -1384,22 +1547,28 @@ describe("cli", () => {
     await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
 
     const purge = createIo();
-    const purgeExitCode = await runCli(["purge", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--yes"], purge.io);
+    const purgeExitCode = await runCli(["purge", trashId, "--root", fixture.rootDir, "--yes"], purge.io);
     expect(purgeExitCode).toBe(0);
-    expect(purge.stdout.join("\n")).toContain("已永久清除回收站记录");
+    expect(purge.stdout.join("\n")).toContain("永久清除操作状态: committed");
     await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
   });
 
   it("requires exact trash ids for duplicate trash writes from the cli", async () => {
     const firstDelete = createIo();
-    await runCli(["delete", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--trash", "--yes", "--json"], firstDelete.io);
+    await runCli(
+      ["delete", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--trash", "--yes", "--allow-active", "--json"],
+      firstDelete.io,
+    );
     const firstTrashId = (JSON.parse(firstDelete.stdout.join("\n")) as { trashEntry: { trashId: string } }).trashEntry.trashId;
 
     const restoreFirst = createIo();
     await runCli(["restore", firstTrashId, "--root", fixture.rootDir, "--yes", "--json"], restoreFirst.io);
 
     const secondDelete = createIo();
-    await runCli(["delete", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--trash", "--yes", "--json"], secondDelete.io);
+    await runCli(
+      ["delete", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--trash", "--yes", "--allow-active", "--json"],
+      secondDelete.io,
+    );
     const secondTrashId = (JSON.parse(secondDelete.stdout.join("\n")) as { trashEntry: { trashId: string } }).trashEntry.trashId;
 
     const trashList = createIo();
@@ -1475,6 +1644,17 @@ describe("cli", () => {
     expect(await readFile(fixture.paths.history, "utf8")).not.toContain(FIXTURE_IDS.STALE_ID);
   });
 
+  it("refuses cleanup-stale when a discovered stale id is not a full UUID", async () => {
+    const original = await readFile(fixture.paths.sessionIndex, "utf8");
+    const withMalformedId = `${original}${JSON.stringify({ id: "../victim", thread_name: "malformed stale" })}\n`;
+    await writeFile(fixture.paths.sessionIndex, withMalformedId, "utf8");
+
+    await expect(
+      runCli(["cleanup-stale", "--root", fixture.rootDir, "--yes"], createIo().io),
+    ).rejects.toThrow(/MALFORMED_ID|full UUID/);
+    await expect(readFile(fixture.paths.sessionIndex, "utf8")).resolves.toBe(withMalformedId);
+  });
+
   it("previews cleanup-index without rewriting jsonl indexes", async () => {
     const beforeSessionIndex = await readFile(fixture.paths.sessionIndex, "utf8");
     const beforeHistory = await readFile(fixture.paths.history, "utf8");
@@ -1494,10 +1674,38 @@ describe("cli", () => {
     await expect(readFile(fixture.paths.history, "utf8")).resolves.toBe(beforeHistory);
   });
 
+  it("requires full UUID and --allow-active for confirmed cleanup-index", async () => {
+    const shortId = FIXTURE_IDS.ACTIVE_ID.slice(0, 12);
+    const preview = createIo();
+    expect(await runCli(["cleanup-index", shortId, "--root", fixture.rootDir, "--json"], preview.io)).toBe(0);
+    expect(JSON.parse(preview.stdout.join("\n"))).toMatchObject({
+      requiresConfirmation: true,
+      requiresFullSessionIds: true,
+      requiresAllowActive: true,
+      activeSessionIds: [FIXTURE_IDS.ACTIVE_ID],
+      preview: { sessionIds: [FIXTURE_IDS.ACTIVE_ID] },
+    });
+
+    await expect(
+      runCli(
+        ["cleanup-index", shortId, "--root", fixture.rootDir, "--yes", "--allow-active"],
+        createIo().io,
+      ),
+    ).rejects.toThrow(/MALFORMED_ID|full UUID/);
+    await expect(
+      runCli(
+        ["cleanup-index", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--yes"],
+        createIo().io,
+      ),
+    ).rejects.toThrow(/ACTIVE_SESSION|allow-active/);
+    expect(await readFile(fixture.paths.sessionIndex, "utf8")).toContain(FIXTURE_IDS.ACTIVE_ID);
+    expect(await readFile(fixture.paths.history, "utf8")).toContain(FIXTURE_IDS.ACTIVE_ID);
+  });
+
   it("executes cleanup-index only with --yes", async () => {
     const capture = createIo();
     const exitCode = await runCli(
-      ["cleanup-index", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--yes", "--json"],
+      ["cleanup-index", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--yes", "--allow-active", "--json"],
       capture.io,
     );
     const output = JSON.parse(capture.stdout.join("\n")) as {
@@ -1537,5 +1745,41 @@ describe("cli", () => {
     expect(capture.stdout.join("\n")).toContain('"logs": [');
     expect(capture.stdout.join("\n")).toContain('"shellSnapshots": [');
     expect(capture.stdout.join("\n")).toContain('"globalStateRefs": [');
+  });
+
+  it("writes backup exports as private files and refuses a symlink target", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-export-test-"));
+    const outputPath = path.join(tempDir, "session-backup.json");
+    const outsidePath = path.join(tempDir, "outside-sentinel.json");
+    const linkPath = path.join(tempDir, "linked-backup.json");
+    try {
+      expect(await runCli([
+        "export",
+        FIXTURE_IDS.ACTIVE_ID,
+        "--root",
+        fixture.rootDir,
+        "--output",
+        outputPath,
+      ], createIo().io)).toBe(0);
+      if (process.platform !== "win32") {
+        expect((await stat(outputPath)).mode & 0o777).toBe(0o600);
+      }
+      if (process.platform !== "win32") {
+        await writeFile(outsidePath, "outside sentinel\n", "utf8");
+        await symlink(outsidePath, linkPath);
+
+        await expect(runCli([
+          "export",
+          FIXTURE_IDS.ACTIVE_ID,
+          "--root",
+          fixture.rootDir,
+          "--output",
+          linkPath,
+        ], createIo().io)).rejects.toThrow(/UNSAFE_PATH|symbolic link/iu);
+        await expect(readFile(outsidePath, "utf8")).resolves.toBe("outside sentinel\n");
+      }
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 });

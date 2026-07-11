@@ -1,12 +1,18 @@
 import crypto from "node:crypto";
-import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
-import path from "node:path";
-
-import Database from "better-sqlite3";
+import { readFile } from "node:fs/promises";
 
 import { buildDeletePreview } from "./delete.js";
 import { safeJsonParse, splitJsonLines } from "./jsonl.js";
 import { resolveSessions } from "./query.js";
+import { writePrivateOutputFile } from "./private-output.js";
+import {
+  assertTrustedRootCurrent,
+  getRegisteredTrustedRoots,
+  isPathSafetyError,
+  readManagedFileWithMetadata,
+  toManagedRelativePath,
+  type TrustedRootContext,
+} from "./path-safety.js";
 import type {
   DeletePlanFile,
   DeletePlanRootFingerprint,
@@ -15,6 +21,7 @@ import type {
   PlanDeleteResult,
   PreviewPlanResult,
   ScanResult,
+  ScanSafetyIssue,
   SessionEntry,
 } from "./types.js";
 
@@ -41,76 +48,117 @@ function parseJsonlText(text: string): boolean {
   return splitJsonLines(text).every((line) => safeJsonParse<unknown>(line) !== null);
 }
 
-function parseSqlite(filePath: string): boolean {
-  try {
-    const db = new Database(filePath, { readonly: true, fileMustExist: true });
-    db.prepare("select name from sqlite_master limit 1").all();
-    db.close();
-    return true;
-  } catch {
+function parseSqlite(bytes: Buffer): boolean {
+  if (bytes.length < 100 || !bytes.subarray(0, 16).equals(Buffer.from("SQLite format 3\0", "binary"))) {
     return false;
   }
+  const encodedPageSize = bytes.readUInt16BE(16);
+  const pageSize = encodedPageSize === 1 ? 65_536 : encodedPageSize;
+  return pageSize >= 512
+    && pageSize <= 65_536
+    && (pageSize & (pageSize - 1)) === 0
+    && bytes.length % pageSize === 0;
 }
 
-async function fingerprintFile(
-  filePath: string | null,
-  parseable: (textOrPath: string) => boolean,
-  mode: "text" | "path" = "text",
-): Promise<DeletePlanSurfaceFingerprint> {
-  if (!filePath) {
-    return { path: null, exists: false, size: null, mtimeMs: null, parseable: false };
-  }
-
-  let fileStat: Awaited<ReturnType<typeof stat>>;
-  try {
-    fileStat = await stat(filePath);
-  } catch {
-    return { path: filePath, exists: false, size: null, mtimeMs: null, parseable: false };
-  }
-
-  let isParseable = false;
-  try {
-    isParseable = mode === "path" ? parseable(filePath) : parseable(await readFile(filePath, "utf8"));
-  } catch {
-    isParseable = false;
-  }
-
+function missingFingerprint(filePath: string | null): DeletePlanSurfaceFingerprint {
   return {
     path: filePath,
-    exists: true,
-    size: fileStat.size,
-    mtimeMs: fileStat.mtimeMs,
-    parseable: isParseable,
+    availability: "missing",
+    unsafeReason: null,
+    exists: false,
+    size: null,
+    mtimeMs: null,
+    sha256: null,
+    parseable: false,
   };
 }
 
-async function realpathOrNull(filePath: string | null): Promise<string | null> {
+function unsafeFingerprint(filePath: string | null, reason: string): DeletePlanSurfaceFingerprint {
+  return {
+    path: filePath,
+    availability: "unsafe",
+    unsafeReason: reason,
+    exists: false,
+    size: null,
+    mtimeMs: null,
+    sha256: null,
+    parseable: false,
+  };
+}
+
+async function fingerprintManagedFile(
+  context: TrustedRootContext | null,
+  filePath: string | null,
+  parseable: (bytes: Buffer) => boolean,
+  scanIssue?: ScanSafetyIssue,
+): Promise<DeletePlanSurfaceFingerprint> {
+  if (scanIssue) {
+    return unsafeFingerprint(filePath ?? scanIssue.path, `${scanIssue.code}: ${scanIssue.reason}`);
+  }
   if (!filePath) {
-    return null;
+    return missingFingerprint(null);
+  }
+  if (!context) {
+    return unsafeFingerprint(filePath, "UNSAFE_PATH: registered trusted root is unavailable");
   }
 
   try {
-    return await realpath(filePath);
-  } catch {
-    return null;
+    const relativePath = toManagedRelativePath(context, filePath);
+    const { bytes, size, mtimeMs } = await readManagedFileWithMetadata(context, relativePath);
+    let isParseable = false;
+    try {
+      isParseable = parseable(bytes);
+    } catch {
+      isParseable = false;
+    }
+    return {
+      path: filePath,
+      availability: "available",
+      unsafeReason: null,
+      exists: true,
+      size,
+      mtimeMs,
+      sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
+      parseable: isParseable,
+    };
+  } catch (error) {
+    if (isPathSafetyError(error)) {
+      if (error.reason.includes("does not exist")) return missingFingerprint(filePath);
+      return unsafeFingerprint(filePath, error.message);
+    }
+    return unsafeFingerprint(
+      filePath,
+      `UNSAFE_PATH: managed fingerprint read failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 }
 
+function issueFor(scan: ScanResult, surface: ScanSafetyIssue["surface"]): ScanSafetyIssue | undefined {
+  return scan.safety?.unsafeSurfaces.find((issue) => issue.surface === surface)
+    ?? scan.root.unsafeSurfaces?.find((issue) => issue.surface === surface);
+}
+
 export async function buildDeletePlanRootFingerprint(scan: ScanResult): Promise<DeletePlanRootFingerprint> {
+  const registered = getRegisteredTrustedRoots(scan.root);
+  const rootContext = registered?.root ?? null;
+  const sqliteContext = registered?.sqliteHome ?? null;
+  if (rootContext) await assertTrustedRootCurrent(rootContext);
+  if (sqliteContext) await assertTrustedRootCurrent(sqliteContext);
+  const parseJsonl = (bytes: Buffer): boolean => parseJsonlText(bytes.toString("utf8"));
   return {
-    rootRealpath: await realpath(scan.root.rootPath),
-    sqliteHomeRealpath: await realpathOrNull(scan.root.sqliteHomePath),
+    rootRealpath: rootContext?.realPath ?? null,
+    sqliteHomeRealpath: sqliteContext?.realPath ?? null,
     sqliteHomeSource: scan.root.sqliteHomeSource,
-    sessionIndex: await fingerprintFile(scan.root.sessionIndexPath, parseJsonlText),
-    history: await fingerprintFile(scan.root.historyPath, parseJsonlText),
-    globalState: await fingerprintFile(scan.root.globalStatePath, (text) => {
-      JSON.parse(text);
+    sessionIndex: await fingerprintManagedFile(rootContext, scan.root.sessionIndexPath, parseJsonl, issueFor(scan, "session_index")),
+    history: await fingerprintManagedFile(rootContext, scan.root.historyPath, parseJsonl, issueFor(scan, "history")),
+    globalState: await fingerprintManagedFile(rootContext, scan.root.globalStatePath, (bytes) => {
+      JSON.parse(bytes.toString("utf8"));
       return true;
-    }),
-    sqlite: await fingerprintFile(scan.root.sqlitePath, parseSqlite, "path"),
-    logsSqlite: await fingerprintFile(scan.root.logsSqlitePath, parseSqlite, "path"),
-    goalsSqlite: await fingerprintFile(scan.root.goalsSqlitePath, parseSqlite, "path"),
-    memoriesSqlite: await fingerprintFile(scan.root.memoriesSqlitePath, parseSqlite, "path"),
+    }, issueFor(scan, "global_state")),
+    sqlite: await fingerprintManagedFile(sqliteContext, scan.root.sqlitePath, parseSqlite, issueFor(scan, "sqlite_state") ?? issueFor(scan, "sqlite_home")),
+    logsSqlite: await fingerprintManagedFile(sqliteContext, scan.root.logsSqlitePath, parseSqlite, issueFor(scan, "sqlite_logs") ?? issueFor(scan, "sqlite_home")),
+    goalsSqlite: await fingerprintManagedFile(sqliteContext, scan.root.goalsSqlitePath, parseSqlite, issueFor(scan, "sqlite_goals") ?? issueFor(scan, "sqlite_home")),
+    memoriesSqlite: await fingerprintManagedFile(sqliteContext, scan.root.memoriesSqlitePath, parseSqlite, issueFor(scan, "sqlite_memories") ?? issueFor(scan, "sqlite_home")),
   };
 }
 
@@ -155,8 +203,7 @@ export async function buildDeletePlanFile(scan: ScanResult, plan: PlanDeleteResu
 
 export async function writeDeletePlanFile(outputPath: string, scan: ScanResult, plan: PlanDeleteResult): Promise<DeletePlanFile> {
   const planFile = await buildDeletePlanFile(scan, plan);
-  await mkdir(path.dirname(outputPath), { recursive: true });
-  await writeFile(outputPath, `${JSON.stringify(planFile, null, 2)}\n`, "utf8");
+  await writePrivateOutputFile(outputPath, `${JSON.stringify(planFile, null, 2)}\n`);
   return planFile;
 }
 
@@ -166,7 +213,16 @@ function compareFingerprint(
   current: DeletePlanSurfaceFingerprint,
 ): string[] {
   const reasons: string[] = [];
-  for (const key of ["path", "exists", "size", "mtimeMs", "parseable"] as const) {
+  for (const key of [
+    "path",
+    "availability",
+    "unsafeReason",
+    "exists",
+    "size",
+    "mtimeMs",
+    "sha256",
+    "parseable",
+  ] as const) {
     if (planned[key] !== current[key]) {
       reasons.push(`${label} ${key} changed`);
     }
