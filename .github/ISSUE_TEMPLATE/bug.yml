@@ -1,0 +1,35 @@
+name: Bug report
+description: Report a reproducible non-security problem
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include real session content, tokens, local home paths, or vulnerability details. Use the private security link for security issues.
+  - type: input
+    id: version
+    attributes:
+      label: Package and Codex versions
+      placeholder: codex-sessions-manager 0.x; Codex CLI 0.x
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options: [Linux, macOS, Windows]
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Reproduction and observed behavior
+      description: Use synthetic or redacted paths and IDs.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true

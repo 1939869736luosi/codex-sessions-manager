@@ -13,6 +13,8 @@
 
 欢迎报告安全问题。支持边界和报告方式见 [SECURITY.md](./SECURITY.md)。
 
+项目资料：[架构](./ARCHITECTURE.md) · [路线图](./ROADMAP.md) · [贡献指南](./CONTRIBUTING.md) · [发布检查表](./docs/RELEASE.md)
+
 ## 为什么选这个？
 
 普通归档聊天优先用 Codex Desktop 官方删除入口。这个工具面向更难的本机场景：官方删完后验残留、清理孤儿记录、按精确 session ID 处理，以及让 AI Agent 安全管理本地历史。

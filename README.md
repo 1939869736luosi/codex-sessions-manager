@@ -13,6 +13,8 @@ It is built for safety-critical local history work: prompt/history privacy, exac
 
 Security reports are welcome. See [SECURITY.md](./SECURITY.md) for the supported security model and reporting path.
 
+Project references: [Architecture](./ARCHITECTURE.md) · [Roadmap](./ROADMAP.md) · [Contributing](./CONTRIBUTING.md) · [Release checklist](./docs/RELEASE.md)
+
 ## Why this one?
 
 Codex Desktop's built-in delete is the right first stop for ordinary archived-chat cleanup. This tool is for the harder local cases: proving what remains after deletion, cleaning orphaned records, handling exact session IDs, and giving agents a safe way to manage local history.

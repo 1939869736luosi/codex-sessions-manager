@@ -1,0 +1,25 @@
+name: Feature request
+description: Propose a scoped, non-security improvement
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Explain the workflow and why the CLI, bounded MCP, or existing official Codex UI is insufficient.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior and safety boundary
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: This issue contains no real session transcript, token, local home path, or private security detail.
+          required: true
