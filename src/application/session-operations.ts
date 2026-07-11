@@ -65,6 +65,12 @@ export interface GetSessionOperationResult {
   scan: ScanResult;
 }
 
+export function interpretMemoryMode(memoryMode: string | null | undefined): boolean | "unknown" {
+  if (memoryMode === "enabled") return true;
+  if (memoryMode === "disabled") return false;
+  return "unknown";
+}
+
 export async function getSessionOperation(
   input: GetSessionOperationInput,
 ): Promise<GetSessionOperationResult> {
@@ -72,16 +78,17 @@ export async function getSessionOperation(
   const session = resolveSessions(scan, [input.sessionId])[0];
   const timelineResult = await readSessionTimelineResult(session, undefined, input.timelineLimits);
   const { items: timeline, ...timelineMetadata } = timelineResult;
+  const memoryEnabled = interpretMemoryMode(session.thread?.memoryMode);
   let memoryLink: SessionMemoryLink;
   try {
     memoryLink = inspectSessionMemoryLink(
       scan.root.memoriesSqlitePath,
       session.id,
-      session.thread?.memoryMode === "enabled",
+      memoryEnabled,
     );
   } catch (error) {
     memoryLink = {
-      enabled: session.thread?.memoryMode === "enabled",
+      enabled: memoryEnabled,
       stage1Present: false,
       rolloutSummaryPresent: false,
       phase2Influence: "unknown",

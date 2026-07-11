@@ -208,7 +208,7 @@ v0.6.0 把 MCP 默认 profile 从 20 个工具缩减为 15 个。恢复支持把
 
 所有 MCP structured response 最后都经过统一的 256 KiB 和“每个集合最多 200 项”限制。触及限制时会返回 `responseCompleteness=truncated_limit` 与 `responseOmittedReason`；已经提交的写操作状态仍保留在原来的 `result` 内。显式 session 操作最多接收 50 个 ID；`list_trash` 默认返回 50 项，最大 200 项。完整本地结果请使用 CLI JSON 或文件输出。
 
-仅凭 `memories_N.sqlite` 存在不能证明 memory 已启用，因此 `doctor` 在没有可靠官方信号时返回 `enabled=unknown`。当前 Stage 1 的选中标记也不能证明最终 Phase 2 provenance；无法确认时只返回 `unknown`，不猜成 `known` 或 `none`。普通 session 删除仍会保留全部 memory surface。
+仅凭 `memories_N.sqlite` 存在不能证明 memory 已启用，因此 `doctor` 在没有可靠官方信号时返回 `enabled=unknown`。session 的 `memory_mode` 只有精确的 `enabled`/`disabled` 才映射为布尔值；缺失值和未来新值保留为 `unknown`。当前 Stage 1 的选中标记也不能证明最终 Phase 2 provenance；无法确认时只返回 `unknown`，不猜成 `known` 或 `none`。普通 session 删除仍会保留全部 memory surface。
 
 ## CLI 命令
 

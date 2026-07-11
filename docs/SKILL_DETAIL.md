@@ -29,7 +29,7 @@ codex-sessions show <session-id> [--root PATH] [--json]
 
 Human output shows at most 20 timeline items and reports returned/known counts. Use `--json` for every locally parseable semantic item; JSON has no total item-count limit and marks unknown items, parse errors, and truncated tool output. `export` is the byte-exact raw-content path. A compressed-only `.jsonl.zst` session reports `compressed_unread` instead of presenting an index/history summary as transcript text.
 
-Session JSON includes a read-only `memoryLink`. It reports only enabled/stage1/summary/Phase 2 linkage state and always says memory is retained after ordinary session deletion; it never returns raw memory or rollout-summary text. Stage 1 selection does not prove final Phase 2 provenance, so uncertain influence is `unknown`. Doctor also keeps memory enablement separate from database existence and reports `enabled=unknown` when no reliable official signal exists.
+Session JSON includes a read-only `memoryLink`. It reports only enabled/stage1/summary/Phase 2 linkage state and always says memory is retained after ordinary session deletion; it never returns raw memory or rollout-summary text. Only exact `memory_mode=enabled|disabled` values map to booleans; missing or future values stay `unknown`. Stage 1 selection does not prove final Phase 2 provenance, so uncertain influence is `unknown`. Doctor also keeps memory enablement separate from database existence and reports `enabled=unknown` when no reliable official signal exists.
 
 ### events
 

@@ -128,7 +128,7 @@ export type MemoryPhase2Influence = "known" | "none" | "unknown";
 export type MemorySchemaStatus = "absent" | "recognized" | "unrecognized";
 
 export interface SessionMemoryLink {
-  enabled: boolean;
+  enabled: boolean | "unknown";
   stage1Present: boolean;
   rolloutSummaryPresent: boolean;
   phase2Influence: MemoryPhase2Influence;

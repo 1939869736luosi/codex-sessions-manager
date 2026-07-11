@@ -3,7 +3,7 @@ import path from "node:path";
 
 import Database from "better-sqlite3";
 
-import { getSessionOperation, inspectRootOperation } from "../src/application/session-operations.js";
+import { getSessionOperation, inspectRootOperation, interpretMemoryMode } from "../src/application/session-operations.js";
 import { runCli } from "../src/cli/run.js";
 import { createFixture, FIXTURE_IDS, type Fixture } from "./helpers/fixture.js";
 
@@ -146,6 +146,23 @@ describe("read-only memory association", () => {
       phase2Influence: "unknown",
       warnings: [expect.stringContaining("historical Phase 2 provenance")],
     });
+  });
+
+  it("reports unknown session memory enablement for unrecognized memory_mode values", async () => {
+    expect(interpretMemoryMode("enabled")).toBe(true);
+    expect(interpretMemoryMode("disabled")).toBe(false);
+    expect(interpretMemoryMode(null)).toBe("unknown");
+    expect(interpretMemoryMode(undefined)).toBe("unknown");
+    expect(interpretMemoryMode("future-mode")).toBe("unknown");
+    const db = new Database(fixture.paths.sqlite);
+    db.prepare("update threads set memory_mode = 'mystery' where id = ?").run(FIXTURE_IDS.ACTIVE_ID);
+    db.prepare("update threads set memory_mode = 'disabled' where id = ?").run(FIXTURE_IDS.ARCHIVED_ID);
+    db.close();
+
+    const unknown = await getSessionOperation({ root: fixture.rootDir, sessionId: FIXTURE_IDS.ACTIVE_ID });
+    const disabled = await getSessionOperation({ root: fixture.rootDir, sessionId: FIXTURE_IDS.ARCHIVED_ID });
+    expect(unknown.data.memoryLink.enabled).toBe("unknown");
+    expect(disabled.data.memoryLink.enabled).toBe(false);
   });
 
   it("adds bounded memory statistics to doctor without raw rows", async () => {

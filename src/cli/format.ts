@@ -340,7 +340,7 @@ export function formatShow(
     `时间线返回: ${previewCount}/${knownCount}`,
     `工具输出截断: ${timelineMetadata?.toolOutputTruncatedCount ?? timeline.filter((item) => item.truncated).length}`,
     `精确原始导出: ${timelineMetadata?.exactExportAvailable ?? session.fileTargets.length > 0 ? "可用" : "不可用"}`,
-    `memory: ${timelineMetadata?.memoryLink?.enabled ? "enabled" : "disabled"}; stage1=${timelineMetadata?.memoryLink?.stage1Present ? "yes" : "no"}; phase2=${timelineMetadata?.memoryLink?.phase2Influence ?? "unknown"}; session delete retains memory=yes`,
+    `memory: ${timelineMetadata?.memoryLink?.enabled === "unknown" ? "unknown" : timelineMetadata?.memoryLink?.enabled ? "enabled" : "disabled"}; stage1=${timelineMetadata?.memoryLink?.stage1Present ? "yes" : "no"}; phase2=${timelineMetadata?.memoryLink?.phase2Influence ?? "unknown"}; session delete retains memory=yes`,
     ...(timelineMetadata?.omittedReason ? [`省略原因: ${timelineMetadata.omittedReason}`] : []),
     "",
     "时间线预览:",

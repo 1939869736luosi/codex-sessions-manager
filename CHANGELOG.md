@@ -6,7 +6,7 @@
 - Added adapter-boundary and parity tests so CLI/MCP cannot bypass the shared mutation policy, shell out to one another, or silently reintroduce separate confirmation and ID rules.
 - Removed the unbounded MCP `export_session_backup` tool because it could return complete rollout and exact-key values in one response. Exact backups remain available through the CLI `export` command; MCP keeps bounded session and canonical-event reads.
 - Added a final 256 KiB / 200-items-per-collection boundary to every MCP structured response, capped explicit session operations at 50 IDs, and made trash listing default to 50 entries. Truncated responses keep existing wrappers and report the omitted route explicitly.
-- Made memory provenance reporting conservative: database presence no longer implies enablement, and Stage 1 selection metadata no longer claims known or absent final Phase 2 influence.
+- Made memory provenance reporting conservative: database presence no longer implies enablement, unknown `memory_mode` values remain unknown, and Stage 1 selection metadata no longer claims known or absent final Phase 2 influence.
 - Added read-only session `memoryLink` metadata and bounded doctor memory statistics without returning raw memory text. Ordinary session delete previews and plans now state that memory is retained.
 - Changed doctor JSON/MCP output to summary mode by default, with at most five reference samples and bounded warnings; use `--details` or `includeDetails=true` for complete diagnostic arrays.
 - Added `events <exact-session-id>` canonical JSONL streaming for complete local reads and private `0600` file output. MCP exposes only authenticated, item-and-byte-bounded event pages and reports oversized event omission.

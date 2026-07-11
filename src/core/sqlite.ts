@@ -439,7 +439,7 @@ function memorySchemaStatus(db: Database.Database): MemorySchemaStatus {
     : "unrecognized";
 }
 
-function emptyMemoryLink(enabled: boolean, schemaStatus: MemorySchemaStatus, warnings: string[]): SessionMemoryLink {
+function emptyMemoryLink(enabled: boolean | "unknown", schemaStatus: MemorySchemaStatus, warnings: string[]): SessionMemoryLink {
   return {
     enabled,
     stage1Present: false,
@@ -457,7 +457,7 @@ function emptyMemoryLink(enabled: boolean, schemaStatus: MemorySchemaStatus, war
 export function inspectSessionMemoryLink(
   memoriesPath: string | null,
   sessionId: string,
-  enabled: boolean,
+  enabled: boolean | "unknown",
 ): SessionMemoryLink {
   if (!memoriesPath) {
     return emptyMemoryLink(enabled, "absent", []);
