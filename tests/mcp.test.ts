@@ -13,7 +13,7 @@ import { buildDeletePlanFile, writeDeletePlanFile } from "../src/core/plan-file.
 import { buildPlanDelete } from "../src/core/plan-delete.js";
 import { resolveSessions } from "../src/core/query.js";
 import { scanCodexRoot } from "../src/core/scan.js";
-import { acquireMutationLock } from "../src/core/mutation-safety.js";
+import { acquireMutationLock, setMutationCheckpointHookForTests } from "../src/core/mutation-safety.js";
 import { createTrustedRootContext } from "../src/core/path-safety.js";
 import { createRecoveryFileTransition } from "../src/core/recovery.js";
 import { createFixture, FIXTURE_IDS, writeExactGlobalStateFixture, type Fixture } from "./helpers/fixture.js";
@@ -34,7 +34,46 @@ describe("mcp server", () => {
   });
 
   afterEach(async () => {
+    setMutationCheckpointHookForTests(null);
     await fixture.cleanup();
+  });
+
+  it("reports a real interrupted trash write as RECOVERY_REQUIRED and keeps recovery visible", async () => {
+    setMutationCheckpointHookForTests((event) => {
+      if (event.kind === "trash" && event.name === "trash-entry" && event.status === "committed") {
+        throw new Error("injected MCP trash interruption after durable trash entry");
+      }
+    });
+    const { client, server } = await createConnectedClient("admin");
+    try {
+      const result = await client.callTool({
+        name: "delete_sessions",
+        arguments: {
+          root: fixture.rootDir,
+          sessionIds: [FIXTURE_IDS.ARCHIVED_ID],
+          trash: true,
+          confirm: true,
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content[0]).toMatchObject({
+        type: "text",
+        text: expect.stringContaining("RECOVERY_REQUIRED"),
+      });
+
+      const status = await client.callTool({
+        name: "get_recovery_status",
+        arguments: { root: fixture.rootDir },
+      });
+      expect(status.structuredContent?.status).toMatchObject({
+        pending: true,
+        kind: "trash",
+        stage: "recovery_required",
+      });
+    } finally {
+      await client.close();
+      await server.close();
+    }
   });
 
   it("exposes recovery status read-only and recovery execution only in admin", async () => {

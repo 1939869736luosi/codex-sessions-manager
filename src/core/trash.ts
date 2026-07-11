@@ -1294,7 +1294,8 @@ export async function moveSessionsToTrash(
             error: errorMessage,
             cleanupError: formatError(cleanupError),
           }).catch(() => undefined);
-          throw new Error(
+          throw new MutationSafetyError(
+            "RECOVERY_REQUIRED",
             `移入回收站失败：live 删除已回滚，但回收站记录清理失败：${trashId}。清理错误：${formatError(cleanupError)}。原始错误：${errorMessage}`,
           );
         }
@@ -1303,7 +1304,8 @@ export async function moveSessionsToTrash(
       }
 
       await lock?.release("recovery_required", { trashId, error: errorMessage }).catch(() => undefined);
-      throw new Error(
+      throw new MutationSafetyError(
+        "RECOVERY_REQUIRED",
         `移入回收站失败：live 删除失败，但回收站记录已保留：${trashId}。原始错误：${errorMessage}`,
       );
     }
@@ -1321,7 +1323,8 @@ export async function moveSessionsToTrash(
         error: formatError(error),
         cleanupError: formatError(cleanupError),
       }).catch(() => undefined);
-      throw new Error(
+      throw new MutationSafetyError(
+        "RECOVERY_REQUIRED",
         `移入回收站失败，原始操作失败且回收站临时记录清理失败：${formatError(cleanupError)}。原始错误：${formatError(error)}`,
       );
     }

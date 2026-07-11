@@ -5,7 +5,11 @@ import path from "node:path";
 import Database from "better-sqlite3";
 
 import { cliUnhandledErrorExitCode, getHelpText, mutationExitCode, runCli } from "../src/cli/run.js";
-import { acquireMutationLock, MutationSafetyError } from "../src/core/mutation-safety.js";
+import {
+  acquireMutationLock,
+  MutationSafetyError,
+  setMutationCheckpointHookForTests,
+} from "../src/core/mutation-safety.js";
 import { createTrustedRootContext } from "../src/core/path-safety.js";
 import { createRecoveryFileTransition } from "../src/core/recovery.js";
 import { createFixture, FIXTURE_IDS, writeExactGlobalStateFixture, type Fixture } from "./helpers/fixture.js";
@@ -31,6 +35,7 @@ describe("cli", () => {
   });
 
   afterEach(async () => {
+    setMutationCheckpointHookForTests(null);
     await fixture.cleanup();
   });
 
@@ -41,6 +46,39 @@ describe("cli", () => {
     for (const code of ["UNSAFE_PATH", "STALE_PLAN", "MALFORMED_ID", "ACTIVE_SESSION"] as const) {
       expect(cliUnhandledErrorExitCode(new MutationSafetyError(code, code))).toBe(1);
     }
+  });
+
+  it("maps a real interrupted trash write to exit 3 and preserves recovery status", async () => {
+    setMutationCheckpointHookForTests((event) => {
+      if (event.kind === "trash" && event.name === "trash-entry" && event.status === "committed") {
+        throw new Error("injected trash interruption after durable trash entry");
+      }
+    });
+
+    let thrown: unknown;
+    try {
+      await runCli(
+        ["delete", FIXTURE_IDS.ARCHIVED_ID, "--root", fixture.rootDir, "--trash", "--yes"],
+        createIo().io,
+      );
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toMatchObject({
+      code: "RECOVERY_REQUIRED",
+      operationStatus: "recovery_required",
+      verificationStatus: "not_run",
+    });
+    expect(cliUnhandledErrorExitCode(thrown)).toBe(3);
+
+    const statusIo = createIo();
+    expect(await runCli(["recovery-status", "--root", fixture.rootDir, "--json"], statusIo.io)).toBe(0);
+    expect(JSON.parse(statusIo.stdout.join("\n"))).toMatchObject({
+      pending: true,
+      kind: "trash",
+      stage: "recovery_required",
+    });
   });
 
   it("uses exit 2 for committed operations whose verification is partial or failed", () => {
