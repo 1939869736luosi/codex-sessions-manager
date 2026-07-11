@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Added an independent read-only npm registry verification workflow and made promotion consume its run-bound evidence before moving `latest`.
+- Added fresh-cache, `--prefer-online`, bounded registry tarball retries to candidate comparison and promotion, distinguishing registry propagation lag from an actual artifact mismatch.
+
 ## 0.6.3
 
 ### Codex compatibility

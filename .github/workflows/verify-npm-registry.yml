@@ -1,0 +1,298 @@
+name: Verify existing npm registry candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact npm version already published under security-verify
+        required: true
+        type: string
+      expected_sha256:
+        description: Reviewed source and registry tarball SHA-256
+        required: true
+        type: string
+      tag:
+        description: Immutable release tag, for example v0.6.3
+        required: true
+        type: string
+      expected_commit:
+        description: Commit peeled from the immutable release tag
+        required: true
+        type: string
+      candidate_run_id:
+        description: Original candidate publish workflow run ID
+        required: true
+        type: string
+      expected_latest:
+        description: latest dist-tag value that must remain unchanged during verification
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: npm-package-codex-sessions-manager
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Rebuild tag and verify immutable registry bytes
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out the immutable release tag
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Use the candidate publishing npm CLI version
+        run: npm install --global npm@11.16.0
+
+      - name: Verify tag, source, and candidate run identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          TAG: ${{ inputs.tag }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+        run: |
+          [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "${EXPECTED_COMMIT}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${CANDIDATE_RUN_ID}" =~ ^[0-9]+$ ]]
+          test "${TAG}" = "v${VERSION}"
+          test "$(git rev-parse HEAD)" = "${EXPECTED_COMMIT}"
+          test "$(node -p "require('./package.json').version")" = "${VERSION}"
+          grep -F "export const TOOL_VERSION = \"${VERSION}\";" src/version.ts
+          grep -F "## ${VERSION}" CHANGELOG.md
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${CANDIDATE_RUN_ID}" > "${RUNNER_TEMP}/candidate-run.json"
+          node -e '
+            const run = require(process.argv[1]);
+            if (run.status !== "completed") process.exit(1);
+            if (!["success", "failure"].includes(run.conclusion)) process.exit(1);
+            if (run.event !== "push") process.exit(1);
+            if (run.path !== ".github/workflows/release.yml") process.exit(1);
+            if (run.head_sha !== process.argv[2] || run.head_branch !== process.argv[3]) process.exit(1);
+          ' "${RUNNER_TEMP}/candidate-run.json" "${EXPECTED_COMMIT}" "${TAG}"
+
+      - name: Rebuild the reviewed source tarball from the immutable tag
+        shell: bash
+        env:
+          EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
+        run: |
+          [[ "${EXPECTED_SHA256}" =~ ^[0-9a-f]{64}$ ]]
+          npm ci
+          npm run compat:release-check
+          npm run typecheck
+          npm run build
+          npm run pack:check
+          mkdir -p "${RUNNER_TEMP}/source-pack"
+          SOURCE_NAME="$(npm pack --ignore-scripts --pack-destination "${RUNNER_TEMP}/source-pack")"
+          SOURCE_PATH="${RUNNER_TEMP}/source-pack/${SOURCE_NAME}"
+          SOURCE_SHA256="$(sha256sum "${SOURCE_PATH}" | cut -d ' ' -f 1)"
+          test "${SOURCE_SHA256}" = "${EXPECTED_SHA256}"
+          printf '%s  %s\n' "${SOURCE_SHA256}" "${SOURCE_NAME}" > "${RUNNER_TEMP}/source.sha256"
+          npm pack --dry-run --json --ignore-scripts > "${RUNNER_TEMP}/source-manifest.json"
+          echo "SOURCE_NAME=${SOURCE_NAME}" >> "${GITHUB_ENV}"
+          echo "SOURCE_PATH=${SOURCE_PATH}" >> "${GITHUB_ENV}"
+          echo "SOURCE_SHA256=${SOURCE_SHA256}" >> "${GITHUB_ENV}"
+
+      - name: Snapshot dist-tags before registry verification
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          EXPECTED_LATEST: ${{ inputs.expected_latest }}
+        run: |
+          npm view codex-sessions-manager dist-tags \
+            --json \
+            --prefer-online \
+            --cache "${RUNNER_TEMP}/npm-dist-tags-before" > "${RUNNER_TEMP}/dist-tags-before.json"
+          node -e '
+            const tags = require(process.argv[1]);
+            if (tags["security-verify"] !== process.argv[2]) process.exit(1);
+            if (tags.latest !== process.argv[3]) process.exit(1);
+          ' "${RUNNER_TEMP}/dist-tags-before.json" "${VERSION}" "${EXPECTED_LATEST}"
+
+      - name: Download and validate the exact registry tarball
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/registry-pack"
+          PACK_RESULT="${RUNNER_TEMP}/registry-pack-result.json"
+          PACKED=false
+          for ATTEMPT in {1..12}; do
+            CACHE_DIR="${RUNNER_TEMP}/npm-registry-verify-pack-cache-${ATTEMPT}"
+            if npm pack "codex-sessions-manager@${VERSION}" \
+              --json \
+              --ignore-scripts \
+              --prefer-online \
+              --cache "${CACHE_DIR}" \
+              --pack-destination "${RUNNER_TEMP}/registry-pack" > "${PACK_RESULT}"; then
+              PACKED=true
+              break
+            fi
+            if [ "${ATTEMPT}" -eq 12 ]; then
+              echo "registry tarball was not available within the bounded retry window" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+          test "${PACKED}" = "true"
+          REGISTRY_NAME="$(node -p "require(process.argv[1])[0].filename" "${PACK_RESULT}")"
+          REGISTRY_PATH="${RUNNER_TEMP}/registry-pack/${REGISTRY_NAME}"
+          REGISTRY_SHA256="$(sha256sum "${REGISTRY_PATH}" | cut -d ' ' -f 1)"
+          test "${REGISTRY_SHA256}" = "${EXPECTED_SHA256}"
+          node -e '
+            const path = require("node:path");
+            const result = require(process.argv[1])[0];
+            if (result.name !== "codex-sessions-manager" || result.version !== process.argv[2]) process.exit(1);
+            const files = result.files ?? [];
+            if (files.length !== 110) process.exit(1);
+            for (const file of files) {
+              const value = String(file.path).replaceAll("\\", "/");
+              if (path.posix.isAbsolute(value) || value.split("/").includes("..")) process.exit(1);
+            }
+          ' "${PACK_RESULT}" "${VERSION}"
+          tar -tzf "${REGISTRY_PATH}" > "${RUNNER_TEMP}/registry-tar-entries.txt"
+          node -e '
+            const fs = require("node:fs");
+            const entries = fs.readFileSync(process.argv[1], "utf8").split(/\r?\n/u).filter(Boolean);
+            if (entries.length !== 110) process.exit(1);
+            for (const entry of entries) {
+              const value = entry.replaceAll("\\", "/");
+              if (!value.startsWith("package/") || value.split("/").includes("..")) process.exit(1);
+            }
+          ' "${RUNNER_TEMP}/registry-tar-entries.txt"
+          mkdir -p "${RUNNER_TEMP}/registry-extract"
+          tar -xzf "${REGISTRY_PATH}" -C "${RUNNER_TEMP}/registry-extract"
+          node -e '
+            const pkg = require(process.argv[1]);
+            if (pkg.name !== "codex-sessions-manager" || pkg.version !== process.argv[2]) process.exit(1);
+            if (pkg.bin?.["codex-sessions"] !== "dist/cli/index.js") process.exit(1);
+            if (pkg.bin?.["codex-sessions-mcp"] !== "dist/mcp/server.js") process.exit(1);
+            if (pkg.repository?.url !== "git+https://github.com/1939869736luosi/codex-sessions-manager.git") process.exit(1);
+            if (pkg.engines?.node !== ">=20") process.exit(1);
+          ' "${RUNNER_TEMP}/registry-extract/package/package.json" "${VERSION}"
+          grep -F "export const TOOL_VERSION = \"${VERSION}\";" "${RUNNER_TEMP}/registry-extract/package/dist/version.js"
+          printf '%s  %s\n' "${REGISTRY_SHA256}" "${REGISTRY_NAME}" > "${RUNNER_TEMP}/registry.sha256"
+          echo "REGISTRY_NAME=${REGISTRY_NAME}" >> "${GITHUB_ENV}"
+          echo "REGISTRY_PATH=${REGISTRY_PATH}" >> "${GITHUB_ENV}"
+          echo "REGISTRY_SHA256=${REGISTRY_SHA256}" >> "${GITHUB_ENV}"
+
+      - name: Verify provenance and registry metadata
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          npm view "codex-sessions-manager@${VERSION}" dist \
+            --json \
+            --prefer-online \
+            --cache "${RUNNER_TEMP}/npm-registry-metadata" > "${RUNNER_TEMP}/registry-metadata.json"
+          npm view "codex-sessions-manager@${VERSION}" dist.attestations \
+            --json \
+            --prefer-online \
+            --cache "${RUNNER_TEMP}/npm-registry-attestations" > "${RUNNER_TEMP}/attestations.json"
+          node -e '
+            const dist = require(process.argv[1]);
+            const attestations = require(process.argv[2]);
+            if (dist.fileCount !== 110) process.exit(1);
+            if (typeof dist.integrity !== "string" || typeof dist.shasum !== "string") process.exit(1);
+            if (typeof attestations.url !== "string" || !attestations.url.includes(process.argv[3])) process.exit(1);
+            if (attestations.provenance?.predicateType !== "https://slsa.dev/provenance/v1") process.exit(1);
+          ' "${RUNNER_TEMP}/registry-metadata.json" "${RUNNER_TEMP}/attestations.json" "codex-sessions-manager@${VERSION}"
+
+      - name: Install the verified bytes and smoke CLI, MCP, and doctor
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/smoke" "${RUNNER_TEMP}/empty-codex-root"
+          npm install \
+            --prefix "${RUNNER_TEMP}/smoke" \
+            "${REGISTRY_PATH}" \
+            --cache "${RUNNER_TEMP}/npm-registry-verify-install-cache"
+          CLI_PATH="${RUNNER_TEMP}/smoke/node_modules/codex-sessions-manager/dist/cli/index.js"
+          MCP_PATH="${RUNNER_TEMP}/smoke/node_modules/codex-sessions-manager/dist/mcp/server.js"
+          test "$(node "${CLI_PATH}" --version)" = "${VERSION}"
+          test "$(node "${MCP_PATH}" --version)" = "${VERSION}"
+          node "${CLI_PATH}" doctor --root "${RUNNER_TEMP}/empty-codex-root" --json > "${RUNNER_TEMP}/registry-doctor.json"
+          node -e '
+            const report = require(process.argv[1]);
+            if (report.rootPath !== process.argv[2]) process.exit(1);
+          ' "${RUNNER_TEMP}/registry-doctor.json" "${RUNNER_TEMP}/empty-codex-root"
+
+      - name: Confirm dist-tags did not change and write public evidence
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
+          TAG: ${{ inputs.tag }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          EXPECTED_LATEST: ${{ inputs.expected_latest }}
+        run: |
+          npm view codex-sessions-manager dist-tags \
+            --json \
+            --prefer-online \
+            --cache "${RUNNER_TEMP}/npm-dist-tags-after" > "${RUNNER_TEMP}/dist-tags-after.json"
+          node -e '
+            const before = require(process.argv[1]);
+            const after = require(process.argv[2]);
+            if (before["security-verify"] !== process.argv[3] || after["security-verify"] !== process.argv[3]) process.exit(1);
+            if (before.latest !== process.argv[4] || after.latest !== process.argv[4]) process.exit(1);
+          ' "${RUNNER_TEMP}/dist-tags-before.json" "${RUNNER_TEMP}/dist-tags-after.json" "${VERSION}" "${EXPECTED_LATEST}"
+          node -e '
+            const fs = require("node:fs");
+            const report = {
+              status: "passed",
+              version: process.env.VERSION,
+              tag: process.env.TAG,
+              expectedCommit: process.env.EXPECTED_COMMIT,
+              candidateRunId: process.env.CANDIDATE_RUN_ID,
+              verificationRunId: process.env.GITHUB_RUN_ID,
+              expectedSha256: process.env.EXPECTED_SHA256,
+              sourceSha256: process.env.SOURCE_SHA256,
+              registrySha256: process.env.REGISTRY_SHA256,
+              securityVerify: process.env.VERSION,
+              latestBefore: process.env.EXPECTED_LATEST,
+              latestAfter: process.env.EXPECTED_LATEST,
+              fileCount: 110,
+              provenance: true,
+              smoke: { cli: true, mcp: true, doctor: true }
+            };
+            fs.writeFileSync(process.argv[1], `${JSON.stringify(report, null, 2)}\n`);
+          ' "${RUNNER_TEMP}/verification.json"
+
+      - name: Upload public verification evidence only
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: npm-registry-verification-${{ inputs.version }}-${{ github.run_id }}
+          path: |
+            ${{ env.SOURCE_PATH }}
+            ${{ env.REGISTRY_PATH }}
+            ${{ runner.temp }}/source.sha256
+            ${{ runner.temp }}/registry.sha256
+            ${{ runner.temp }}/source-manifest.json
+            ${{ runner.temp }}/registry-pack-result.json
+            ${{ runner.temp }}/registry-tar-entries.txt
+            ${{ runner.temp }}/registry-metadata.json
+            ${{ runner.temp }}/attestations.json
+            ${{ runner.temp }}/dist-tags-before.json
+            ${{ runner.temp }}/dist-tags-after.json
+            ${{ runner.temp }}/registry-doctor.json
+            ${{ runner.temp }}/candidate-run.json
+            ${{ runner.temp }}/verification.json
+          if-no-files-found: error
+          retention-days: 30

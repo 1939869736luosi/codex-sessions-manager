@@ -26,10 +26,13 @@ The candidate and promotion workflows share one package-level concurrency queue.
 3. Create the immutable `v<version>` tag. Do not move or replace an existing tag.
 4. The tag workflow publishes the exact reviewed tarball with the non-default `security-verify` npm tag, installs the exact registry version, smokes CLI and MCP, downloads the registry tarball, and requires its SHA-256 to match.
 5. Review the candidate workflow artifact. It may contain only the public tarball, package manifest, and SHA-256 file.
-6. Run `Promote verified npm release` with the exact version and candidate SHA-256. The workflow must confirm that `security-verify` already points to that exact version before it moves `latest`; approve the protected environment only after the registry evidence matches.
-7. Confirm both `latest` and `security-verify` point to the exact version.
-8. Publish the prepared GitHub Release and, for a security release, the Security Advisory.
-9. Confirm Git tag, GitHub Release, npm package, npm dist-tags, advisory patched version, and reviewed commit all identify the same release.
+6. Run `Verify existing npm registry candidate` with the exact version, immutable tag, tag commit, candidate run ID, reviewed SHA-256, and current `latest` value. It is a read-only workflow that rebuilds the tag, downloads the registry tarball with fresh caches, verifies identity/provenance, installs those exact bytes, and uploads public evidence.
+7. Run `Promote verified npm release` with the exact version, candidate SHA-256, tag, commit, candidate run ID, and successful verification run ID. Promotion must consume and validate the verification artifact, repeat its own exact-byte check, confirm that `security-verify` points to the same version, and only then move `latest`.
+8. Confirm both `latest` and `security-verify` point to the exact version.
+9. Publish the prepared GitHub Release and, for a security release, the Security Advisory.
+10. Confirm Git tag, GitHub Release, npm package, npm dist-tags, advisory patched version, and reviewed commit all identify the same release.
+
+If publishing and exact-version registry smoke succeeded but the hash-comparison step stopped before downloading bytes because of `ETARGET` or equivalent registry propagation lag, keep `latest` unchanged and do not rerun the publish job. A separate read-only registry verification workflow may recover the release only when it rebuilds the immutable tag, proves source and registry hashes are identical, verifies the full manifest and package identity, confirms provenance, installs and smokes the exact registry bytes, and uploads public evidence. Any actual hash, identity, manifest, provenance, or smoke mismatch still requires a new patch version.
 
 ## Stop conditions
 

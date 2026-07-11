@@ -154,6 +154,7 @@ describe("release configuration", () => {
   it("publishes an immutable candidate before a separately approved latest promotion", async () => {
     const releaseWorkflow = await readRepositoryFile(".github/workflows/release.yml");
     const promoteWorkflow = await readRepositoryFile(".github/workflows/promote-npm.yml");
+    const verifyRegistryWorkflow = await readRepositoryFile(".github/workflows/verify-npm-registry.yml");
 
     expect(releaseWorkflow).toContain("tags:");
     expect(releaseWorkflow).toContain('uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6');
@@ -165,6 +166,13 @@ describe("release configuration", () => {
     expect(releaseWorkflow).toContain("for ATTEMPT in {1..12}");
     expect(releaseWorkflow).toContain("--prefer-online --cache");
     expect(releaseWorkflow).toContain("Compare the registry tarball with the reviewed tarball");
+    const compareRegistryIndex = releaseWorkflow.indexOf("Compare the registry tarball with the reviewed tarball");
+    const preserveEvidenceIndex = releaseWorkflow.indexOf("Preserve only the public package evidence");
+    const compareRegistryBlock = releaseWorkflow.slice(compareRegistryIndex, preserveEvidenceIndex);
+    expect(compareRegistryBlock).toContain("for ATTEMPT in {1..12}");
+    expect(compareRegistryBlock).toContain("--prefer-online");
+    expect(compareRegistryBlock).toContain("--cache");
+    expect(compareRegistryBlock).toContain("--ignore-scripts");
     expect(releaseWorkflow).toContain("node scripts/check-compat.mjs --release");
     expect(releaseWorkflow).toContain("npm run compat:release-check");
     expect(releaseWorkflow).not.toContain("dist-tag add");
@@ -196,14 +204,24 @@ describe("release configuration", () => {
     expect(promoteWorkflow).toContain("NPM_DIST_TAG_TOKEN");
     expect(promoteWorkflow).toContain('dist-tag add "codex-sessions-manager@${{ inputs.version }}" latest');
     expect(promoteWorkflow).toContain("expected_sha256");
+    expect(promoteWorkflow).toContain("verification_run_id");
+    expect(promoteWorkflow).toContain("candidate_run_id");
+    expect(promoteWorkflow).toContain("expected_commit");
+    expect(promoteWorkflow).toContain("actions: read");
+    expect(promoteWorkflow).toContain("Require independent registry verification evidence");
+    expect(promoteWorkflow).toContain("gh run download");
+    expect(promoteWorkflow).toContain("npm-registry-verification-${VERSION}-${VERIFICATION_RUN_ID}");
     expect(promoteWorkflow).toContain("Wait for dist-tag replication");
     expect(promoteWorkflow).toContain("--prefer-online");
     expect(promoteWorkflow).toContain("for ATTEMPT in {1..12}");
     expect(promoteWorkflow).toContain(sharedConcurrencyBlock);
     const candidatePrecheckIndex = promoteWorkflow.indexOf("Require security-verify candidate identity");
+    const verificationEvidenceIndex = promoteWorkflow.indexOf("Require independent registry verification evidence");
     const moveLatestIndex = promoteWorkflow.indexOf("Move latest only after exact-version verification");
     const replicationIndex = promoteWorkflow.indexOf("Wait for dist-tag replication");
     expect(candidatePrecheckIndex).toBeGreaterThan(-1);
+    expect(verificationEvidenceIndex).toBeGreaterThan(-1);
+    expect(verificationEvidenceIndex).toBeLessThan(moveLatestIndex);
     expect(candidatePrecheckIndex).toBeLessThan(moveLatestIndex);
     expect(moveLatestIndex).toBeLessThan(replicationIndex);
     const replicationBlock = promoteWorkflow.slice(replicationIndex);
@@ -212,6 +230,38 @@ describe("release configuration", () => {
     expect(replicationBlock).toContain(
       'if [ "${LATEST}" = "${VERSION}" ] && [ "${CANDIDATE}" = "${VERSION}" ]; then',
     );
+
+    expect(verifyRegistryWorkflow).toContain("workflow_dispatch:");
+    for (const input of [
+      "version:",
+      "expected_sha256:",
+      "tag:",
+      "expected_commit:",
+      "candidate_run_id:",
+      "expected_latest:",
+    ]) {
+      expect(verifyRegistryWorkflow).toContain(input);
+    }
+    expect(verifyRegistryWorkflow).toContain("contents: read");
+    expect(verifyRegistryWorkflow).toContain("actions: read");
+    expect(verifyRegistryWorkflow).not.toContain("id-token: write");
+    expect(verifyRegistryWorkflow).not.toContain("NODE_AUTH_TOKEN");
+    expect(verifyRegistryWorkflow).not.toContain("NPM_DIST_TAG_TOKEN");
+    expect(verifyRegistryWorkflow).not.toContain("packages: write");
+    expect(verifyRegistryWorkflow).not.toContain("npm publish");
+    expect(verifyRegistryWorkflow).not.toContain("npm dist-tag");
+    expect(verifyRegistryWorkflow).not.toContain("npm deprecate");
+    expect(verifyRegistryWorkflow).not.toContain("npm unpublish");
+    expect(verifyRegistryWorkflow).toContain(sharedConcurrencyBlock);
+    expect(verifyRegistryWorkflow).toContain("for ATTEMPT in {1..12}");
+    expect(verifyRegistryWorkflow).toContain("--prefer-online");
+    expect(verifyRegistryWorkflow).toContain("--cache");
+    expect(verifyRegistryWorkflow).toContain("dist.attestations");
+    expect(verifyRegistryWorkflow).toContain("files.length !== 110");
+    expect(verifyRegistryWorkflow).toContain('tags["security-verify"]');
+    expect(verifyRegistryWorkflow).toContain("tags.latest");
+    expect(verifyRegistryWorkflow).toContain("npm-registry-verification-${{ inputs.version }}-${{ github.run_id }}");
+    expect(verifyRegistryWorkflow).toContain("actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6");
   });
 
   it("rejects private material from the actual npm dry-run manifest", () => {
