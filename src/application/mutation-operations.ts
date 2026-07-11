@@ -24,12 +24,25 @@ export interface MutationRootInput {
   root?: string;
 }
 
+function assertSelectionIds(ids: string[]): void {
+  if (ids.length === 0 || ids.some((id) => typeof id !== "string" || id.trim().length === 0 || id.includes("\0"))) {
+    throw new MutationSafetyError("MALFORMED_ID", "至少需要一个非空且不含 NUL 的 session ID。");
+  }
+}
+
+function assertTrashLookupId(id: string): void {
+  if (typeof id !== "string" || id.trim().length === 0 || id.includes("\0")) {
+    throw new MutationSafetyError("MALFORMED_ID", "trash ID 或 session ID 不能为空，也不能包含 NUL。");
+  }
+}
+
 export async function deleteSessionsOperation(input: MutationRootInput & {
   sessionIds: string[];
   confirm: boolean;
   trash?: boolean;
   allowActive?: boolean;
 }) {
+  assertSelectionIds(input.sessionIds);
   if (input.confirm) {
     assertCanonicalSessionIds(input.sessionIds);
   }
@@ -70,6 +83,7 @@ export async function restoreTrashOperation(input: MutationRootInput & {
   id: string;
   confirm: boolean;
 }) {
+  assertTrashLookupId(input.id);
   if (!input.confirm) {
     const scan = await scanCodexRoot(input.root);
     const matches = (await listTrashEntries(scan.root.rootPath))
@@ -102,6 +116,7 @@ export async function purgeTrashOperation(input: MutationRootInput & {
   id: string;
   confirm: boolean;
 }) {
+  assertTrashLookupId(input.id);
   if (!input.confirm) {
     const scan = await scanCodexRoot(input.root);
     const matches = (await listTrashEntries(scan.root.rootPath))
@@ -128,6 +143,7 @@ export async function cleanupSessionIndexesOperation(input: MutationRootInput & 
   confirm: boolean;
   allowActive?: boolean;
 }) {
+  assertSelectionIds(input.sessionIds);
   if (input.confirm) {
     assertCanonicalSessionIds(input.sessionIds);
   }

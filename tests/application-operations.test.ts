@@ -229,4 +229,17 @@ describe("shared application operations", () => {
       await server.close();
     }
   });
+
+  it("keeps mutation input validation inside the application layer", async () => {
+    await expect(deleteSessionsOperation({
+      root: fixture.rootDir,
+      sessionIds: [],
+      confirm: false,
+    })).rejects.toMatchObject({ code: "MALFORMED_ID" });
+    await expect(cleanupSessionIndexesOperation({
+      root: fixture.rootDir,
+      sessionIds: [""],
+      confirm: false,
+    })).rejects.toMatchObject({ code: "MALFORMED_ID" });
+  });
 });
