@@ -470,13 +470,15 @@ export function inspectSessionMemoryLink(
     }
 
     const row = db.prepare(`
-      select source_updated_at, rollout_summary, selected_for_phase2,
+      select source_updated_at,
+             case when length(trim(rollout_summary)) > 0 then 1 else 0 end as rollout_summary_present,
+             selected_for_phase2,
              selected_for_phase2_source_updated_at
       from stage1_outputs
       where thread_id = ?
     `).get(sessionId) as {
       source_updated_at?: unknown;
-      rollout_summary?: unknown;
+      rollout_summary_present?: unknown;
       selected_for_phase2?: unknown;
       selected_for_phase2_source_updated_at?: unknown;
     } | undefined;
@@ -498,7 +500,7 @@ export function inspectSessionMemoryLink(
     return {
       enabled,
       stage1Present: true,
-      rolloutSummaryPresent: typeof row.rollout_summary === "string" && row.rollout_summary.trim().length > 0,
+      rolloutSummaryPresent: Number(row.rollout_summary_present ?? 0) === 1,
       phase2Influence: "unknown",
       retainedAfterSessionDelete: true,
       schemaStatus,
