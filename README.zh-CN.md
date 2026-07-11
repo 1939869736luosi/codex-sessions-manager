@@ -188,7 +188,7 @@ MCP `get_session` 有固定上限：`compact` 最多 20 items / 64 KiB，并且�
 
 MCP `list_sessions` 只返回精简记录，默认最多 50 个 session，参数上限为 200，整个结构化结果最多 256 KiB。`totalMatches`、`sessionsReturned`、`hasMore`、`byteLimited` 和 `omittedReason` 会明确说明省略情况。需要完整结果集或完整 session metadata 时用 `codex-sessions list --json`。
 
-**Windows 上的 0.6 系列安全补丁仅支持只读。** 删除、移入回收站、恢复、永久清除、索引清理和中断恢复都会直接拒绝。待真实 Windows 环境完成 junction/reparse point、大小写和异常退出测试后，才会重新开放写操作。Windows 上即使请求 MCP `admin` profile，也只注册只读工具。
+**当前版本在 Windows 上仍只允许只读操作。** 删除、移入回收站、恢复、永久清除、索引清理和中断恢复都会直接拒绝。待真实 Windows 环境完成 junction/reparse point、大小写和异常退出测试后，才会重新开放写操作。Windows 上即使请求 MCP `admin` profile，也只注册只读工具。
 
 ### 4. 生态适配器
 

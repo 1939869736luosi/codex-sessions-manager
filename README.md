@@ -199,7 +199,7 @@ MCP `get_session` is intentionally bounded: `compact` returns at most 20 items /
 
 MCP `list_sessions` returns concise records, defaults to 50 sessions, accepts at most 200, and caps the structured response at 256 KiB. `totalMatches`, `sessionsReturned`, `hasMore`, `byteLimited`, and `omittedReason` disclose any omission. Use `codex-sessions list --json` when a local caller needs the complete result set or full session metadata.
 
-**Windows security-patch releases in the 0.6 line are read-only.** Delete, trash, restore, purge, cleanup, and interrupted-operation recovery fail closed until the real Windows junction/reparse-point, case-handling, and abrupt-termination matrix is verified. On Windows, requesting the MCP `admin` profile still registers only the read-only tools.
+**Windows remains read-only for destructive operations in current releases.** Delete, trash, restore, purge, cleanup, and interrupted-operation recovery fail closed until the real Windows junction/reparse-point, case-handling, and abrupt-termination matrix is verified. On Windows, requesting the MCP `admin` profile still registers only the read-only tools.
 
 ### 4. Ecosystem Adapters
 
