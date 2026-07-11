@@ -555,11 +555,9 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
       confirm: values.yes,
     });
     if (!operation.executed) {
-      const preview = { ...operation.data.status, ...operation.data };
-      delete (preview as { status?: unknown }).status;
       io.stdout(
         asJson
-          ? JSON.stringify(preview, null, 2)
+          ? JSON.stringify(operation.data, null, 2)
           : `恢复未执行。核对 operation ${rest[0]} 后加 --yes。\n- kind: ${operation.data.status.kind}\n- stage: ${operation.data.status.stage}`,
       );
       return 0;

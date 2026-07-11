@@ -209,6 +209,7 @@ export async function recoverOperation(input: MutationRootInput & {
     return {
       executed: false as const,
       data: {
+        ...status,
         status,
         requiresConfirmation: true,
         exactOperationIdRequired: true,

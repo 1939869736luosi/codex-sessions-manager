@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { readFile } from "node:fs/promises";
 
 import {
   getSessionOperation,
@@ -17,9 +18,16 @@ import {
   verifySessionsOperation,
 } from "../src/application/read-operations.js";
 import {
+  cleanupStaleIndexesOperation,
   deleteSessionsOperation,
   cleanupSessionIndexesOperation,
+  purgeTrashOperation,
+  recoverOperation,
+  restoreTrashOperation,
 } from "../src/application/mutation-operations.js";
+import { acquireMutationLock } from "../src/core/mutation-safety.js";
+import { createTrustedRootContext } from "../src/core/path-safety.js";
+import { createRecoveryFileTransition } from "../src/core/recovery.js";
 import { runCli } from "../src/cli/run.js";
 import { formatDoctor } from "../src/cli/format.js";
 import { createServer } from "../src/mcp/server.js";
@@ -243,5 +251,90 @@ describe("shared application operations", () => {
       sessionIds: [""],
       confirm: false,
     })).rejects.toMatchObject({ code: "MALFORMED_ID" });
+  });
+
+  it("keeps trash and stale-cleanup previews equal across application, CLI, and MCP", async () => {
+    const trashed = await deleteSessionsOperation({
+      root: fixture.rootDir,
+      sessionIds: [FIXTURE_IDS.ARCHIVED_ID],
+      confirm: true,
+      trash: true,
+    });
+    if (!trashed.executed || trashed.action !== "trash") throw new Error("trash setup did not execute");
+    const trashId = trashed.result.trashEntry.trashId;
+    const { client, server } = await createAdminClient();
+    try {
+      for (const entry of [
+        {
+          command: "restore",
+          tool: "restore_sessions",
+          id: trashId,
+          canonical: () => restoreTrashOperation({ root: fixture.rootDir, id: trashId, confirm: false }),
+        },
+        {
+          command: "purge",
+          tool: "purge_trash",
+          id: trashId,
+          canonical: () => purgeTrashOperation({ root: fixture.rootDir, id: trashId, confirm: false }),
+        },
+      ]) {
+        const canonical = await entry.canonical();
+        const capture = createIo();
+        await expect(runCli([entry.command, entry.id, "--root", fixture.rootDir, "--json"], capture.io)).resolves.toBe(0);
+        const mcp = await client.callTool({ name: entry.tool, arguments: { root: fixture.rootDir, id: entry.id } });
+
+        expect(JSON.parse(capture.stdout.join("\n"))).toEqual(canonical.data);
+        expect(mcp.structuredContent).toEqual(canonical.data);
+      }
+
+      const stale = await cleanupStaleIndexesOperation({ root: fixture.rootDir, confirm: false });
+      const capture = createIo();
+      await expect(runCli(["cleanup-stale", "--root", fixture.rootDir, "--json"], capture.io)).resolves.toBe(0);
+      const mcp = await client.callTool({ name: "cleanup_stale_indexes", arguments: { root: fixture.rootDir } });
+
+      expect(JSON.parse(capture.stdout.join("\n"))).toEqual(stale.data);
+      expect(mcp.structuredContent).toEqual(stale.data);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("keeps recovery preview equal across application, CLI, and MCP", async () => {
+    const context = await createTrustedRootContext(fixture.rootDir);
+    const before = await readFile(fixture.paths.sessionIndex, "utf8");
+    const after = `${before}recovery-parity-marker\n`;
+    const lock = await acquireMutationLock(context, "cleanup-index", [FIXTURE_IDS.ACTIVE_ID]);
+    await lock.writeRecoveryPayload({
+      schemaVersion: "codex-sessions-recovery.v1",
+      operationId: lock.operationId,
+      kind: "cleanup-index",
+      strategy: "rollforward",
+      rootRealPath: context.realPath,
+      targetIds: [FIXTURE_IDS.ACTIVE_ID],
+      files: [createRecoveryFileTransition("session_index.jsonl", before, after)],
+    });
+    await lock.setStage("committing");
+
+    const canonical = await recoverOperation({
+      root: fixture.rootDir,
+      operationId: lock.operationId,
+      confirm: false,
+    });
+    const capture = createIo();
+    const { client, server } = await createAdminClient();
+    try {
+      await expect(runCli(["recover", lock.operationId, "--root", fixture.rootDir, "--json"], capture.io)).resolves.toBe(0);
+      const mcp = await client.callTool({
+        name: "recover_operation",
+        arguments: { root: fixture.rootDir, operationId: lock.operationId },
+      });
+
+      expect(JSON.parse(capture.stdout.join("\n"))).toEqual(canonical.data);
+      expect(mcp.structuredContent).toEqual(canonical.data);
+    } finally {
+      await client.close();
+      await server.close();
+    }
   });
 });
