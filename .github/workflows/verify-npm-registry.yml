@@ -78,6 +78,7 @@ jobs:
           gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${CANDIDATE_RUN_ID}" > "${RUNNER_TEMP}/candidate-run.json"
           gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${CANDIDATE_RUN_ID}/jobs?per_page=100" > "${RUNNER_TEMP}/candidate-jobs.json"
           node -e '
+            const fs = require("node:fs");
             const run = require(process.argv[1]);
             const jobs = require(process.argv[2]).jobs ?? [];
             if (run.status !== "completed") process.exit(1);
@@ -104,7 +105,45 @@ jobs:
               const failedSteps = (job.steps ?? []).filter((step) => step.conclusion === "failure");
               if (failedSteps.length !== 1 || failedSteps[0].name !== compare.name) process.exit(1);
             }
-          ' "${RUNNER_TEMP}/candidate-run.json" "${RUNNER_TEMP}/candidate-jobs.json" "${EXPECTED_COMMIT}" "${TAG}"
+            const state = {
+              jobId: job.id,
+              runConclusion: run.conclusion,
+              publish: true,
+              replication: true,
+              registrySmoke: true,
+              compareStep: compare.conclusion,
+              compareFailureReason: null,
+              compareFailureOnlyRecovery: false,
+              compareFailureVersion: null,
+              candidateJobLogSha256: null
+            };
+            fs.writeFileSync(process.argv[5], `${JSON.stringify(state, null, 2)}\n`);
+          ' "${RUNNER_TEMP}/candidate-run.json" "${RUNNER_TEMP}/candidate-jobs.json" "${EXPECTED_COMMIT}" "${TAG}" "${RUNNER_TEMP}/candidate-state.json"
+          RUN_CONCLUSION="$(node -p "require(process.argv[1]).runConclusion" "${RUNNER_TEMP}/candidate-state.json")"
+          if [ "${RUN_CONCLUSION}" = "failure" ]; then
+            JOB_ID="$(node -p "require(process.argv[1]).jobId" "${RUNNER_TEMP}/candidate-state.json")"
+            [[ "${JOB_ID}" =~ ^[0-9]+$ ]]
+            gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/${JOB_ID}/logs" > "${RUNNER_TEMP}/candidate-job.log"
+            node -e '
+              const fs = require("node:fs");
+              const crypto = require("node:crypto");
+              const log = fs.readFileSync(process.argv[1], "utf8");
+              const state = require(process.argv[2]);
+              const version = process.argv[3];
+              const packCommand = "npm pack \"codex-sessions-manager@${PACKAGE_VERSION}\"";
+              const exactNotarget = `npm error notarget No matching version found for codex-sessions-manager@${version}.`;
+              const packIndex = log.lastIndexOf(packCommand);
+              if (packIndex < 0) process.exit(1);
+              const compareLog = log.slice(packIndex);
+              if (!compareLog.includes("npm error code ETARGET")) process.exit(1);
+              if (!compareLog.includes(exactNotarget)) process.exit(1);
+              state.compareFailureReason = "ETARGET";
+              state.compareFailureOnlyRecovery = true;
+              state.compareFailureVersion = version;
+              state.candidateJobLogSha256 = crypto.createHash("sha256").update(log).digest("hex");
+              fs.writeFileSync(process.argv[2], `${JSON.stringify(state, null, 2)}\n`);
+            ' "${RUNNER_TEMP}/candidate-job.log" "${RUNNER_TEMP}/candidate-state.json" "${VERSION}"
+          fi
 
       - name: Rebuild the reviewed source tarball from the immutable tag
         shell: bash
@@ -276,6 +315,7 @@ jobs:
           ' "${RUNNER_TEMP}/dist-tags-before.json" "${RUNNER_TEMP}/dist-tags-after.json" "${VERSION}" "${EXPECTED_LATEST}"
           node -e '
             const fs = require("node:fs");
+            const candidate = require(process.argv[2]);
             const report = {
               status: "passed",
               version: process.env.VERSION,
@@ -294,16 +334,11 @@ jobs:
               latestAfter: process.env.EXPECTED_LATEST,
               fileCount: 110,
               provenanceMetadataPresent: true,
-              candidate: {
-                publish: true,
-                replication: true,
-                registrySmoke: true,
-                compareFailureOnlyRecovery: true
-              },
+              candidate,
               smoke: { cli: true, mcp: true, doctor: true }
             };
             fs.writeFileSync(process.argv[1], `${JSON.stringify(report, null, 2)}\n`);
-          ' "${RUNNER_TEMP}/verification.json"
+          ' "${RUNNER_TEMP}/verification.json" "${RUNNER_TEMP}/candidate-state.json"
 
       - name: Upload public verification evidence only
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -324,6 +359,7 @@ jobs:
             ${{ runner.temp }}/registry-doctor.json
             ${{ runner.temp }}/candidate-run.json
             ${{ runner.temp }}/candidate-jobs.json
+            ${{ runner.temp }}/candidate-state.json
             ${{ runner.temp }}/verification.json
           if-no-files-found: error
           retention-days: 30

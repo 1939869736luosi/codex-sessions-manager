@@ -113,8 +113,20 @@ jobs:
             if (report.workflowCommit !== run.head_sha || report.workflowCommit !== process.env.GITHUB_SHA) process.exit(1);
             if (report.workflowRef !== run.head_branch || report.workflowRef !== process.env.GITHUB_REF_NAME) process.exit(1);
             if (report.workflowPath !== run.path) process.exit(1);
-            if (report.candidate?.publish !== true || report.candidate?.replication !== true) process.exit(1);
-            if (report.candidate?.registrySmoke !== true || report.candidate?.compareFailureOnlyRecovery !== true) process.exit(1);
+            const candidate = report.candidate;
+            if (candidate?.publish !== true || candidate?.replication !== true || candidate?.registrySmoke !== true) process.exit(1);
+            if (candidate.runConclusion === "failure") {
+              if (candidate.compareStep !== "failure") process.exit(1);
+              if (candidate.compareFailureReason !== "ETARGET" || candidate.compareFailureOnlyRecovery !== true) process.exit(1);
+              if (candidate.compareFailureVersion !== expected.version) process.exit(1);
+              if (!/^[0-9a-f]{64}$/.test(candidate.candidateJobLogSha256)) process.exit(1);
+            } else if (candidate.runConclusion === "success") {
+              if (candidate.compareStep !== "success") process.exit(1);
+              if (candidate.compareFailureReason !== null || candidate.compareFailureOnlyRecovery !== false) process.exit(1);
+              if (candidate.compareFailureVersion !== null || candidate.candidateJobLogSha256 !== null) process.exit(1);
+            } else {
+              process.exit(1);
+            }
             if (report.smoke?.cli !== true || report.smoke?.mcp !== true || report.smoke?.doctor !== true) process.exit(1);
           ' "${EVIDENCE_DIR}/verification.json" "${EVIDENCE_DIR}/run.json" "${VERSION}" "${EXPECTED_SHA256}" "${TAG}" "${EXPECTED_COMMIT}" "${CANDIDATE_RUN_ID}" "${VERIFICATION_RUN_ID}" "${EXPECTED_LATEST}"
 
@@ -160,14 +172,6 @@ jobs:
           CANDIDATE="$(npm view codex-sessions-manager@security-verify version --prefer-online --cache "${RUNNER_TEMP}/npm-candidate-precheck")"
           test "${CANDIDATE}" = "${VERSION}"
 
-      - name: Require current latest has not changed
-        shell: bash
-        env:
-          EXPECTED_LATEST: ${{ inputs.expected_latest }}
-        run: |
-          CURRENT_LATEST="$(npm view codex-sessions-manager@latest version --prefer-online --cache "${RUNNER_TEMP}/npm-latest-precheck")"
-          test "${CURRENT_LATEST}" = "${EXPECTED_LATEST}"
-
       - name: Require live release tag identity
         shell: bash
         env:
@@ -197,10 +201,20 @@ jobs:
           gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${CANDIDATE_RUN_ID}" > "${RUNNER_TEMP}/live-candidate-run.json"
           node -e '
             const run = require(process.argv[1]);
+            const report = require(process.argv[4]);
             if (run.status !== "completed") process.exit(1);
             if (run.event !== "push" || run.path !== ".github/workflows/release.yml") process.exit(1);
             if (run.head_sha !== process.argv[2] || run.head_branch !== process.argv[3]) process.exit(1);
-          ' "${RUNNER_TEMP}/live-candidate-run.json" "${EXPECTED_COMMIT}" "${TAG}"
+            if (run.conclusion !== report.candidate?.runConclusion) process.exit(1);
+          ' "${RUNNER_TEMP}/live-candidate-run.json" "${EXPECTED_COMMIT}" "${TAG}" "${RUNNER_TEMP}/registry-verification/verification.json"
+
+      - name: Require current latest has not changed
+        shell: bash
+        env:
+          EXPECTED_LATEST: ${{ inputs.expected_latest }}
+        run: |
+          CURRENT_LATEST="$(npm view codex-sessions-manager@latest version --prefer-online --cache "${RUNNER_TEMP}/npm-latest-precheck")"
+          test "${CURRENT_LATEST}" = "${EXPECTED_LATEST}"
 
       - name: Move latest only after exact-version verification
         env:
