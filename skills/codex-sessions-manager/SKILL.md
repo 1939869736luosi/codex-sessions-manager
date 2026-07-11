@@ -48,11 +48,12 @@ The distributed Skill includes `agents/openai.yaml` inside the Skill directory.
 ## CLI Quick Reference
 
 ```bash
-codex-sessions doctor [--json]
+codex-sessions doctor [--json] [--details]
 codex-sessions list [--limit N] [--project TEXT] [--status S] [--source-kind K]
 codex-sessions sources [--json]
 codex-sessions projects
 codex-sessions show <id> [--json]
+codex-sessions events <exact-id> [--output FILE]
 codex-sessions family <id> [--children|--parents|--subagents|--impact|--full]
 codex-sessions audit <id> [--json]
 codex-sessions audit-root [--limit 50] [--status S...] [--source S...]
@@ -87,8 +88,8 @@ codex-sessions recover <exact-operation-id> --yes
 ## MCP (Optional, Advanced)
 
 ```bash
-codex-sessions-mcp                       # default: read-only profile (16 tools)
-codex-sessions-mcp --profile admin       # all 22 tools including destructive ops
+codex-sessions-mcp                       # default: read-only profile (17 tools)
+codex-sessions-mcp --profile admin       # all 23 tools including destructive ops
 ```
 
 Invalid `--profile` values exit with code 1. Default is read-only for safety.

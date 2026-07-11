@@ -37,13 +37,16 @@ These operations are intended to inspect or report information without modifying
 | `list` | `list_sessions` | List matching sessions |
 | `projects` | `list_projects` | Summarize sessions by project |
 | `show` | `get_session` | Read one session timeline |
+| `events` | `get_session_events_page` | Complete local canonical stream via CLI; bounded authenticated pages via MCP |
 | `export` | `export_session_backup` | Export a backup bundle |
 | `doctor` | `inspect_root` | Diagnose root structure and compatibility |
 | `verify` | `verify_sessions` | Report remaining files, indexes, SQLite rows, and warnings |
 | `trash-list` | `list_trash` | List trash entries |
 | `plan-delete` / `preview-plan` | `plan_delete_sessions` / `preview_delete_plan` | Build and re-preview read-only explicit-ID delete plans; sourceKind candidate mode lists `candidateIds` only; MCP never writes plan files and never executes delete-by-plan |
 
-`doctor` and `inspect_root` are read-only diagnostics. They are intended to detect Codex storage changes, missing files, SQLite table availability, SQLite home splits, memory DB presence, trash state, and global-state warnings.
+`doctor` and `inspect_root` are read-only diagnostics. They are intended to detect Codex storage changes, missing files, SQLite table availability, SQLite home splits, memory DB presence, trash state, and global-state warnings. Default output is bounded summary mode; use `--details` or `includeDetails=true` only when complete reference arrays are required.
+
+Canonical `events` output is separate from recovery `export`. CLI requires an exact UUID and can stream complete tool data or create a private `0600` file. MCP is limited by both item count and serialized bytes. It reports oversized event omission instead of returning a partial tool payload. Rollout symlinks, hard links, root escapes, duplicates, and changed sources are rejected.
 
 ## Write Operations
 

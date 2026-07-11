@@ -29,6 +29,16 @@ codex-sessions show <session-id> [--root PATH] [--json]
 
 Human output shows at most 20 timeline items and reports returned/known counts. Use `--json` for every locally parseable semantic item; JSON has no total item-count limit and marks unknown items, parse errors, and truncated tool output. `export` is the byte-exact raw-content path. A compressed-only `.jsonl.zst` session reports `compressed_unread` instead of presenting an index/history summary as transcript text.
 
+Session JSON includes a read-only `memoryLink`. It reports only enabled/stage1/summary/Phase 2 linkage state and always says memory is retained after ordinary session deletion; it never returns raw memory or rollout-summary text.
+
+### events
+
+```bash
+codex-sessions events <exact-session-id> [--root PATH] [--output FILE]
+```
+
+Streams complete `codex-session-event.v1` JSONL for one full session UUID. It only searches active/archived rollout paths, rejects prefixes, symlinks, hard links, root escapes, duplicates, and compressed-only sources, and excludes internal reasoning envelopes. `--output` creates a new `0600` file and refuses overwrite.
+
 ### family
 
 ```bash
@@ -123,7 +133,7 @@ Reports remaining files, JSONL rows, SQLite rows (including goals DB), shell sna
 
 ## MCP Tools Reference
 
-### Read-only profile (16 tools, default)
+### Read-only profile (17 tools, default)
 
 | Tool | Purpose |
 |------|---------|
@@ -132,6 +142,7 @@ Reports remaining files, JSONL rows, SQLite rows (including goals DB), shell sna
 | `summarize_sources` | Read-only source summary |
 | `list_projects` | Project summaries |
 | `get_session` | Session detail + timeline |
+| `get_session_events_page` | Authenticated canonical event pages; maximum 100 events and 240 KiB event data, with explicit oversized-event omission |
 | `get_session_family` | Family relationships (mode: full/children/parents/subagents/impact) |
 | `audit_session` | Session residue audit |
 | `audit_root` | Root residue scan |
@@ -158,6 +169,8 @@ Reports remaining files, JSONL rows, SQLite rows (including goals DB), shell sna
 All admin tools require `confirm=true` to execute; without it they return preview only.
 
 `get_session` accepts `detail=compact|full`. `compact` is limited to 20 timeline items, 64 KiB, and a 1 MiB source read; `full` is limited to 200 items, 256 KiB, and an 8 MiB source read. Session metadata is bounded independently. Responses include `completeness`, underlying `sourceCompleteness`, `itemsReturned`, `itemsKnown`, `sessionMetadataTruncated`, `omittedReason`, and `exactExportAvailable`. `itemsKnown=null` means the source reader stopped before EOF. Per-item tool-output truncation makes the overall result `truncated_limit`. These limits are intentional; use CLI JSON or export for complete local handoff.
+
+`inspect_root` returns summary mode by default: counts, bounded warnings, and at most five samples per reference class. Set `includeDetails=true` only when complete diagnostic arrays are required. `get_session_events_page` uses a process-local authenticated cursor; a restart or source change invalidates it. Oversized canonical events are never truncated into misleading partial tool data: MCP reports and omits them, while CLI `events` remains the complete path.
 
 `list_sessions` defaults to 50 concise records, accepts a maximum `limit` of 200, and caps the structured response at 256 KiB. It omits large fields such as `historyPreview` and reports `totalMatches`, `sessionsReturned`, `hasMore`, `byteLimited`, and `omittedReason`. Use CLI `list --json` for a complete local list.
 

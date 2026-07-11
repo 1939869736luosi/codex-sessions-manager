@@ -46,6 +46,10 @@ codex-sessions list --limit 10
 # Summarize session sources (safe, no changes)
 codex-sessions sources
 
+# Stream one exact session as canonical JSONL (safe, read-only)
+codex-sessions events <exact-session-id>
+codex-sessions events <exact-session-id> --output ./session-events.jsonl
+
 # Inspect parent and child sessions (safe, no changes)
 codex-sessions family <session-id>
 codex-sessions family <session-id> --children
@@ -187,7 +191,7 @@ Other MCP hosts may use their own JSON configuration, for example:
 }
 ```
 
-Default profile is **read-only** (16 tools). For destructive operations, use `--profile admin` (22 tools).
+Default profile is **read-only** (17 tools). For destructive operations, use `--profile admin` (23 tools).
 
 MCP `get_session` is intentionally bounded: `compact` returns at most 20 items / 64 KiB and reads at most 1 MiB of the source rollout; `full` returns at most 200 items / 256 KiB and reads at most 8 MiB. Session metadata is bounded as well. Both modes report `completeness`, underlying `sourceCompleteness`, returned/known counts, metadata truncation, omission reason, and exact-export availability. When the source-read limit is reached before EOF, `itemsKnown` is `null` rather than a false total. Tool-output truncation is also reported as `truncated_limit`. Use `codex-sessions show <id> --json` for all locally parseable semantic items and `export` for byte-exact raw content.
 
@@ -209,7 +213,7 @@ Platform-specific setup guides are in the `adapters/` directory:
 
 ### Migration Note (v0.5.x to v0.6.0)
 
-MCP default changed from 20 tools to 15 tools in v0.6.0. v0.6.1 adds read-only recovery inspection and an admin-only confirmed recovery tool, bringing the profiles to 16 and 22 tools. If you need destructive tools, add `--profile admin`; explicit confirmation remains mandatory.
+MCP default changed from 20 tools to 15 tools in v0.6.0. Recovery support brought the profiles to 16 and 22 tools; the bounded canonical event reader brings 0.7.0 to 17 and 23 tools. If you need destructive tools, add `--profile admin`; explicit confirmation remains mandatory.
 
 ## CLI Reference
 
@@ -222,8 +226,9 @@ codex-sessions list --source mcp --thread-source mcp
 codex-sessions list --agent-role subagent --agent-nickname helper
 codex-sessions sources [--json]
 codex-sessions projects
-codex-sessions doctor [--json]
+codex-sessions doctor [--json] [--details]
 codex-sessions show <session-id> [--json]
+codex-sessions events <exact-session-id> [--output ./session-events.jsonl]
 codex-sessions family <session-id> [--json] [--children|--parents|--subagents|--impact] [--full] [--source-kind KIND]
 codex-sessions audit <session-id> [--json]
 codex-sessions audit-root [--json] [--limit 50] [--status STATUS...] [--source SOURCE...] [--all]
@@ -248,6 +253,10 @@ codex-sessions verify <session-id...> [--json]
 Read-only lookups may resolve a unique short prefix. Confirmed session mutations require lowercase full UUIDs; active-session deletion needs `--allow-active`. Confirmed restore and purge require an exact `trashId`. Exit status `2` means a mutation committed but verification was partial or failed; status `3` means recovery is required and further mutation is blocked.
 
 `export` and trash bundles are recovery data, not previews. They may include full global-state exact-key values such as prompt-history content. Human delete previews show only path, rule, shape, and byte counts.
+
+`doctor` defaults to counts, risks, bounded warnings, and at most five samples per reference class. Use `--details` only when complete local diagnostic arrays are required. Session JSON and MCP detail include a read-only `memoryLink`; it never includes `raw_memory` or rollout-summary text, and ordinary session deletion retains all memory surfaces.
+
+`events` requires a complete session UUID and streams canonical JSONL without shortening tool data. `--output` creates a new private `0600` file and refuses overwrite. MCP `get_session_events_page` is separately bounded to 100 events and 240 KiB of event data; oversized events are reported and omitted from MCP, with CLI/file output as the complete path.
 
 **Duplicate trash entries**: `restore` does not delete the trash entry. If a restored session is moved to trash again, `trash-list` can show multiple recoverable copies for the same session ID. This is normal trash state, not live residue. A newer copy does not replace an older one. When one session ID has multiple trash entries, confirmed `restore` and `purge` refuse the session ID and require the exact `trashId`. Do not auto-purge duplicates. `purge` permanently removes only the selected trash entry and never touches the live session.
 

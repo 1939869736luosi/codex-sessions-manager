@@ -6,6 +6,10 @@ import {
   inspectRootOperation,
   listSessionsOperation,
 } from "../application/session-operations.js";
+import {
+  streamSessionEventsOperation,
+  writeSessionEventsOperation,
+} from "../application/event-operations.js";
 import { buildRootDeletePreview, buildRootResidueAudit, buildSessionResidueAudit } from "../core/audit.js";
 import { exportSessionBackup } from "../core/backup.js";
 import { assertConfirmedSessionSelection } from "../core/destructive-policy.js";
@@ -77,6 +81,7 @@ type CommandName =
   | "audit-root"
   | "preview-root"
   | "export"
+  | "events"
   | "plan-delete"
   | "preview-plan"
   | "delete"
@@ -137,6 +142,7 @@ Usage:
   codex-sessions audit-root [--root PATH] [--json] [--limit N] [--status STATUS...] [--source SOURCE...] [--all]
   codex-sessions preview-root [--root PATH] [--json] [--limit N] [--status STATUS...] [--source SOURCE...] [--all]
   codex-sessions export <session-id> [--root PATH] [--output FILE] [--json]
+  codex-sessions events <exact-session-id> [--root PATH] [--output FILE]
   codex-sessions plan-delete <session-id...> [--root PATH] [--json] [--write-plan FILE]
                             [--include-children] [--include-subagents]
                             [--include-descendants] [--include-family]
@@ -156,6 +162,8 @@ Usage:
 Notes:
   - 默认根目录是 ~/.codex
   - doctor 默认只返回统计、风险和每类最多 5 个样本；--details 才展开完整引用
+  - events 输出完整 canonical event JSONL；MCP 只提供受条数和字节双重限制的分页读取
+  - events 默认排除模型内部 reasoning；--output 创建 0600 私密文件并拒绝覆盖
   - delete 未带 --yes 时只展示预览，不执行删除
   - 真正删除前应先单独预览供检查，再显式加 --yes；当前没有 preview token；family / impact 不能替代 delete preview
   - family 只读查看 parent / child / side / fork / subagent 关系，不会自动递归处理
@@ -344,6 +352,25 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
         ? JSON.stringify(result.data, null, 2)
         : formatShow(session, timeline, timelineMetadata),
     );
+    return 0;
+  }
+
+  if (command === "events") {
+    if (rest.length !== 1) {
+      throw new Error("events 需要 1 个完整、精确的 session-id。");
+    }
+    if (values.output) {
+      const result = await writeSessionEventsOperation({
+        root: rootArg,
+        sessionId: rest[0],
+        outputPath: values.output,
+      });
+      io.stdout(`Wrote ${result.eventCount} canonical event(s) for ${result.sessionId} to ${result.outputPath}. Internal reasoning was excluded.`);
+      return 0;
+    }
+    for await (const event of streamSessionEventsOperation({ root: rootArg, sessionId: rest[0] })) {
+      io.stdout(JSON.stringify(event));
+    }
     return 0;
   }
 

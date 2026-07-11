@@ -1876,7 +1876,7 @@ describe("mcp server --profile", () => {
   const ADMIN_TOOLS = ["delete_sessions", "restore_sessions", "purge_trash", "cleanup_session_indexes", "cleanup_stale_indexes", "recover_operation"];
   const READ_ONLY_TOOLS = [
     "inspect_root", "list_sessions", "summarize_sources", "list_projects",
-    "get_session", "get_session_family", "audit_session", "audit_root",
+    "get_session", "get_session_events_page", "get_session_family", "audit_session", "audit_root",
     "preview_root_delete", "export_session_backup", "preview_delete_sessions",
     "plan_delete_sessions", "preview_delete_plan", "list_trash",
     "verify_sessions", "get_recovery_status",
@@ -1913,14 +1913,14 @@ describe("mcp server --profile", () => {
     }
   });
 
-  it("read-only profile has 16 tools, admin has 22", async () => {
+  it("read-only profile has 17 tools, admin has 23", async () => {
     const { client: roClient, server: roServer } = await createConnectedClient("read-only");
     const { client: adminClient, server: adminServer } = await createConnectedClient("admin");
     try {
       const roTools = await roClient.listTools();
       const adminTools = await adminClient.listTools();
-      expect(roTools.tools.length).toBe(16);
-      expect(adminTools.tools.length).toBe(22);
+      expect(roTools.tools.length).toBe(17);
+      expect(adminTools.tools.length).toBe(23);
       expect(roTools.tools.map((tool) => tool.name)).toContain("get_recovery_status");
       expect(roTools.tools.map((tool) => tool.name)).not.toContain("recover_operation");
       expect(adminTools.tools.map((tool) => tool.name)).toContain("recover_operation");

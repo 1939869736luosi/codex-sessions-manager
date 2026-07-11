@@ -46,6 +46,10 @@ codex-sessions list --limit 10
 # 汇总会话来源（安全，不做任何修改）
 codex-sessions sources
 
+# 把一条精确 session 流式转换为 canonical JSONL（安全，只读）
+codex-sessions events <完整-session-id>
+codex-sessions events <完整-session-id> --output ./session-events.jsonl
+
 # 查看父子关系（安全，不做任何修改）
 codex-sessions family <session-id>
 codex-sessions family <session-id> --children
@@ -176,7 +180,7 @@ codex mcp add codex-sessions -- codex-sessions-mcp --profile read-only
 }
 ```
 
-默认 **read-only** profile（16 个工具）。需要破坏性操作时使用 `--profile admin`（22 个工具）。
+默认 **read-only** profile（17 个工具）。需要破坏性操作时使用 `--profile admin`（23 个工具）。
 
 MCP `get_session` 有固定上限：`compact` 最多 20 items / 64 KiB，并且最多读取 1 MiB rollout 源文件；`full` 最多 200 items / 256 KiB，并且最多读取 8 MiB。session metadata 同样受限。两种模式都会返回 `completeness`、底层 `sourceCompleteness`、已返回/已知数量、metadata 截断、省略原因和是否可精确导出。读取上限先于文件结尾触发时，`itemsKnown` 会返回 `null`，不会给出伪完整总数；工具输出截断也会标成 `truncated_limit`。需要全部本地可解析 semantic items 时用 `codex-sessions show <id> --json`；需要 byte-exact 原始内容时用 `export`。
 
@@ -198,7 +202,7 @@ MCP `list_sessions` 只返回精简记录，默认最多 50 个 session，参数
 
 ### 升级说明（v0.5.x → v0.6.0）
 
-v0.6.0 把 MCP 默认 profile 从 20 个工具缩减为 15 个。v0.6.1 增加只读恢复状态检查和 admin-only 确认恢复工具，两个 profile 现在分别是 16 和 22 个工具。需要写操作时添加 `--profile admin`，但仍然必须明确确认。
+v0.6.0 把 MCP 默认 profile 从 20 个工具缩减为 15 个。恢复支持把两个 profile 增至 16 和 22 个工具；0.7.0 的有界 canonical event reader 使其变为 17 和 23 个工具。需要写操作时添加 `--profile admin`，但仍然必须明确确认。
 
 ## CLI 命令
 
@@ -211,8 +215,9 @@ codex-sessions list --source mcp --thread-source mcp
 codex-sessions list --agent-role subagent --agent-nickname helper
 codex-sessions sources [--json]
 codex-sessions projects
-codex-sessions doctor [--json]
+codex-sessions doctor [--json] [--details]
 codex-sessions show <session-id> [--json]
+codex-sessions events <完整-session-id> [--output ./session-events.jsonl]
 codex-sessions family <session-id> [--json] [--children|--parents|--subagents|--impact] [--full] [--source-kind KIND]
 codex-sessions audit <session-id> [--json]
 codex-sessions audit-root [--json] [--limit 50] [--status STATUS...] [--source SOURCE...] [--all]

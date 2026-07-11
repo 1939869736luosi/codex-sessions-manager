@@ -13,6 +13,7 @@ import {
   inspectRootOperation,
   listSessionsOperation,
 } from "../application/session-operations.js";
+import { getSessionEventsPageOperation } from "../application/event-operations.js";
 import { buildRootDeletePreview, buildRootResidueAudit, buildSessionResidueAudit } from "../core/audit.js";
 import { exportSessionBackup } from "../core/backup.js";
 import { assertConfirmedSessionSelection, isDestructivePlatformSupported } from "../core/destructive-policy.js";
@@ -34,6 +35,10 @@ import { scanCodexRoot } from "../core/scan.js";
 import { assertCanonicalSessionIds, MutationSafetyError } from "../core/mutation-safety.js";
 import { getRecoveryStatus, recoverInterruptedOperation } from "../core/recovery.js";
 import { SOURCE_KINDS, summarizeSources } from "../core/sources.js";
+import {
+  MAX_CANONICAL_EVENT_PAGE_BYTES,
+  MAX_CANONICAL_EVENT_PAGE_SIZE,
+} from "../core/session-events.js";
 import {
   listTrashEntries,
   moveSessionsToTrash,
@@ -565,6 +570,32 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       return textResult(
         `Loaded ${payload.itemsReturned as number}/${payload.itemsKnown ?? "unknown"} timeline items for session ${session.id} (${payload.completeness as string}).`,
         payload,
+      );
+    },
+  );
+
+  server.registerTool(
+    "get_session_events_page",
+    {
+      description:
+        `Read one authenticated canonical event page for an exact session. Responses are limited to ${MAX_CANONICAL_EVENT_PAGE_SIZE} events and ${MAX_CANONICAL_EVENT_PAGE_BYTES} event bytes. Oversized events are reported and omitted; use CLI events for complete tool data.`,
+      outputSchema: TOOL_OUTPUT_SCHEMA,
+      inputSchema: z.object({
+        sessionId: z.string().describe("Complete exact session UUID; prefixes are refused."),
+        root: z.string().optional(),
+        limit: z.number().int().min(1).max(MAX_CANONICAL_EVENT_PAGE_SIZE).optional().default(50),
+        cursor: z.string().optional().describe("Opaque nextCursor from the same MCP server process."),
+      }),
+      annotations: {
+        readOnlyHint: true,
+        idempotentHint: true,
+      },
+    },
+    async ({ sessionId, root, limit, cursor }) => {
+      const page = await getSessionEventsPageOperation({ root, sessionId, limit, cursor });
+      return textResult(
+        `Loaded ${page.events.length} canonical event(s) for ${page.sessionId}; completeness=${page.completeness}.`,
+        page as unknown as Record<string, unknown>,
       );
     },
   );

@@ -5,6 +5,7 @@ import {
   inspectRootOperation,
   listSessionsOperation,
 } from "../src/application/session-operations.js";
+import { getSessionEventsPageOperation } from "../src/application/event-operations.js";
 import { runCli } from "../src/cli/run.js";
 import { createFixture, FIXTURE_IDS, type Fixture } from "./helpers/fixture.js";
 
@@ -96,5 +97,19 @@ describe("shared application operations", () => {
 
     expect(JSON.parse(compact.stdout.join("\n"))).toMatchObject({ detailsIncluded: false, sampleLimit: 5 });
     expect(JSON.parse(detailed.stdout.join("\n"))).toMatchObject({ detailsIncluded: true, sampleLimit: null });
+  });
+
+  it("keeps CLI event JSONL and the bounded page on one canonical operation", async () => {
+    const page = await getSessionEventsPageOperation({
+      root: fixture.rootDir,
+      sessionId: FIXTURE_IDS.ACTIVE_ID,
+      limit: 10,
+    });
+    const capture = createIo();
+
+    await expect(runCli(["events", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir], capture.io)).resolves.toBe(0);
+
+    expect(capture.stdout.map((line) => JSON.parse(line))).toEqual(page.events);
+    expect(page.completeness).toBe("complete");
   });
 });
