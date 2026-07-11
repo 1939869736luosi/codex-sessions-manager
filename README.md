@@ -177,7 +177,7 @@ For agents that benefit from structured JSON responses:
 
 Default profile is **read-only** (16 tools). For destructive operations, use `--profile admin` (22 tools).
 
-**Windows v0.6.1 is read-only.** Delete, trash, restore, purge, cleanup, and interrupted-operation recovery fail closed until the real Windows junction/reparse-point, case-handling, and abrupt-termination matrix is verified. On Windows, requesting the MCP `admin` profile still registers only the read-only tools.
+**Windows security-patch releases in the 0.6 line are read-only.** Delete, trash, restore, purge, cleanup, and interrupted-operation recovery fail closed until the real Windows junction/reparse-point, case-handling, and abrupt-termination matrix is verified. On Windows, requesting the MCP `admin` profile still registers only the read-only tools.
 
 ### 4. Ecosystem Adapters
 

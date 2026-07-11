@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.2
+
+- Reissued the security patch because `v0.6.1` reached only the non-default `security-verify` tag and its first registry verification did not complete; it was never promoted to `latest`.
+- Corrected Windows CI to test the documented read-only, fail-closed policy and path-safety invariants without running mutation suites that are intentionally unsupported on Windows.
+- Made the real-process SIGKILL recovery test wait for the post-fsync lock checkpoint, removing a macOS runner race without weakening recovery behavior.
+- Added a bounded registry-replication wait before post-publish install smoke, after the `v0.6.1` candidate published successfully but its immediate registry lookup returned `ETARGET`.
+
 ## 0.6.1
 
 ### Security

@@ -166,7 +166,7 @@ cp -r skills/codex-sessions-manager/* .agents/skills/codex-sessions-manager/
 
 默认 **read-only** profile（16 个工具）。需要破坏性操作时使用 `--profile admin`（22 个工具）。
 
-**Windows 上的 v0.6.1 仅支持只读。** 删除、移入回收站、恢复、永久清除、索引清理和中断恢复都会直接拒绝。待真实 Windows 环境完成 junction/reparse point、大小写和异常退出测试后，才会重新开放写操作。Windows 上即使请求 MCP `admin` profile，也只注册只读工具。
+**Windows 上的 0.6 系列安全补丁仅支持只读。** 删除、移入回收站、恢复、永久清除、索引清理和中断恢复都会直接拒绝。待真实 Windows 环境完成 junction/reparse point、大小写和异常退出测试后，才会重新开放写操作。Windows 上即使请求 MCP `admin` profile，也只注册只读工具。
 
 ### 4. 生态适配器
 

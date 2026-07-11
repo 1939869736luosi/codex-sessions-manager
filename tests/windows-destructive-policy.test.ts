@@ -10,8 +10,6 @@ import {
   cleanupStaleIndexes,
   deleteSessions,
 } from "../src/core/delete.js";
-import { acquireMutationLock } from "../src/core/mutation-safety.js";
-import { createTrustedRootContext } from "../src/core/path-safety.js";
 import { recoverInterruptedOperation } from "../src/core/recovery.js";
 import { resolveSessions } from "../src/core/query.js";
 import { scanCodexRoot } from "../src/core/scan.js";
@@ -46,7 +44,7 @@ function createIo() {
   };
 }
 
-describe("Windows 0.6.1 destructive policy", () => {
+describe("Windows destructive policy", () => {
   let fixture: Fixture;
 
   beforeEach(async () => {
@@ -62,12 +60,7 @@ describe("Windows 0.6.1 destructive policy", () => {
   it("fails closed in every core mutation entrypoint while preserving files", async () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     const archived = resolveSessions(scan, [FIXTURE_IDS.ARCHIVED_ID]);
-    const trashed = await moveSessionsToTrash(scan, archived);
-    const trashId = trashed.trashEntry.trashId;
     const sessionIndexBeforeBlockedCalls = await readFile(fixture.paths.sessionIndex, "utf8");
-    const context = await createTrustedRootContext(fixture.rootDir);
-    const recoveryLock = await acquireMutationLock(context, "cleanup-index", [FIXTURE_IDS.STALE_ID]);
-    await recoveryLock.setStage("prepared");
 
     emulateWindows();
 
@@ -76,8 +69,8 @@ describe("Windows 0.6.1 destructive policy", () => {
       () => moveSessionsToTrash(scan, archived),
       () => cleanupSessionIndexes(scan, archived),
       () => cleanupStaleIndexes(scan),
-      () => restoreTrashEntry(fixture.rootDir, trashId),
-      () => purgeTrashEntry(fixture.rootDir, trashId),
+      () => restoreTrashEntry(fixture.rootDir, FIXTURE_IDS.ARCHIVED_ID),
+      () => purgeTrashEntry(fixture.rootDir, FIXTURE_IDS.ARCHIVED_ID),
       () => recoverInterruptedOperation(fixture.rootDir),
     ];
     for (const call of calls) {

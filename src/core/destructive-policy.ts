@@ -10,7 +10,7 @@ export function isDestructivePlatformSupported(platform: NodeJS.Platform = proce
 }
 
 /**
- * v0.6.1 cannot claim safe mutation semantics on Windows until the real
+ * This release cannot claim safe mutation semantics on Windows until the real
  * junction/reparse/case and abrupt-termination matrix has passed. Keep every
  * production mutation entrypoint closed there; read-only inspection remains
  * available.
@@ -19,7 +19,7 @@ export function assertDestructivePlatformSupported(platform: NodeJS.Platform = p
   if (!isDestructivePlatformSupported(platform)) {
     throw new MutationSafetyError(
       "UNSAFE_PATH",
-      "Windows destructive operations are disabled in v0.6.1; this platform is read-only until the crash and reparse-point safety matrix is verified",
+      "Windows destructive operations are disabled in this release; this platform is read-only until the crash and reparse-point safety matrix is verified",
     );
   }
 }

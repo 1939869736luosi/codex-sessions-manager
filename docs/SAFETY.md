@@ -64,7 +64,7 @@ Read-only lookup may use a unique short session-ID prefix. A confirmed delete, t
 
 The MCP `read-only` profile does not register destructive tools. Use the `admin` profile only when the host policy and user confirmation allow local mutations; `confirm=true` remains mandatory.
 
-Windows is intentionally read-only in v0.6.1. Every core mutation entrypoint fails closed, CLI confirmed writes are refused, and the MCP `admin` profile registers only read-only tools. This restriction remains until the real Windows junction/reparse-point, case-handling, permission, and abrupt-termination matrix proves the same safety invariants as the supported mutation platforms.
+Windows security-patch releases in the 0.6 line are intentionally read-only. Every core mutation entrypoint fails closed, CLI confirmed writes are refused, and the MCP `admin` profile registers only read-only tools. This restriction remains until the real Windows junction/reparse-point, case-handling, permission, and abrupt-termination matrix proves the same safety invariants as the supported mutation platforms.
 
 ## Operation Results and Recovery
 

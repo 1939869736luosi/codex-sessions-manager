@@ -64,12 +64,26 @@ jobs:
       - name: Install exact locked dependencies
         run: npm ci
 
-      - name: Run cross-platform release gates
-        run: |
-          npm run typecheck
-          npm test
-          npm run build
-          npm run pack:check
+      - name: Type-check release sources
+        run: npm run typecheck
+
+      - name: Run supported-platform release tests
+        if: runner.os != 'Windows'
+        run: npm test
+
+      - name: Verify Windows read-only safety gates
+        if: runner.os == 'Windows'
+        run: >-
+          npx vitest run
+          tests/path-safety.test.ts
+          tests/windows-destructive-policy.test.ts
+          --testTimeout=30000
+
+      - name: Build release artifact
+        run: npm run build
+
+      - name: Check release package contents
+        run: npm run pack:check
 
       - name: Enforce coverage on the release baseline
         if: matrix.os == 'ubuntu-latest' && matrix.node == 24
@@ -142,6 +156,21 @@ jobs:
 
       - name: Publish with the non-default security-verify tag
         run: npm publish "${{ steps.package.outputs.path }}" --tag security-verify
+
+      - name: Wait for registry replication
+        shell: bash
+        run: |
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          for ATTEMPT in {1..12}; do
+            if npm view "codex-sessions-manager@${PACKAGE_VERSION}" version --json > /dev/null 2>&1; then
+              exit 0
+            fi
+            if [ "${ATTEMPT}" -eq 12 ]; then
+              echo "registry did not expose ${PACKAGE_VERSION} within the bounded retry window" >&2
+              exit 1
+            fi
+            sleep 5
+          done
 
       - name: Install the exact registry version and smoke both entrypoints
         shell: bash

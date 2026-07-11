@@ -4,7 +4,7 @@ import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:f
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import Database from "better-sqlite3";
 
 import { acquireMutationLock } from "../src/core/mutation-safety.js";
@@ -22,6 +22,8 @@ import { moveSessionsToTrash } from "../src/core/trash.js";
 import { resolveSessions } from "../src/core/query.js";
 import { scanCodexRoot } from "../src/core/scan.js";
 import { exportSqliteRecordsForRestore } from "../src/core/sqlite.js";
+
+const repositoryRoot = path.resolve(import.meta.dirname, "..");
 
 function subprocessEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const environment = { ...process.env, ...overrides };
@@ -60,6 +62,18 @@ function observeChildExit(child: ReturnType<typeof spawn>): ChildExitObserver {
       return result;
     },
   };
+}
+
+async function buildCrashTestArtifacts(): Promise<void> {
+  const build = spawn(process.execPath, ["scripts/build.mjs"], {
+    cwd: repositoryRoot,
+    stdio: "ignore",
+    env: subprocessEnvironment(),
+  });
+  const [buildCode] = await once(build, "exit") as [number | null];
+  if (buildCode !== 0) {
+    throw new Error(`crash-test artifact build failed with exit code ${String(buildCode)}`);
+  }
 }
 
 function assertChildStillRunning(observer: ChildExitObserver, boundary: string): void {
@@ -119,9 +133,31 @@ async function waitForLockWithoutJournal(rootPath: string, childExit?: ChildExit
   throw new Error("timed out waiting for a durable lock before its journal");
 }
 
+async function waitForBoundaryMarker(
+  markerPath: string,
+  boundary: string,
+  childExit?: ChildExitObserver,
+): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    if (childExit) assertChildStillRunning(childExit, boundary);
+    try {
+      await access(markerPath);
+      return;
+    } catch {
+      // The child has not crossed the durable boundary yet.
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  }
+  if (childExit) assertChildStillRunning(childExit, boundary);
+  throw new Error(`timed out waiting for ${boundary}`);
+}
+
 describe("durable mutation recovery", () => {
   let sandbox: string;
   let rootDir: string;
+
+  beforeAll(buildCrashTestArtifacts, 30_000);
 
   beforeEach(async () => {
     sandbox = await mkdtemp(path.join(os.tmpdir(), "csm-recovery-"));
@@ -189,14 +225,6 @@ describe("durable mutation recovery", () => {
       operationId: lock.operationId,
     });
 
-    const repositoryRoot = path.resolve(import.meta.dirname, "..");
-    const build = spawn(process.execPath, ["scripts/build.mjs"], {
-      cwd: repositoryRoot,
-      stdio: "ignore",
-      env: subprocessEnvironment(),
-    });
-    const [buildCode] = await once(build, "exit") as [number | null];
-    expect(buildCode).toBe(0);
     const cli = spawn(
       process.execPath,
       ["dist/cli/index.js", "recover", lock.operationId, "--root", rootDir, "--yes", "--json"],
@@ -374,19 +402,14 @@ describe("durable mutation recovery", () => {
   it.runIf(process.platform !== "win32")(
     "recovers a real SIGKILL after the lock is durable but before the first journal write",
     async () => {
-      const repositoryRoot = path.resolve(import.meta.dirname, "..");
-      const build = spawn(process.execPath, ["scripts/build.mjs"], {
-        cwd: repositoryRoot,
-        stdio: "ignore",
-        env: subprocessEnvironment(),
-      });
-      const [buildCode] = await once(build, "exit") as [number | null];
-      expect(buildCode).toBe(0);
+      const boundaryMarker = path.join(sandbox, "operation-lock-committed");
       const childSource = `
+        import { writeFile } from 'node:fs/promises';
         import { createTrustedRootContext } from './dist/core/path-safety.js';
         import { acquireMutationLock, setMutationCheckpointHookForTests } from './dist/core/mutation-safety.js';
         setMutationCheckpointHookForTests(async (event) => {
           if (event.name === 'operation-lock' && event.status === 'committed') {
+            await writeFile(process.env.CSM_CRASH_MARKER, 'committed\\n', 'utf8');
             await new Promise(() => { setInterval(() => {}, 1000); });
           }
         });
@@ -398,13 +421,22 @@ describe("durable mutation recovery", () => {
         env: subprocessEnvironment({
           CSM_CRASH_ROOT: rootDir,
           CSM_CRASH_SESSION: FIXTURE_IDS.ACTIVE_ID,
+          CSM_CRASH_MARKER: boundaryMarker,
         }),
         stdio: "ignore",
       });
       const childExit = observeChildExit(child);
-      await waitForLockWithoutJournal(rootDir, childExit);
-      child.kill("SIGKILL");
-      await childExit.promise;
+      try {
+        await waitForBoundaryMarker(boundaryMarker, "durable operation-lock checkpoint", childExit);
+        await waitForLockWithoutJournal(rootDir, childExit);
+        child.kill("SIGKILL");
+        await childExit.promise;
+      } finally {
+        if (!childExit.result) {
+          child.kill("SIGKILL");
+          await childExit.promise;
+        }
+      }
 
       expect(await getRecoveryStatus(rootDir)).toMatchObject({
         pending: true,
@@ -429,14 +461,6 @@ describe("durable mutation recovery", () => {
     async () => {
       const fixture = await createFixture();
       try {
-        const repositoryRoot = path.resolve(import.meta.dirname, "..");
-        const build = spawn(process.execPath, ["scripts/build.mjs"], {
-          cwd: repositoryRoot,
-          stdio: "ignore",
-          env: subprocessEnvironment(),
-        });
-        const [buildCode] = await once(build, "exit") as [number | null];
-        expect(buildCode).toBe(0);
         const childSource = `
           import { scanCodexRoot } from './dist/core/scan.js';
           import { resolveSessions } from './dist/core/query.js';
@@ -488,14 +512,6 @@ describe("durable mutation recovery", () => {
     async () => {
       const fixture = await createFixture();
       try {
-        const repositoryRoot = path.resolve(import.meta.dirname, "..");
-        const build = spawn(process.execPath, ["scripts/build.mjs"], {
-          cwd: repositoryRoot,
-          stdio: "ignore",
-          env: subprocessEnvironment(),
-        });
-        const [buildCode] = await once(build, "exit") as [number | null];
-        expect(buildCode).toBe(0);
         const logsBefore = fixture.paths.logsSqlite ? await readFile(fixture.paths.logsSqlite) : null;
         const childSource = `
           import { scanCodexRoot } from './dist/core/scan.js';
@@ -558,14 +574,6 @@ describe("durable mutation recovery", () => {
           resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID]),
           { allowActive: true },
         );
-        const repositoryRoot = path.resolve(import.meta.dirname, "..");
-        const build = spawn(process.execPath, ["scripts/build.mjs"], {
-          cwd: repositoryRoot,
-          stdio: "ignore",
-          env: subprocessEnvironment(),
-        });
-        const [buildCode] = await once(build, "exit") as [number | null];
-        expect(buildCode).toBe(0);
         const childSource = `
           import { restoreTrashEntry } from './dist/core/trash.js';
           import { setMutationCheckpointHookForTests } from './dist/core/mutation-safety.js';
@@ -614,14 +622,6 @@ describe("durable mutation recovery", () => {
     async () => {
       const fixture = await createFixture();
       try {
-        const repositoryRoot = path.resolve(import.meta.dirname, "..");
-        const build = spawn(process.execPath, ["scripts/build.mjs"], {
-          cwd: repositoryRoot,
-          stdio: "ignore",
-          env: subprocessEnvironment(),
-        });
-        const [buildCode] = await once(build, "exit") as [number | null];
-        expect(buildCode).toBe(0);
         const childSource = `
           import { scanCodexRoot } from './dist/core/scan.js';
           import { resolveSessions } from './dist/core/query.js';
@@ -673,14 +673,6 @@ describe("durable mutation recovery", () => {
           scan,
           resolveSessions(scan, [FIXTURE_IDS.ARCHIVED_ID]),
         );
-        const repositoryRoot = path.resolve(import.meta.dirname, "..");
-        const build = spawn(process.execPath, ["scripts/build.mjs"], {
-          cwd: repositoryRoot,
-          stdio: "ignore",
-          env: subprocessEnvironment(),
-        });
-        const [buildCode] = await once(build, "exit") as [number | null];
-        expect(buildCode).toBe(0);
         const childSource = `
           import { purgeTrashEntry } from './dist/core/trash.js';
           import { setMutationCheckpointHookForTests } from './dist/core/mutation-safety.js';

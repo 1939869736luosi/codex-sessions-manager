@@ -53,7 +53,7 @@ The intended safety model is:
 - Confirmed destructive session operations require canonical full UUIDs, and
   active-session deletion requires an additional explicit override.
 - MCP's read-only profile does not register destructive tools.
-- Windows v0.6.1 is read-only: core and CLI mutations fail closed, and MCP does not register destructive tools even when `--profile admin` is requested. Mutation support will remain disabled until the real Windows reparse-point and crash matrix is verified.
+- Windows security-patch releases in the 0.6 line are read-only: core and CLI mutations fail closed, and MCP does not register destructive tools even when `--profile admin` is requested. Mutation support will remain disabled until the real Windows reparse-point and crash matrix is verified.
 - Delete plans and previews are not authorization tokens.
 - Confirmed mutation fixes a canonical trusted root, rejects unsafe managed
   links and path escapes, and repeats path and identity checks before writing.

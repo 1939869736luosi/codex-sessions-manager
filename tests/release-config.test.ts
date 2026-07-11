@@ -79,6 +79,9 @@ describe("release configuration", () => {
     expect(workflow).toContain("os: windows-latest");
     expect(workflow).toContain("npm run typecheck");
     expect(workflow).toContain("npm test");
+    expect(workflow).toContain("if: runner.os != 'Windows'");
+    expect(workflow).toContain("tests/windows-destructive-policy.test.ts");
+    expect(workflow).toContain("--testTimeout=30000");
     expect(workflow).toContain("npm run test:coverage");
     expect(workflow).toContain("npm run build");
     expect(workflow).toContain("npm run pack:check");
@@ -93,6 +96,9 @@ describe("release configuration", () => {
     expect(releaseWorkflow).toContain("id-token: write");
     expect(releaseWorkflow).toContain("npm@11.16.0");
     expect(releaseWorkflow).toContain("--tag security-verify");
+    expect(releaseWorkflow).toContain("Wait for registry replication");
+    expect(releaseWorkflow).toContain('npm view "codex-sessions-manager@${PACKAGE_VERSION}" version');
+    expect(releaseWorkflow).toContain("for ATTEMPT in {1..12}");
     expect(releaseWorkflow).toContain("Compare the registry tarball with the reviewed tarball");
     expect(releaseWorkflow).not.toContain("dist-tag add");
     expect(releaseWorkflow).toContain("needs: [release-metadata, verify-matrix, production-audit]");
@@ -103,6 +109,10 @@ describe("release configuration", () => {
     expect(releaseWorkflow).toContain("node: 24");
     expect(releaseWorkflow).toContain("os: macos-latest");
     expect(releaseWorkflow).toContain("os: windows-latest");
+    expect(releaseWorkflow).toContain("if: runner.os != 'Windows'");
+    expect(releaseWorkflow).toContain("Verify Windows read-only safety gates");
+    expect(releaseWorkflow).toContain("tests/windows-destructive-policy.test.ts");
+    expect(releaseWorkflow).toContain("--testTimeout=30000");
     expect(releaseWorkflow).toContain("npm run test:coverage");
     expect(releaseWorkflow).toContain("npm audit --omit=dev --audit-level=high");
 
