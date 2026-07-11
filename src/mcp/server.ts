@@ -14,8 +14,20 @@ import {
   listSessionsOperation,
 } from "../application/session-operations.js";
 import { getSessionEventsPageOperation } from "../application/event-operations.js";
-import { buildRootDeletePreview, buildRootResidueAudit, buildSessionResidueAudit } from "../core/audit.js";
-import { exportSessionBackup } from "../core/backup.js";
+import {
+  auditRootOperation,
+  auditSessionOperation,
+  exportSessionOperation,
+  getRecoveryStatusOperation,
+  getSessionFamilyOperation,
+  listProjectsOperation,
+  listTrashOperation,
+  planDeleteOperation,
+  previewDeletePlanOperation,
+  previewRootDeleteOperation,
+  summarizeSourcesOperation,
+  verifySessionsOperation,
+} from "../application/read-operations.js";
 import { assertConfirmedSessionSelection, isDestructivePlatformSupported } from "../core/destructive-policy.js";
 import {
   buildDeletePreview,
@@ -24,17 +36,14 @@ import {
   deleteSessions,
   previewCleanupSessionIndexes,
   previewCleanupStaleIndexes,
-  validateDeletion,
 } from "../core/delete.js";
-import { buildSessionFamilyQuery, FAMILY_MODES } from "../core/family.js";
-import { parseDeletePlanObject, previewDeletePlan, readDeletePlanFile } from "../core/plan-file.js";
-import { buildPlanDelete } from "../core/plan-delete.js";
+import { FAMILY_MODES } from "../core/family.js";
 import { groupSessionsByProject, listProjectSummaries } from "../core/project.js";
 import { resolveSessions } from "../core/query.js";
 import { scanCodexRoot } from "../core/scan.js";
 import { assertCanonicalSessionIds, MutationSafetyError } from "../core/mutation-safety.js";
-import { getRecoveryStatus, recoverInterruptedOperation } from "../core/recovery.js";
-import { SOURCE_KINDS, summarizeSources } from "../core/sources.js";
+import { recoverInterruptedOperation } from "../core/recovery.js";
+import { SOURCE_KINDS } from "../core/sources.js";
 import {
   MAX_CANONICAL_EVENT_PAGE_BYTES,
   MAX_CANONICAL_EVENT_PAGE_SIZE,
@@ -505,13 +514,8 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       },
     },
     async ({ root }) => {
-      const scan = await scanCodexRoot(root);
-      const summary = summarizeSources(scan.sessions);
-      return textResult(`Summarized sources for ${summary.totalSessions} sessions.`, {
-        root: scan.root,
-        warnings: scan.warnings,
-        summary,
-      });
+      const result = await summarizeSourcesOperation({ root });
+      return textResult(`Summarized sources for ${result.data.summary.totalSessions} sessions.`, result.data);
     },
   );
 
@@ -529,13 +533,8 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       },
     },
     async ({ root }) => {
-      const scan = await scanCodexRoot(root);
-      const projects = listProjectSummaries(scan.sessions);
-      return textResult(`Found ${projects.length} projects.`, {
-        root: scan.root,
-        warnings: scan.warnings,
-        projects,
-      });
+      const result = await listProjectsOperation({ root });
+      return textResult(`Found ${result.data.projects.length} projects.`, result.data);
     },
   );
 
@@ -617,13 +616,8 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       },
     },
     async ({ sessionId, root, mode, sourceKind }) => {
-      const scan = await scanCodexRoot(root);
-      const query = buildSessionFamilyQuery(scan, sessionId, { mode, sourceKind });
-      return textResult(`Loaded session family for ${query.family.current.sessionId}.`, {
-        root: scan.root,
-        warnings: scan.warnings,
-        ...query,
-      });
+      const result = await getSessionFamilyOperation({ root, sessionId, mode, sourceKind });
+      return textResult(`Loaded session family for ${result.data.family.current.sessionId}.`, result.data);
     },
   );
 
@@ -643,10 +637,9 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       },
     },
     async ({ sessionId, root }) => {
-      const scan = await scanCodexRoot(root);
-      const audit = buildSessionResidueAudit(scan, sessionId);
-      return textResult(`Audited session ${audit.sessionId}. Status: ${audit.overallStatus.join(", ")}.`, {
-        audit,
+      const result = await auditSessionOperation({ root, sessionId });
+      return textResult(`Audited session ${result.data.sessionId}. Status: ${result.data.overallStatus.join(", ")}.`, {
+        audit: result.data,
       });
     },
   );
@@ -670,13 +663,14 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       },
     },
     async ({ root, limit, status, source, all }) => {
-      const scan = await scanCodexRoot(root);
-      const audit = buildRootResidueAudit(scan, {
+      const result = await auditRootOperation({
+        root,
         limit,
         includeAll: all,
         statuses: typeof status === "string" ? [status] : status,
         sources: typeof source === "string" ? [source] : source,
       });
+      const audit = result.data;
       return textResult(
         audit.totalCandidatesAfterFilter === 0
           ? `No likely residue candidates found in ${audit.rootPath}.`
@@ -705,13 +699,14 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       },
     },
     async ({ root, limit, status, source, all }) => {
-      const scan = await scanCodexRoot(root);
-      const preview = buildRootDeletePreview(scan, {
+      const result = await previewRootDeleteOperation({
+        root,
         limit,
         includeAll: all,
         statuses: typeof status === "string" ? [status] : status,
         sources: typeof source === "string" ? [source] : source,
       });
+      const preview = result.data;
       return textResult(
         `Prepared read-only root delete preview for ${preview.previewedCandidates} of ${preview.totalCandidatesAfterFilter} matching candidates. No session was deleted or recommended for deletion.`,
         preview as unknown as Record<string, unknown>,
@@ -735,10 +730,8 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       },
     },
     async ({ sessionId, root }) => {
-      const scan = await scanCodexRoot(root);
-      const session = resolveSessions(scan, [sessionId])[0];
-      const bundle = await exportSessionBackup(scan, session);
-      return textResult(`Exported backup bundle for ${session.id}.`, { bundle });
+      const result = await exportSessionOperation({ root, sessionId });
+      return textResult(`Exported backup bundle for ${result.session.id}.`, { bundle: result.data });
     },
   );
 
@@ -810,17 +803,21 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
         if (sourceKinds.includes("unknown")) {
           throw new Error("unknown sourceKind must be reviewed by explicit session ID；不支持 root-level unknown candidate plan。");
         }
-        const scan = await scanCodexRoot(root);
-        const plan = buildPlanDelete(scan, [], {
+        const result = await planDeleteOperation({
+          root,
+          sessionIds: [],
+          options: {
           candidateSource: {
             sourceKinds,
             statuses,
             limit: normalizePlanDeleteLimit(limit),
           },
+          },
         });
+        const plan = result.data;
         return textResult(
           `Prepared read-only sourceKind candidate plan with ${plan.candidateIds?.length ?? 0} candidates. No selectedIds were produced and no deletion can be executed from this plan.`,
-          { readOnly: true, executionSupported: false, plan, warnings: scan.warnings },
+          { readOnly: true, executionSupported: false, plan, warnings: result.scan.warnings },
         );
       }
 
@@ -830,16 +827,15 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       if (statuses.length > 0 || limit !== undefined) {
         throw new Error("plan_delete_sessions explicit-ID mode does not support status or limit filters.");
       }
-      const scan = await scanCodexRoot(root);
-      const plan = buildPlanDelete(scan, sessionIds, {
-        includeChildren,
-        includeSubagents,
-        includeDescendants,
-        includeFamily,
+      const result = await planDeleteOperation({
+        root,
+        sessionIds,
+        options: { includeChildren, includeSubagents, includeDescendants, includeFamily },
       });
+      const plan = result.data;
       return textResult(
         `Prepared read-only delete plan for ${plan.seedSessionIds.length} explicit sessions. No deletion can be executed from this plan.`,
-        { readOnly: true, executionSupported: false, plan, warnings: scan.warnings },
+        { readOnly: true, executionSupported: false, plan, warnings: result.scan.warnings },
       );
     },
   );
@@ -864,9 +860,8 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       if ((planFile ? 1 : 0) + (plan ? 1 : 0) !== 1) {
         throw new Error("preview_delete_plan requires exactly one of planFile or plan.");
       }
-      const scan = await scanCodexRoot(root);
-      const deletePlan = planFile ? await readDeletePlanFile(planFile) : parseDeletePlanObject(plan);
-      const preview = await previewDeletePlan(scan, deletePlan);
+      const result = await previewDeletePlanOperation({ root, planFile, plan });
+      const preview = result.data;
       return textResult(
         preview.stale
           ? "Plan is stale; no current delete preview was produced."
@@ -890,10 +885,8 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       },
     },
     async ({ root }) => {
-      const scan = await scanCodexRoot(root);
-      const entries = await listTrashEntries(scan.root.rootPath);
-      const duplicateSessionIds = summarizeTrashDuplicateSessions(entries);
-      return textResult(`Found ${entries.length} trash entries.`, { root: scan.root, entries, duplicateSessionIds });
+      const result = await listTrashOperation({ root });
+      return textResult(`Found ${result.data.entries.length} trash entries.`, result.data);
     },
   );
 
@@ -903,10 +896,10 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       description: "Read-only status for an interrupted local mutation. Returns its exact operationId and durable checkpoints without changing data.",
       outputSchema: TOOL_OUTPUT_SCHEMA,
       inputSchema: z.object({ root: z.string().optional() }),
-      annotations: { readOnlyHint: true, idempotentHint: true },
+    annotations: { readOnlyHint: true, idempotentHint: true },
     },
     async ({ root }) => {
-      const status = await getRecoveryStatus(root);
+      const { data: status } = await getRecoveryStatusOperation({ root });
       const message = !status.pending
         ? "No interrupted mutation is pending."
         : status.invalidReason
@@ -931,7 +924,7 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       },
       async ({ operationId, root, confirm }) => {
         assertCanonicalSessionIds([operationId]);
-        const status = await getRecoveryStatus(root);
+        const { data: status } = await getRecoveryStatusOperation({ root });
         if (!status.pending || status.operationId !== operationId) {
           throw new MutationSafetyError("RECOVERY_REQUIRED", `no matching interrupted operation: ${operationId}`);
         }
@@ -1181,10 +1174,8 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       },
     },
     async ({ sessionIds, root }) => {
-      const scan = await scanCodexRoot(root);
-      const sessions = resolveSessions(scan, sessionIds);
-      const result = await validateDeletion(scan, sessions);
-      return textResult(`Verified ${sessions.length} sessions.`, { results: result });
+      const result = await verifySessionsOperation({ root, sessionIds });
+      return textResult(`Verified ${result.sessions.length} sessions.`, { results: result.data });
     },
   );
 

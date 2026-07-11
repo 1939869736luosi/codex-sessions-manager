@@ -6,6 +6,14 @@ import {
   listSessionsOperation,
 } from "../src/application/session-operations.js";
 import { getSessionEventsPageOperation } from "../src/application/event-operations.js";
+import {
+  auditSessionOperation,
+  getSessionFamilyOperation,
+  listProjectsOperation,
+  planDeleteOperation,
+  summarizeSourcesOperation,
+  verifySessionsOperation,
+} from "../src/application/read-operations.js";
 import { runCli } from "../src/cli/run.js";
 import { createFixture, FIXTURE_IDS, type Fixture } from "./helpers/fixture.js";
 
@@ -111,5 +119,34 @@ describe("shared application operations", () => {
 
     expect(capture.stdout.map((line) => JSON.parse(line))).toEqual(page.events);
     expect(page.completeness).toBe("complete");
+  });
+
+  it.each([
+    ["sources", () => summarizeSourcesOperation({ root: fixture.rootDir })],
+    ["projects", () => listProjectsOperation({ root: fixture.rootDir })],
+    ["family", () => getSessionFamilyOperation({ root: fixture.rootDir, sessionId: FIXTURE_IDS.ACTIVE_ID })],
+    ["audit", () => auditSessionOperation({ root: fixture.rootDir, sessionId: FIXTURE_IDS.ACTIVE_ID })],
+    ["verify", () => verifySessionsOperation({ root: fixture.rootDir, sessionIds: [FIXTURE_IDS.ARCHIVED_ID] })],
+  ])("uses one canonical read operation for CLI %s JSON", async (command, operationFactory) => {
+    const operation = await operationFactory();
+    const capture = createIo();
+    const args = command === "sources" || command === "projects"
+      ? [command, "--root", fixture.rootDir, "--json"]
+      : [command, command === "verify" ? FIXTURE_IDS.ARCHIVED_ID : FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir, "--json"];
+
+    await expect(runCli(args, capture.io)).resolves.toBe(0);
+    expect(JSON.parse(capture.stdout.join("\n"))).toEqual(operation.data);
+  });
+
+  it("uses one canonical explicit-ID plan operation", async () => {
+    const operation = await planDeleteOperation({
+      root: fixture.rootDir,
+      sessionIds: [FIXTURE_IDS.ARCHIVED_ID],
+      options: {},
+    });
+    const capture = createIo();
+
+    await expect(runCli(["plan-delete", FIXTURE_IDS.ARCHIVED_ID, "--root", fixture.rootDir, "--json"], capture.io)).resolves.toBe(0);
+    expect(JSON.parse(capture.stdout.join("\n"))).toEqual(operation.data);
   });
 });

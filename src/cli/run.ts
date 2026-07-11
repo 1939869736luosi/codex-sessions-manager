@@ -10,8 +10,21 @@ import {
   streamSessionEventsOperation,
   writeSessionEventsOperation,
 } from "../application/event-operations.js";
-import { buildRootDeletePreview, buildRootResidueAudit, buildSessionResidueAudit } from "../core/audit.js";
-import { exportSessionBackup } from "../core/backup.js";
+import {
+  auditRootOperation,
+  auditSessionOperation,
+  exportSessionOperation,
+  getRecoveryStatusOperation,
+  getSessionFamilyOperation,
+  listProjectsOperation,
+  listTrashOperation,
+  planDeleteOperation,
+  previewDeletePlanOperation,
+  previewRootDeleteOperation,
+  summarizeSourcesOperation,
+  verifySessionsOperation,
+  writeDeletePlanOperation,
+} from "../application/read-operations.js";
 import { assertConfirmedSessionSelection } from "../core/destructive-policy.js";
 import {
   buildDeletePreview,
@@ -20,18 +33,13 @@ import {
   deleteSessions,
   previewCleanupSessionIndexes,
   previewCleanupStaleIndexes,
-  validateDeletion,
 } from "../core/delete.js";
-import { buildSessionFamilyQuery } from "../core/family.js";
 import { writePrivateOutputFile } from "../core/private-output.js";
-import { previewDeletePlan, readDeletePlanFile, writeDeletePlanFile } from "../core/plan-file.js";
-import { buildPlanDelete } from "../core/plan-delete.js";
-import { listProjectSummaries } from "../core/project.js";
 import { resolveSessions } from "../core/query.js";
 import { scanCodexRoot } from "../core/scan.js";
 import { assertCanonicalSessionIds, MutationSafetyError } from "../core/mutation-safety.js";
-import { getRecoveryStatus, recoverInterruptedOperation } from "../core/recovery.js";
-import { parseSourceKind, summarizeSources } from "../core/sources.js";
+import { recoverInterruptedOperation } from "../core/recovery.js";
+import { parseSourceKind } from "../core/sources.js";
 import {
   listTrashEntries,
   moveSessionsToTrash,
@@ -374,9 +382,172 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
     return 0;
   }
 
+  if (command === "sources") {
+    if (rest.length !== 0) throw new Error("sources 不接收 session-id。");
+    const result = await summarizeSourcesOperation({ root: rootArg });
+    io.stdout(asJson ? JSON.stringify(result.data, null, 2) : formatSourceSummary(result.scan, result.data.summary));
+    return 0;
+  }
+
+  if (command === "projects") {
+    if (rest.length !== 0) throw new Error("projects 不接收 session-id。");
+    const result = await listProjectsOperation({ root: rootArg });
+    io.stdout(asJson ? JSON.stringify(result.data, null, 2) : formatProjects(result.data.projects));
+    return 0;
+  }
+
+  if (command === "family") {
+    if (rest.length !== 1) throw new Error("family 需要 1 个 session-id。");
+    const selectedModes = [
+      values.children ? "children" : null,
+      values.parents ? "parents" : null,
+      values.subagents ? "subagents" : null,
+      values.impact ? "impact" : null,
+    ].filter((mode): mode is "children" | "parents" | "subagents" | "impact" => Boolean(mode));
+    if (selectedModes.length > 1) {
+      throw new Error("family 一次只能选择一个 mode：--children、--parents、--subagents 或 --impact。");
+    }
+    const result = await getSessionFamilyOperation({
+      root: rootArg,
+      sessionId: rest[0],
+      mode: selectedModes[0] ?? "full",
+      sourceKind: sourceKindValues,
+    });
+    const { root: _root, warnings: _warnings, ...query } = result.data;
+    io.stdout(asJson ? JSON.stringify(result.data, null, 2) : formatFamilyQuery(query, { full: Boolean(values.full) }));
+    return 0;
+  }
+
+  if (command === "audit") {
+    if (rest.length !== 1) throw new Error("audit 需要 1 个 session-id。");
+    const result = await auditSessionOperation({ root: rootArg, sessionId: rest[0] });
+    io.stdout(asJson ? JSON.stringify(result.data, null, 2) : formatAudit(result.data));
+    return 0;
+  }
+
+  if (command === "audit-root" || command === "preview-root") {
+    if (rest.length !== 0) throw new Error(`${command} 不接收 session-id。`);
+    if (values.yes) throw new Error(`${command} 不支持 --yes；它始终只读，不执行删除。`);
+    if (values.trash) throw new Error(`${command} 不支持 --trash；它始终只读，不执行删除。`);
+    const input = {
+      root: rootArg,
+      limit: values.limit ? Number(values.limit) : undefined,
+      includeAll: values.all,
+      statuses: statusValues,
+      sources: sourceValues,
+    };
+    if (command === "audit-root") {
+      const result = await auditRootOperation(input);
+      io.stdout(asJson ? JSON.stringify(result.data, null, 2) : formatRootResidueAudit(result.data));
+    } else {
+      const result = await previewRootDeleteOperation(input);
+      io.stdout(asJson ? JSON.stringify(result.data, null, 2) : formatRootDeletePreview(result.data));
+    }
+    return 0;
+  }
+
+  if (command === "export") {
+    if (rest.length !== 1) throw new Error("export 需要 1 个 session-id。");
+    const result = await exportSessionOperation({ root: rootArg, sessionId: rest[0] });
+    if (asJson && !values.output) {
+      io.stdout(JSON.stringify(result.data, null, 2));
+      return 0;
+    }
+    const outputPath = path.resolve(values.output ?? `${result.session.id}-backup.json`);
+    await writeBackupFile(outputPath, result.data);
+    io.stdout(formatBackup(result.data, outputPath));
+    return 0;
+  }
+
+  if (command === "trash-list") {
+    if (rest.length !== 0) throw new Error("trash-list 不接收参数。");
+    const result = await listTrashOperation({ root: rootArg });
+    io.stdout(asJson ? JSON.stringify(result.data, null, 2) : formatTrashEntries(result.data.entries));
+    return 0;
+  }
+
+  if (command === "verify") {
+    if (rest.length === 0) throw new Error("verify 至少需要 1 个 session-id。");
+    const result = await verifySessionsOperation({ root: rootArg, sessionIds: rest });
+    io.stdout(asJson ? JSON.stringify(result.data, null, 2) : formatVerifyResult(result.data));
+    return 0;
+  }
+
+  if (command === "plan-delete") {
+    if (values.yes) throw new Error("plan-delete 不支持 --yes；它始终只读，不执行删除。");
+    if (values.trash) throw new Error("plan-delete 不支持 --trash；它不会执行或生成可执行删除计划。");
+    if (rest.length === 0 && sourceKindValues.length > 0) {
+      if (values["write-plan"]) {
+        throw new Error("--write-plan 暂不支持 sourceKind candidate plan；candidateIds 不是删除授权，请改用 JSON 输出人工复核后再显式 ID 预览。");
+      }
+      if (
+        sourceValues.length > 0 || values.all || values.query || values.project || values.children ||
+        values.parents || values.subagents || values.impact || values["include-children"] ||
+        values["include-subagents"] || values["include-descendants"] || values["include-family"]
+      ) {
+        throw new Error("plan-delete --source-kind candidate plan 只支持 --source-kind、--status、--limit、--root、--json。");
+      }
+      const sourceKinds = sourceKindValues.map(parseSourceKind);
+      if (sourceKinds.includes("unknown")) {
+        throw new Error("unknown sourceKind must be reviewed by explicit session ID；不支持 root-level unknown candidate plan。");
+      }
+      const result = await planDeleteOperation({
+        root: rootArg,
+        sessionIds: [],
+        options: {
+          candidateSource: {
+            sourceKinds,
+            statuses: parsePlanDeleteStatuses(statusValues),
+            limit: parsePlanDeleteLimit(values.limit),
+          },
+        },
+      });
+      io.stdout(asJson ? JSON.stringify(result.data, null, 2) : formatPlanDelete(result.data));
+      return 0;
+    }
+    if (rest.length === 0) throw new Error("plan-delete 至少需要 1 个 session-id。");
+    if (
+      sourceKindValues.length > 0 || sourceValues.length > 0 || statusValues.length > 0 || values.all ||
+      values.query || values.project || values.limit || values.children || values.parents || values.subagents || values.impact
+    ) {
+      throw new Error("plan-delete 只支持 explicit session IDs 和 include flags；不支持 root 级批量选择或 family mode filters。");
+    }
+    const input = {
+      root: rootArg,
+      sessionIds: rest,
+      options: {
+        includeChildren: values["include-children"],
+        includeSubagents: values["include-subagents"],
+        includeDescendants: values["include-descendants"],
+        includeFamily: values["include-family"],
+      },
+    };
+    if (values["write-plan"]) {
+      const result = await writeDeletePlanOperation({ ...input, outputPath: values["write-plan"] });
+      io.stdout(
+        asJson
+          ? JSON.stringify({ planFile: values["write-plan"], ...result.data }, null, 2)
+          : `${formatPlanDelete(result.data)}\n\nplan file written: ${values["write-plan"]}`,
+      );
+      return 0;
+    }
+    const result = await planDeleteOperation(input);
+    io.stdout(asJson ? JSON.stringify(result.data, null, 2) : formatPlanDelete(result.data));
+    return 0;
+  }
+
+  if (command === "preview-plan") {
+    if (rest.length !== 1) throw new Error("preview-plan 需要 1 个 plan-file。");
+    if (values.yes) throw new Error("preview-plan 不支持 --yes；plan file 不是删除确认。");
+    if (values.trash) throw new Error("preview-plan 不支持 --trash；它始终只读，不执行删除。");
+    const result = await previewDeletePlanOperation({ root: rootArg, planFile: rest[0] });
+    io.stdout(asJson ? JSON.stringify(result.data, null, 2) : formatPreviewPlan(result.data));
+    return 0;
+  }
+
   if (command === "recovery-status") {
     if (rest.length !== 0) throw new Error("recovery-status 不接收 operation ID。");
-    const status = await getRecoveryStatus(rootArg);
+    const { data: status } = await getRecoveryStatusOperation({ root: rootArg });
     io.stdout(
       asJson
         ? JSON.stringify(status, null, 2)
@@ -392,7 +563,7 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
   if (command === "recover") {
     if (rest.length !== 1) throw new Error("recover 需要 1 个精确 operation ID。");
     assertCanonicalSessionIds([rest[0]]);
-    const status = await getRecoveryStatus(rootArg);
+    const { data: status } = await getRecoveryStatusOperation({ root: rootArg });
     if (!status.pending || status.operationId !== rest[0]) {
       throw new MutationSafetyError("RECOVERY_REQUIRED", `找不到匹配的待恢复操作：${rest[0]}`);
     }
@@ -417,122 +588,6 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
   const scan = await scanCodexRoot(rootArg);
 
   switch (command) {
-    case "sources": {
-      if (rest.length !== 0) {
-        throw new Error("sources 不接收 session-id。");
-      }
-
-      const summary = summarizeSources(scan.sessions);
-      io.stdout(asJson ? JSON.stringify({ root: scan.root, warnings: scan.warnings, summary }, null, 2) : formatSourceSummary(scan, summary));
-      return 0;
-    }
-
-    case "projects": {
-      const projects = listProjectSummaries(scan.sessions);
-      io.stdout(asJson ? JSON.stringify({ root: scan.root, warnings: scan.warnings, projects }, null, 2) : formatProjects(projects));
-      return 0;
-    }
-
-    case "family": {
-      if (rest.length !== 1) {
-        throw new Error("family 需要 1 个 session-id。");
-      }
-
-      const selectedModes = [
-        values.children ? "children" : null,
-        values.parents ? "parents" : null,
-        values.subagents ? "subagents" : null,
-        values.impact ? "impact" : null,
-      ].filter((mode): mode is "children" | "parents" | "subagents" | "impact" => Boolean(mode));
-      if (selectedModes.length > 1) {
-        throw new Error("family 一次只能选择一个 mode：--children、--parents、--subagents 或 --impact。");
-      }
-
-      const query = buildSessionFamilyQuery(scan, rest[0], {
-        mode: selectedModes[0] ?? "full",
-        sourceKind: sourceKindValues,
-      });
-      io.stdout(
-        asJson
-          ? JSON.stringify({ root: scan.root, warnings: scan.warnings, ...query }, null, 2)
-          : formatFamilyQuery(query, { full: Boolean(values.full) }),
-      );
-      return 0;
-    }
-
-    case "audit": {
-      if (rest.length !== 1) {
-        throw new Error("audit 需要 1 个 session-id。");
-      }
-
-      const audit = buildSessionResidueAudit(scan, rest[0]);
-      io.stdout(asJson ? JSON.stringify(audit, null, 2) : formatAudit(audit));
-      return 0;
-    }
-
-    case "audit-root": {
-      if (rest.length !== 0) {
-        throw new Error("audit-root 不接收 session-id。");
-      }
-      if (values.yes) {
-        throw new Error("audit-root 不支持 --yes；它始终只读，不执行删除。");
-      }
-      if (values.trash) {
-        throw new Error("audit-root 不支持 --trash；它始终只读，不执行删除。");
-      }
-
-      const limit = values.limit ? Number(values.limit) : undefined;
-      const audit = buildRootResidueAudit(scan, {
-        limit,
-        includeAll: values.all,
-        statuses: statusValues,
-        sources: sourceValues,
-      });
-      io.stdout(asJson ? JSON.stringify(audit, null, 2) : formatRootResidueAudit(audit));
-      return 0;
-    }
-
-    case "preview-root": {
-      if (rest.length !== 0) {
-        throw new Error("preview-root 不接收 session-id。");
-      }
-      if (values.yes) {
-        throw new Error("preview-root 不支持 --yes；它始终只读，不执行删除。");
-      }
-      if (values.trash) {
-        throw new Error("preview-root 不支持 --trash；它始终只生成 delete preview。");
-      }
-
-      const limit = values.limit ? Number(values.limit) : undefined;
-      const preview = buildRootDeletePreview(scan, {
-        limit,
-        includeAll: values.all,
-        statuses: statusValues,
-        sources: sourceValues,
-      });
-      io.stdout(asJson ? JSON.stringify(preview, null, 2) : formatRootDeletePreview(preview));
-      return 0;
-    }
-
-    case "export": {
-      if (rest.length !== 1) {
-        throw new Error("export 需要 1 个 session-id。");
-      }
-
-      const session = resolveSessions(scan, [rest[0]])[0];
-      const bundle = await exportSessionBackup(scan, session);
-
-      if (asJson && !values.output) {
-        io.stdout(JSON.stringify(bundle, null, 2));
-        return 0;
-      }
-
-      const outputPath = path.resolve(values.output ?? `${session.id}-backup.json`);
-      await writeBackupFile(outputPath, bundle);
-      io.stdout(formatBackup(bundle, outputPath));
-      return 0;
-    }
-
     case "delete": {
       if (rest.length === 0) {
         throw new Error("delete 至少需要 1 个 session-id。");
@@ -573,111 +628,6 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
       const result = await deleteSessions(scan, sessions, { allowActive: values["allow-active"] });
       io.stdout(asJson ? JSON.stringify(result, null, 2) : formatDeleteResult(result));
       return mutationExitCode(result);
-    }
-
-    case "plan-delete": {
-      if (values.yes) {
-        throw new Error("plan-delete 不支持 --yes；它始终只读，不执行删除。");
-      }
-      if (values.trash) {
-        throw new Error("plan-delete 不支持 --trash；它不会执行或生成可执行删除计划。");
-      }
-      if (rest.length === 0 && sourceKindValues.length > 0) {
-        if (values["write-plan"]) {
-          throw new Error("--write-plan 暂不支持 sourceKind candidate plan；candidateIds 不是删除授权，请改用 JSON 输出人工复核后再显式 ID 预览。");
-        }
-        if (
-          sourceValues.length > 0 ||
-          values.all ||
-          values.query ||
-          values.project ||
-          values.children ||
-          values.parents ||
-          values.subagents ||
-          values.impact ||
-          values["include-children"] ||
-          values["include-subagents"] ||
-          values["include-descendants"] ||
-          values["include-family"]
-        ) {
-          throw new Error("plan-delete --source-kind candidate plan 只支持 --source-kind、--status、--limit、--root、--json。");
-        }
-        const limit = parsePlanDeleteLimit(values.limit);
-        const sourceKinds = sourceKindValues.map(parseSourceKind);
-        if (sourceKinds.includes("unknown")) {
-          throw new Error("unknown sourceKind must be reviewed by explicit session ID；不支持 root-level unknown candidate plan。");
-        }
-        const statuses = parsePlanDeleteStatuses(statusValues);
-        const plan = buildPlanDelete(scan, [], {
-          candidateSource: {
-            sourceKinds,
-            statuses,
-            limit,
-          },
-        });
-        io.stdout(asJson ? JSON.stringify(plan, null, 2) : formatPlanDelete(plan));
-        return 0;
-      }
-      if (rest.length === 0) {
-        throw new Error("plan-delete 至少需要 1 个 session-id。");
-      }
-      if (
-        sourceKindValues.length > 0 ||
-        sourceValues.length > 0 ||
-        statusValues.length > 0 ||
-        values.all ||
-        values.query ||
-        values.project ||
-        values.limit ||
-        values.children ||
-        values.parents ||
-        values.subagents ||
-        values.impact
-      ) {
-        throw new Error("plan-delete 只支持 explicit session IDs 和 include flags；不支持 root 级批量选择或 family mode filters。");
-      }
-
-      const plan = buildPlanDelete(scan, rest, {
-        includeChildren: values["include-children"],
-        includeSubagents: values["include-subagents"],
-        includeDescendants: values["include-descendants"],
-        includeFamily: values["include-family"],
-      });
-      if (values["write-plan"]) {
-        const planFile = await writeDeletePlanFile(values["write-plan"], scan, plan);
-        io.stdout(
-          asJson
-            ? JSON.stringify({ planFile: values["write-plan"], ...planFile }, null, 2)
-            : `${formatPlanDelete(planFile)}\n\nplan file written: ${values["write-plan"]}`,
-        );
-        return 0;
-      }
-
-      io.stdout(asJson ? JSON.stringify(plan, null, 2) : formatPlanDelete(plan));
-      return 0;
-    }
-
-    case "preview-plan": {
-      if (rest.length !== 1) {
-        throw new Error("preview-plan 需要 1 个 plan-file。");
-      }
-      if (values.yes) {
-        throw new Error("preview-plan 不支持 --yes；plan file 不是删除确认。");
-      }
-      if (values.trash) {
-        throw new Error("preview-plan 不支持 --trash；它始终只读，不执行删除。");
-      }
-      const planFile = await readDeletePlanFile(rest[0]);
-      const preview = await previewDeletePlan(scan, planFile);
-      io.stdout(asJson ? JSON.stringify(preview, null, 2) : formatPreviewPlan(preview));
-      return 0;
-    }
-
-    case "trash-list": {
-      const entries = await listTrashEntries(scan.root.rootPath);
-      const duplicateSessionIds = summarizeTrashDuplicateSessions(entries);
-      io.stdout(asJson ? JSON.stringify({ root: scan.root, entries, duplicateSessionIds }, null, 2) : formatTrashEntries(entries));
-      return 0;
     }
 
     case "restore": {
@@ -771,17 +721,6 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
       const result = await cleanupStaleIndexes(scan);
       io.stdout(asJson ? JSON.stringify(result, null, 2) : formatCleanupResult(result));
       return mutationExitCode(result);
-    }
-
-    case "verify": {
-      if (rest.length === 0) {
-        throw new Error("verify 至少需要 1 个 session-id。");
-      }
-
-      const sessions = resolveSessions(scan, rest);
-      const result = await validateDeletion(scan, sessions);
-      io.stdout(asJson ? JSON.stringify(result, null, 2) : formatVerifyResult(result));
-      return 0;
     }
 
     default:
