@@ -1,10 +1,14 @@
 import path from "node:path";
 import { parseArgs } from "node:util";
 
+import {
+  getSessionOperation,
+  inspectRootOperation,
+  listSessionsOperation,
+} from "../application/session-operations.js";
 import { buildRootDeletePreview, buildRootResidueAudit, buildSessionResidueAudit } from "../core/audit.js";
 import { exportSessionBackup } from "../core/backup.js";
 import { assertConfirmedSessionSelection } from "../core/destructive-policy.js";
-import { inspectCodexRoot } from "../core/doctor.js";
 import {
   buildDeletePreview,
   cleanupSessionIndexes,
@@ -19,12 +23,11 @@ import { writePrivateOutputFile } from "../core/private-output.js";
 import { previewDeletePlan, readDeletePlanFile, writeDeletePlanFile } from "../core/plan-file.js";
 import { buildPlanDelete } from "../core/plan-delete.js";
 import { listProjectSummaries } from "../core/project.js";
-import { filterSessions, resolveSessions } from "../core/query.js";
+import { resolveSessions } from "../core/query.js";
 import { scanCodexRoot } from "../core/scan.js";
 import { assertCanonicalSessionIds, MutationSafetyError } from "../core/mutation-safety.js";
 import { getRecoveryStatus, recoverInterruptedOperation } from "../core/recovery.js";
 import { parseSourceKind, summarizeSources } from "../core/sources.js";
-import { readSessionTimelineResult } from "../core/timeline.js";
 import {
   listTrashEntries,
   moveSessionsToTrash,
@@ -285,8 +288,60 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
   const modelProviderValues = normalizeOptionValues(values["model-provider"]);
   const modelValues = normalizeOptionValues(values.model);
   if (command === "doctor") {
-    const report = await inspectCodexRoot(rootArg);
+    const { report } = await inspectRootOperation({ root: rootArg });
     io.stdout(asJson ? JSON.stringify(report, null, 2) : formatDoctor(report));
+    return 0;
+  }
+
+  if (command === "list" || command === "scan") {
+    if (values["group-by"] && values["group-by"] !== "project") {
+      throw new Error(`不支持的 group-by：${values["group-by"]}`);
+    }
+    if (statusValues.length > 1) {
+      throw new Error("list 只支持一个 --status。");
+    }
+    const result = await listSessionsOperation({
+      root: rootArg,
+      groupBy: values["group-by"] as "project" | undefined,
+      filters: {
+        query: values.query,
+        project: values.project,
+        status: (statusValues[0] as "all" | "active" | "archived" | "db-only" | "stale" | undefined) ?? "all",
+        limit: values.limit ? Number(values.limit) : undefined,
+        updatedAfter: values["updated-after"],
+        updatedBefore: values["updated-before"],
+        createdAfter: values["created-after"],
+        createdBefore: values["created-before"],
+        sourceKind: sourceKindValues,
+        source: sourceValues,
+        threadSource: threadSourceValues,
+        agentRole: agentRoleValues,
+        agentNickname: agentNicknameValues,
+        modelProvider: modelProviderValues,
+        model: modelValues,
+      },
+    });
+    io.stdout(
+      asJson
+        ? JSON.stringify(result.data, null, 2)
+        : values["group-by"] === "project"
+          ? formatGroupedList(result.scan, result.data.sessions)
+          : formatList(result.scan, result.data.sessions),
+    );
+    return 0;
+  }
+
+  if (command === "show") {
+    if (rest.length !== 1) {
+      throw new Error("show 需要 1 个 session-id。");
+    }
+    const result = await getSessionOperation({ root: rootArg, sessionId: rest[0] });
+    const { session, timeline, ...timelineMetadata } = result.data;
+    io.stdout(
+      asJson
+        ? JSON.stringify(result.data, null, 2)
+        : formatShow(session, timeline, timelineMetadata),
+    );
     return 0;
   }
 
@@ -333,53 +388,6 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
   const scan = await scanCodexRoot(rootArg);
 
   switch (command) {
-    case "scan":
-    case "list": {
-      const sessions = filterSessions(scan, {
-        query: values.query,
-        project: values.project,
-        status: (statusValues[0] as "all" | "active" | "archived" | "db-only" | "stale" | undefined) ?? "all",
-        limit: values.limit ? Number(values.limit) : undefined,
-        updatedAfter: values["updated-after"],
-        updatedBefore: values["updated-before"],
-        createdAfter: values["created-after"],
-        createdBefore: values["created-before"],
-        sourceKind: sourceKindValues,
-        source: sourceValues,
-        threadSource: threadSourceValues,
-        agentRole: agentRoleValues,
-        agentNickname: agentNicknameValues,
-        modelProvider: modelProviderValues,
-        model: modelValues,
-      });
-
-      if (values["group-by"] && values["group-by"] !== "project") {
-        throw new Error(`不支持的 group-by：${values["group-by"]}`);
-      }
-
-      if (statusValues.length > 1) {
-        throw new Error("list 只支持一个 --status。");
-      }
-
-      if (asJson) {
-        io.stdout(
-          JSON.stringify(
-            {
-              root: scan.root,
-              warnings: scan.warnings,
-              sessions,
-              projectSummaries: values["group-by"] === "project" ? listProjectSummaries(sessions) : undefined,
-            },
-            null,
-            2,
-          ),
-        );
-      } else {
-        io.stdout(values["group-by"] === "project" ? formatGroupedList(scan, sessions) : formatList(scan, sessions));
-      }
-      return 0;
-    }
-
     case "sources": {
       if (rest.length !== 0) {
         throw new Error("sources 不接收 session-id。");
@@ -393,22 +401,6 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
     case "projects": {
       const projects = listProjectSummaries(scan.sessions);
       io.stdout(asJson ? JSON.stringify({ root: scan.root, warnings: scan.warnings, projects }, null, 2) : formatProjects(projects));
-      return 0;
-    }
-
-    case "show": {
-      if (rest.length !== 1) {
-        throw new Error("show 需要 1 个 session-id。");
-      }
-
-      const session = resolveSessions(scan, [rest[0]])[0];
-      const timelineResult = await readSessionTimelineResult(session);
-      const { items: timeline, ...timelineMetadata } = timelineResult;
-      io.stdout(
-        asJson
-          ? JSON.stringify({ session, timeline, ...timelineMetadata }, null, 2)
-          : formatShow(session, timeline, timelineMetadata),
-      );
       return 0;
     }
 

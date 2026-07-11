@@ -8,10 +8,14 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
+import {
+  getSessionOperation,
+  inspectRootOperation,
+  listSessionsOperation,
+} from "../application/session-operations.js";
 import { buildRootDeletePreview, buildRootResidueAudit, buildSessionResidueAudit } from "../core/audit.js";
 import { exportSessionBackup } from "../core/backup.js";
 import { assertConfirmedSessionSelection, isDestructivePlatformSupported } from "../core/destructive-policy.js";
-import { inspectCodexRoot } from "../core/doctor.js";
 import {
   buildDeletePreview,
   cleanupSessionIndexes,
@@ -25,12 +29,11 @@ import { buildSessionFamilyQuery, FAMILY_MODES } from "../core/family.js";
 import { parseDeletePlanObject, previewDeletePlan, readDeletePlanFile } from "../core/plan-file.js";
 import { buildPlanDelete } from "../core/plan-delete.js";
 import { groupSessionsByProject, listProjectSummaries } from "../core/project.js";
-import { filterSessions, resolveSessions } from "../core/query.js";
+import { resolveSessions } from "../core/query.js";
 import { scanCodexRoot } from "../core/scan.js";
 import { assertCanonicalSessionIds, MutationSafetyError } from "../core/mutation-safety.js";
 import { getRecoveryStatus, recoverInterruptedOperation } from "../core/recovery.js";
 import { SOURCE_KINDS, summarizeSources } from "../core/sources.js";
-import { readSessionTimelineResult } from "../core/timeline.js";
 import {
   listTrashEntries,
   moveSessionsToTrash,
@@ -396,8 +399,11 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       },
     },
     async ({ root }) => {
-      const report = await inspectCodexRoot(root);
-      return textResult(`Inspected Codex root ${report.rootPath}.`, { report, warnings: report.warnings });
+      const result = await inspectRootOperation({ root });
+      return textResult(`Inspected Codex root ${result.report.rootPath}.`, {
+        report: result.report,
+        warnings: result.warnings,
+      });
     },
   );
 
@@ -450,25 +456,28 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       modelProvider,
       model,
     }) => {
-      const scan = await scanCodexRoot(root);
-      const matches = filterSessions(scan, {
-        query,
-        project,
-        status,
-        updatedAfter,
-        updatedBefore,
-        createdAfter,
-        createdBefore,
-        sourceKind,
-        source,
-        threadSource,
-        agentRole,
-        agentNickname,
-        modelProvider,
-        model,
+      const operation = await listSessionsOperation({
+        root,
+        filters: {
+          query,
+          project,
+          status,
+          updatedAfter,
+          updatedBefore,
+          createdAfter,
+          createdBefore,
+          sourceKind,
+          source,
+          threadSource,
+          agentRole,
+          agentNickname,
+          modelProvider,
+          model,
+        },
       });
+      const matches = operation.data.sessions;
       const limitApplied = limit ?? MCP_LIST_DEFAULT_LIMIT;
-      const payload = buildMcpSessionListPayload(scan, matches, limitApplied, groupBy);
+      const payload = buildMcpSessionListPayload(operation.scan, matches, limitApplied, groupBy);
       return textResult(
         `Returned ${payload.sessionsReturned as number} of ${matches.length} matching sessions.`,
         payload,
@@ -540,15 +549,18 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       },
     },
     async ({ sessionId, root, detail = "compact" }) => {
-      const scan = await scanCodexRoot(root);
-      const session = resolveSessions(scan, [sessionId])[0];
       const limit = MCP_SESSION_LIMITS[detail];
-      const result = await readSessionTimelineResult(session, undefined, {
-        maxItems: limit.items,
-        maxTimelineBytes: limit.bytes,
-        maxReadBytes: limit.readBytes,
+      const operation = await getSessionOperation({
+        root,
+        sessionId,
+        timelineLimits: {
+          maxItems: limit.items,
+          maxTimelineBytes: limit.bytes,
+          maxReadBytes: limit.readBytes,
+        },
       });
-      const payload = buildMcpSessionPayload(session, result, detail);
+      const { session, timeline: items, ...metadata } = operation.data;
+      const payload = buildMcpSessionPayload(session, { items, ...metadata }, detail);
       return textResult(
         `Loaded ${payload.itemsReturned as number}/${payload.itemsKnown ?? "unknown"} timeline items for session ${session.id} (${payload.completeness as string}).`,
         payload,
