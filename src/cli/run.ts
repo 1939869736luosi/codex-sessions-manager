@@ -25,29 +25,16 @@ import {
   verifySessionsOperation,
   writeDeletePlanOperation,
 } from "../application/read-operations.js";
-import { assertConfirmedSessionSelection } from "../core/destructive-policy.js";
 import {
-  buildDeletePreview,
-  cleanupSessionIndexes,
-  cleanupStaleIndexes,
-  deleteSessions,
-  previewCleanupSessionIndexes,
-  previewCleanupStaleIndexes,
-} from "../core/delete.js";
+  cleanupSessionIndexesOperation,
+  cleanupStaleIndexesOperation,
+  deleteSessionsOperation,
+  purgeTrashOperation,
+  recoverOperation,
+  restoreTrashOperation,
+} from "../application/mutation-operations.js";
 import { writePrivateOutputFile } from "../core/private-output.js";
-import { resolveSessions } from "../core/query.js";
-import { scanCodexRoot } from "../core/scan.js";
-import { assertCanonicalSessionIds, MutationSafetyError } from "../core/mutation-safety.js";
-import { recoverInterruptedOperation } from "../core/recovery.js";
 import { parseSourceKind } from "../core/sources.js";
-import {
-  listTrashEntries,
-  moveSessionsToTrash,
-  purgeTrashEntry,
-  restoreTrashEntry,
-  summarizeTrashDuplicateSessions,
-  trashEntryMatches,
-} from "../core/trash.js";
 import type { SessionKind } from "../core/types.js";
 import {
   formatAudit,
@@ -562,21 +549,22 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
 
   if (command === "recover") {
     if (rest.length !== 1) throw new Error("recover 需要 1 个精确 operation ID。");
-    assertCanonicalSessionIds([rest[0]]);
-    const { data: status } = await getRecoveryStatusOperation({ root: rootArg });
-    if (!status.pending || status.operationId !== rest[0]) {
-      throw new MutationSafetyError("RECOVERY_REQUIRED", `找不到匹配的待恢复操作：${rest[0]}`);
-    }
-    if (!values.yes) {
-      const preview = { ...status, requiresConfirmation: true, exactOperationIdRequired: true };
+    const operation = await recoverOperation({
+      root: rootArg,
+      operationId: rest[0],
+      confirm: values.yes,
+    });
+    if (!operation.executed) {
+      const preview = { ...operation.data.status, ...operation.data };
+      delete (preview as { status?: unknown }).status;
       io.stdout(
         asJson
           ? JSON.stringify(preview, null, 2)
-          : `恢复未执行。核对 operation ${rest[0]} 后加 --yes。\n- kind: ${status.kind}\n- stage: ${status.stage}`,
+          : `恢复未执行。核对 operation ${rest[0]} 后加 --yes。\n- kind: ${operation.data.status.kind}\n- stage: ${operation.data.status.stage}`,
       );
       return 0;
     }
-    const result = await recoverInterruptedOperation(rootArg);
+    const result = operation.result;
     io.stdout(
       asJson
         ? JSON.stringify(result, null, 2)
@@ -585,47 +573,35 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
     return mutationExitCode(result);
   }
 
-  const scan = await scanCodexRoot(rootArg);
-
   switch (command) {
     case "delete": {
       if (rest.length === 0) {
         throw new Error("delete 至少需要 1 个 session-id。");
       }
 
-      if (values.yes) {
-        assertCanonicalSessionIds(rest);
-      }
-
-      const sessions = resolveSessions(scan, rest);
-
-      if (!values.yes) {
-        const preview = buildDeletePreview(scan, sessions);
-        const activeSessionIds = sessions.filter((session) => session.kind === "active").map((session) => session.id);
+      const operation = await deleteSessionsOperation({
+        root: rootArg,
+        sessionIds: rest,
+        confirm: values.yes,
+        trash: values.trash,
+        allowActive: values["allow-active"],
+      });
+      if (!operation.executed) {
         io.stdout(
           asJson
-            ? JSON.stringify({
-              preview,
-              action: values.trash ? "trash" : "delete",
-              requiresConfirmation: true,
-              requiresFullSessionIds: true,
-              activeSessionIds,
-              requiresAllowActive: activeSessionIds.length > 0,
-            }, null, 2)
-            : `${values.trash ? "将移入回收站，未执行。\n\n" : ""}${formatPreview(preview)}\n\n确认执行必须使用完整 UUID${activeSessionIds.length > 0 ? "，并为 active session 加 --allow-active" : ""}。`,
+            ? JSON.stringify(operation.data, null, 2)
+            : `${values.trash ? "将移入回收站，未执行。\n\n" : ""}${formatPreview(operation.data.preview)}\n\n确认执行必须使用完整 UUID${operation.data.activeSessionIds.length > 0 ? "，并为 active session 加 --allow-active" : ""}。`,
         );
         return 0;
       }
 
-      if (values.trash) {
-        assertConfirmedSessionSelection(rest, sessions, { allowActive: values["allow-active"] });
-        const result = await moveSessionsToTrash(scan, sessions, { allowActive: values["allow-active"] });
+      if (operation.action === "trash") {
+        const result = operation.result;
         io.stdout(asJson ? JSON.stringify(result, null, 2) : formatTrashDeleteResult(result));
         return mutationExitCode(result);
       }
 
-      assertConfirmedSessionSelection(rest, sessions, { allowActive: values["allow-active"] });
-      const result = await deleteSessions(scan, sessions, { allowActive: values["allow-active"] });
+      const result = operation.result;
       io.stdout(asJson ? JSON.stringify(result, null, 2) : formatDeleteResult(result));
       return mutationExitCode(result);
     }
@@ -635,19 +611,17 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
         throw new Error("restore 需要 1 个 trash-id-or-session-id。");
       }
 
-      if (!values.yes) {
-        const entries = await listTrashEntries(scan.root.rootPath);
-        const matches = entries.filter((entry) => trashEntryMatches(entry, rest[0]));
-        const duplicateSessionIds = summarizeTrashDuplicateSessions(matches);
+      const operation = await restoreTrashOperation({ root: rootArg, id: rest[0], confirm: values.yes });
+      if (!operation.executed) {
         io.stdout(
           asJson
-            ? JSON.stringify({ matches, duplicateSessionIds, requiresExactTrashId: true, requiresConfirmation: true }, null, 2)
-            : `恢复未执行。确认执行必须使用表中的精确 trashId 后加 --yes。\n\n${formatTrashEntries(matches)}`,
+            ? JSON.stringify(operation.data, null, 2)
+            : `恢复未执行。确认执行必须使用表中的精确 trashId 后加 --yes。\n\n${formatTrashEntries(operation.data.matches)}`,
         );
         return 0;
       }
 
-      const result = await restoreTrashEntry(rootArg, rest[0]);
+      const result = operation.result;
       io.stdout(asJson ? JSON.stringify(result, null, 2) : formatTrashRestoreResult(result));
       return mutationExitCode(result);
     }
@@ -657,19 +631,17 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
         throw new Error("purge 需要 1 个 trash-id-or-session-id。");
       }
 
-      if (!values.yes) {
-        const entries = await listTrashEntries(scan.root.rootPath);
-        const matches = entries.filter((entry) => trashEntryMatches(entry, rest[0]));
-        const duplicateSessionIds = summarizeTrashDuplicateSessions(matches);
+      const operation = await purgeTrashOperation({ root: rootArg, id: rest[0], confirm: values.yes });
+      if (!operation.executed) {
         io.stdout(
           asJson
-            ? JSON.stringify({ matches, duplicateSessionIds, requiresExactTrashId: true, requiresConfirmation: true }, null, 2)
-            : `永久清除未执行。确认执行必须使用表中的精确 trashId 后加 --yes。\n\n${formatTrashEntries(matches)}`,
+            ? JSON.stringify(operation.data, null, 2)
+            : `永久清除未执行。确认执行必须使用表中的精确 trashId 后加 --yes。\n\n${formatTrashEntries(operation.data.matches)}`,
         );
         return 0;
       }
 
-      const result = await purgeTrashEntry(rootArg, rest[0]);
+      const result = operation.result;
       io.stdout(asJson ? JSON.stringify(result, null, 2) : formatTrashPurgeResult(result));
       return mutationExitCode(result);
     }
@@ -679,46 +651,38 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
         throw new Error("cleanup-index 至少需要 1 个 session-id。");
       }
 
-      if (values.yes) {
-        assertCanonicalSessionIds(rest);
-      }
-
-      const sessions = resolveSessions(scan, rest);
-      if (!values.yes) {
-        const preview = previewCleanupSessionIndexes(scan, sessions);
-        const activeSessionIds = sessions.filter((session) => session.kind === "active").map((session) => session.id);
+      const operation = await cleanupSessionIndexesOperation({
+        root: rootArg,
+        sessionIds: rest,
+        confirm: values.yes,
+        allowActive: values["allow-active"],
+      });
+      if (!operation.executed) {
         io.stdout(
           asJson
-            ? JSON.stringify({
-              preview,
-              requiresConfirmation: true,
-              requiresFullSessionIds: true,
-              activeSessionIds,
-              requiresAllowActive: activeSessionIds.length > 0,
-            }, null, 2)
-            : `${formatCleanupIndexPreview(preview)}\n确认执行必须使用完整 UUID${activeSessionIds.length > 0 ? "，并为 active session 加 --allow-active" : ""}。`,
+            ? JSON.stringify(operation.data, null, 2)
+            : `${formatCleanupIndexPreview(operation.data.preview)}\n确认执行必须使用完整 UUID${operation.data.activeSessionIds.length > 0 ? "，并为 active session 加 --allow-active" : ""}。`,
         );
         return 0;
       }
 
-      assertConfirmedSessionSelection(rest, sessions, { allowActive: values["allow-active"] });
-      const result = await cleanupSessionIndexes(scan, sessions, { allowActive: values["allow-active"] });
+      const result = operation.result;
       io.stdout(asJson ? JSON.stringify(result, null, 2) : formatCleanupIndexResult(result));
       return mutationExitCode(result);
     }
 
     case "cleanup-stale": {
-      if (!values.yes) {
-        const preview = previewCleanupStaleIndexes(scan);
+      const operation = await cleanupStaleIndexesOperation({ root: rootArg, confirm: values.yes });
+      if (!operation.executed) {
         io.stdout(
           asJson
-            ? JSON.stringify({ preview, requiresConfirmation: true }, null, 2)
-            : formatCleanupPreview(preview),
+            ? JSON.stringify(operation.data, null, 2)
+            : formatCleanupPreview(operation.data.preview),
         );
         return 0;
       }
 
-      const result = await cleanupStaleIndexes(scan);
+      const result = operation.result;
       io.stdout(asJson ? JSON.stringify(result, null, 2) : formatCleanupResult(result));
       return mutationExitCode(result);
     }

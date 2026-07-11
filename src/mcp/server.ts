@@ -28,34 +28,22 @@ import {
   summarizeSourcesOperation,
   verifySessionsOperation,
 } from "../application/read-operations.js";
-import { assertConfirmedSessionSelection, isDestructivePlatformSupported } from "../core/destructive-policy.js";
 import {
-  buildDeletePreview,
-  cleanupSessionIndexes,
-  cleanupStaleIndexes,
-  deleteSessions,
-  previewCleanupSessionIndexes,
-  previewCleanupStaleIndexes,
-} from "../core/delete.js";
+  cleanupSessionIndexesOperation,
+  cleanupStaleIndexesOperation,
+  deleteSessionsOperation,
+  purgeTrashOperation,
+  recoverOperation,
+  restoreTrashOperation,
+} from "../application/mutation-operations.js";
+import { isDestructivePlatformSupported } from "../core/destructive-policy.js";
 import { FAMILY_MODES } from "../core/family.js";
 import { groupSessionsByProject, listProjectSummaries } from "../core/project.js";
-import { resolveSessions } from "../core/query.js";
-import { scanCodexRoot } from "../core/scan.js";
-import { assertCanonicalSessionIds, MutationSafetyError } from "../core/mutation-safety.js";
-import { recoverInterruptedOperation } from "../core/recovery.js";
 import { SOURCE_KINDS } from "../core/sources.js";
 import {
   MAX_CANONICAL_EVENT_PAGE_BYTES,
   MAX_CANONICAL_EVENT_PAGE_SIZE,
 } from "../core/session-events.js";
-import {
-  listTrashEntries,
-  moveSessionsToTrash,
-  purgeTrashEntry,
-  restoreTrashEntry,
-  summarizeTrashDuplicateSessions,
-  trashEntryMatches,
-} from "../core/trash.js";
 import type { ScanResult, SessionEntry, SessionKind, SessionTimelineResult, SourceKind } from "../core/types.js";
 import { TOOL_VERSION } from "../version.js";
 
@@ -751,10 +739,8 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       },
     },
     async ({ sessionIds, root }) => {
-      const scan = await scanCodexRoot(root);
-      const sessions = resolveSessions(scan, sessionIds);
-      const preview = buildDeletePreview(scan, sessions);
-      return textResult(`Prepared delete preview for ${sessions.length} sessions.`, { preview, warnings: scan.warnings });
+      const operation = await deleteSessionsOperation({ sessionIds, root, confirm: false });
+      return textResult(`Prepared delete preview for ${operation.sessions.length} sessions.`, { ...operation.data });
     },
   );
 
@@ -923,19 +909,13 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
         annotations: { destructiveHint: true, readOnlyHint: false, idempotentHint: false },
       },
       async ({ operationId, root, confirm }) => {
-        assertCanonicalSessionIds([operationId]);
-        const { data: status } = await getRecoveryStatusOperation({ root });
-        if (!status.pending || status.operationId !== operationId) {
-          throw new MutationSafetyError("RECOVERY_REQUIRED", `no matching interrupted operation: ${operationId}`);
-        }
-        if (!confirm) {
+        const operation = await recoverOperation({ operationId, root, confirm: confirm === true });
+        if (!operation.executed) {
           return textResult("Recovery was not executed. Pass confirm=true with the exact operationId after reviewing checkpoints.", {
-            status,
-            requiresConfirmation: true,
-            exactOperationIdRequired: true,
+            ...operation.data,
           });
         }
-        const result = await recoverInterruptedOperation(root);
+        const result = operation.result;
         return textResult(`Recovered operation ${operationId} by ${result.recoveredBy}.`, { result });
       },
     );
@@ -959,38 +939,27 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
         },
       },
       async ({ sessionIds, root, confirm, trash, allowActive }) => {
-        const scan = await scanCodexRoot(root);
-        if (confirm) {
-          assertCanonicalSessionIds(sessionIds);
-        }
-        const sessions = resolveSessions(scan, sessionIds);
-        if (!confirm) {
-          const preview = buildDeletePreview(scan, sessions);
-          const activeSessionIds = sessions.filter((session) => session.kind === "active").map((session) => session.id);
-          return textResult(`Deletion was not executed. Pass confirm=true to ${trash ? "move to trash" : "delete"} ${sessions.length} sessions.`, {
-            preview,
-            warnings: scan.warnings,
-            requiresConfirmation: true,
-            requiresFullSessionIds: true,
-            activeSessionIds,
-            requiresAllowActive: activeSessionIds.length > 0,
-            action: trash ? "trash" : "delete",
-          });
+        const operation = await deleteSessionsOperation({
+          sessionIds,
+          root,
+          confirm: confirm === true,
+          trash,
+          allowActive,
+        });
+        if (!operation.executed) {
+          return textResult(`Deletion was not executed. Pass confirm=true to ${trash ? "move to trash" : "delete"} ${operation.sessions.length} sessions.`, operation.data);
         }
 
-        assertConfirmedSessionSelection(sessionIds, sessions, { allowActive });
-  
-        if (trash) {
-          const result = await moveSessionsToTrash(scan, sessions, { allowActive });
+        if (operation.action === "trash") {
+          const result = operation.result;
           return textResult(
-            `Trash mutation committed for ${sessions.length} sessions; verification=${result.verificationStatus}.`,
+            `Trash mutation committed for ${operation.sessions.length} sessions; verification=${result.verificationStatus}.`,
             { result },
           );
         }
-  
-        const result = await deleteSessions(scan, sessions, { allowActive });
+        const result = operation.result;
         return textResult(
-          `Delete mutation committed for ${sessions.length} sessions; verification=${result.verificationStatus}.`,
+          `Delete mutation committed for ${operation.sessions.length} sessions; verification=${result.verificationStatus}.`,
           { result },
         );
       },
@@ -1014,24 +983,11 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
         },
       },
       async ({ id, root, confirm }) => {
-        const scan = await scanCodexRoot(root);
-        if (!confirm) {
-          const entries = (await listTrashEntries(scan.root.rootPath)).filter((entry) => trashEntryMatches(entry, id));
-          const duplicateSessionIds = summarizeTrashDuplicateSessions(entries);
-          return textResult("Restore was not executed. Pass confirm=true to restore.", {
-            entries,
-            duplicateSessionIds,
-            requiresExactTrashId: true,
-            preflight: entries.map((entry) => ({
-              trashId: entry.trashId,
-              sessionIds: entry.sessionIds,
-              warnings: entry.rootPath === scan.root.rootPath ? [] : [`回收站记录来自不同 root：${entry.rootPath}`],
-            })),
-            requiresConfirmation: true,
-          });
+        const operation = await restoreTrashOperation({ id, root, confirm: confirm === true });
+        if (!operation.executed) {
+          return textResult("Restore was not executed. Pass confirm=true to restore.", operation.data);
         }
-  
-        const result = await restoreTrashEntry(root, id);
+        const result = operation.result;
         return textResult(
           `Restore mutation committed for ${result.restoredSessionIds.length} sessions; verification=${result.verificationStatus}.`,
           { result },
@@ -1057,19 +1013,11 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
         },
       },
       async ({ id, root, confirm }) => {
-        const scan = await scanCodexRoot(root);
-        if (!confirm) {
-          const entries = (await listTrashEntries(scan.root.rootPath)).filter((entry) => trashEntryMatches(entry, id));
-          const duplicateSessionIds = summarizeTrashDuplicateSessions(entries);
-          return textResult("Purge was not executed. Pass confirm=true to purge.", {
-            entries,
-            duplicateSessionIds,
-            requiresExactTrashId: true,
-            requiresConfirmation: true,
-          });
+        const operation = await purgeTrashOperation({ id, root, confirm: confirm === true });
+        if (!operation.executed) {
+          return textResult("Purge was not executed. Pass confirm=true to purge.", operation.data);
         }
-  
-        const result = await purgeTrashEntry(root, id);
+        const result = operation.result;
         return textResult(
           `Purge mutation committed for ${result.trashEntry.trashId}; verification=${result.verificationStatus}.`,
           { result },
@@ -1096,28 +1044,19 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
         },
       },
       async ({ sessionIds, root, confirm, allowActive }) => {
-        const scan = await scanCodexRoot(root);
-        if (confirm) {
-          assertCanonicalSessionIds(sessionIds);
-        }
-        const sessions = resolveSessions(scan, sessionIds);
-        if (!confirm) {
-          const preview = previewCleanupSessionIndexes(scan, sessions);
-          const activeSessionIds = sessions.filter((session) => session.kind === "active").map((session) => session.id);
-          return textResult("Cleanup was not executed. Pass confirm=true to rewrite JSONL indexes.", {
-            preview,
-            requiresConfirmation: true,
-            requiresFullSessionIds: true,
-            activeSessionIds,
-            requiresAllowActive: activeSessionIds.length > 0,
-          });
+        const operation = await cleanupSessionIndexesOperation({
+          sessionIds,
+          root,
+          confirm: confirm === true,
+          allowActive,
+        });
+        if (!operation.executed) {
+          return textResult("Cleanup was not executed. Pass confirm=true to rewrite JSONL indexes.", operation.data);
         }
 
-        assertConfirmedSessionSelection(sessionIds, sessions, { allowActive });
-  
-        const result = await cleanupSessionIndexes(scan, sessions, { allowActive });
+        const result = operation.result;
         return textResult(
-          `Index cleanup committed for ${sessions.length} sessions; verification=${result.verificationStatus}.`,
+          `Index cleanup committed for ${operation.sessions.length} sessions; verification=${result.verificationStatus}.`,
           { result },
         );
       },
@@ -1140,16 +1079,11 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
         },
       },
       async ({ root, confirm }) => {
-        const scan = await scanCodexRoot(root);
-        if (!confirm) {
-          const preview = previewCleanupStaleIndexes(scan);
-          return textResult("Cleanup was not executed. Pass confirm=true to rewrite JSONL indexes.", {
-            preview,
-            requiresConfirmation: true,
-          });
+        const operation = await cleanupStaleIndexesOperation({ root, confirm: confirm === true });
+        if (!operation.executed) {
+          return textResult("Cleanup was not executed. Pass confirm=true to rewrite JSONL indexes.", operation.data);
         }
-  
-        const result = await cleanupStaleIndexes(scan);
+        const result = operation.result;
         return textResult(
           `Stale-index cleanup committed for ${result.staleSessionIds.length} sessions; verification=${result.verificationStatus}.`,
           { result },

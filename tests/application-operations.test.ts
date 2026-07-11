@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import {
   getSessionOperation,
@@ -14,7 +16,12 @@ import {
   summarizeSourcesOperation,
   verifySessionsOperation,
 } from "../src/application/read-operations.js";
+import {
+  deleteSessionsOperation,
+  cleanupSessionIndexesOperation,
+} from "../src/application/mutation-operations.js";
 import { runCli } from "../src/cli/run.js";
+import { createServer } from "../src/mcp/server.js";
 import { createFixture, FIXTURE_IDS, type Fixture } from "./helpers/fixture.js";
 
 function createIo() {
@@ -26,6 +33,14 @@ function createIo() {
       stderr: () => undefined,
     },
   };
+}
+
+async function createAdminClient() {
+  const server = createServer("admin");
+  const client = new Client({ name: "application-parity-test", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  return { client, server };
 }
 
 describe("shared application operations", () => {
@@ -148,5 +163,70 @@ describe("shared application operations", () => {
 
     await expect(runCli(["plan-delete", FIXTURE_IDS.ARCHIVED_ID, "--root", fixture.rootDir, "--json"], capture.io)).resolves.toBe(0);
     expect(JSON.parse(capture.stdout.join("\n"))).toEqual(operation.data);
+  });
+
+  it("uses one canonical delete preview for CLI JSON", async () => {
+    const operation = await deleteSessionsOperation({
+      root: fixture.rootDir,
+      sessionIds: [FIXTURE_IDS.ARCHIVED_ID],
+      confirm: false,
+      trash: false,
+    });
+    const capture = createIo();
+
+    await expect(runCli(["delete", FIXTURE_IDS.ARCHIVED_ID, "--root", fixture.rootDir, "--json"], capture.io)).resolves.toBe(0);
+    expect(JSON.parse(capture.stdout.join("\n"))).toEqual(operation.data);
+    expect(operation.executed).toBe(false);
+  });
+
+  it("uses one canonical cleanup preview for CLI JSON", async () => {
+    const operation = await cleanupSessionIndexesOperation({
+      root: fixture.rootDir,
+      sessionIds: [FIXTURE_IDS.ARCHIVED_ID],
+      confirm: false,
+    });
+    const capture = createIo();
+
+    await expect(runCli(["cleanup-index", FIXTURE_IDS.ARCHIVED_ID, "--root", fixture.rootDir, "--json"], capture.io)).resolves.toBe(0);
+    expect(JSON.parse(capture.stdout.join("\n"))).toEqual(operation.data);
+    expect(operation.executed).toBe(false);
+  });
+
+  it.each([
+    {
+      tool: "delete_sessions",
+      command: "delete",
+      operation: () => deleteSessionsOperation({
+        root: fixture.rootDir,
+        sessionIds: [FIXTURE_IDS.ARCHIVED_ID],
+        confirm: false,
+      }),
+    },
+    {
+      tool: "cleanup_session_indexes",
+      command: "cleanup-index",
+      operation: () => cleanupSessionIndexesOperation({
+        root: fixture.rootDir,
+        sessionIds: [FIXTURE_IDS.ARCHIVED_ID],
+        confirm: false,
+      }),
+    },
+  ])("keeps CLI and MCP $tool previews equal to the application contract", async ({ tool, command, operation }) => {
+    const canonical = await operation();
+    const capture = createIo();
+    const { client, server } = await createAdminClient();
+    try {
+      await expect(runCli([command, FIXTURE_IDS.ARCHIVED_ID, "--root", fixture.rootDir, "--json"], capture.io)).resolves.toBe(0);
+      const mcp = await client.callTool({
+        name: tool,
+        arguments: { root: fixture.rootDir, sessionIds: [FIXTURE_IDS.ARCHIVED_ID] },
+      });
+
+      expect(JSON.parse(capture.stdout.join("\n"))).toEqual(canonical.data);
+      expect(mcp.structuredContent).toEqual(canonical.data);
+    } finally {
+      await client.close();
+      await server.close();
+    }
   });
 });
