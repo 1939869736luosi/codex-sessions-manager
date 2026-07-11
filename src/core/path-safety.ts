@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { Stats } from "node:fs";
-import { lstat, readFile, realpath } from "node:fs/promises";
+import { lstat, open, readFile, realpath } from "node:fs/promises";
 import { OperationError, type ScanResult } from "./types.js";
 
 export type PathSafetyErrorCode = "UNSAFE_PATH" | "STALE_PLAN";
@@ -514,4 +514,59 @@ export async function readManagedText(
   relativePath: string,
 ): Promise<string> {
   return (await readManagedFile(context, relativePath)).toString("utf8");
+}
+
+export async function readManagedTextPrefix(
+  context: TrustedRootContext,
+  relativePath: string,
+  maxBytes: number,
+): Promise<{ text: string; bytesRead: number; fileSize: number; truncated: boolean }> {
+  if (!Number.isInteger(maxBytes) || maxBytes < 1) {
+    throw new Error("maxBytes must be a positive integer");
+  }
+
+  const snapshot = await captureManagedPath(context, relativePath, {
+    expectedKind: "file",
+    allowMissing: false,
+  });
+  const before = await lstat(snapshot.absolutePath);
+  const requestedBytes = Math.min(before.size, maxBytes + 1);
+  const buffer = Buffer.alloc(requestedBytes);
+  const handle = await open(snapshot.absolutePath, "r");
+  let offset = 0;
+  try {
+    while (offset < requestedBytes) {
+      const result = await handle.read(buffer, offset, requestedBytes - offset, offset);
+      if (result.bytesRead === 0) break;
+      offset += result.bytesRead;
+    }
+  } finally {
+    await handle.close();
+  }
+
+  const after = await lstat(snapshot.absolutePath);
+  await revalidateManagedPath(context, snapshot);
+  if (
+    before.dev !== after.dev
+    || before.ino !== after.ino
+    || before.mode !== after.mode
+    || before.nlink !== after.nlink
+    || before.size !== after.size
+    || before.mtimeMs !== after.mtimeMs
+  ) {
+    stale(snapshot.absolutePath, "managed file changed while its prefix was being read");
+  }
+
+  const truncated = before.size > maxBytes || offset > maxBytes;
+  let selected = buffer.subarray(0, Math.min(offset, maxBytes));
+  if (truncated) {
+    const lastNewline = selected.lastIndexOf(0x0a);
+    selected = lastNewline >= 0 ? selected.subarray(0, lastNewline + 1) : Buffer.alloc(0);
+  }
+  return {
+    text: selected.toString("utf8"),
+    bytesRead: selected.length,
+    fileSize: before.size,
+    truncated,
+  };
 }

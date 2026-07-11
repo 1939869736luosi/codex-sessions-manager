@@ -143,6 +143,7 @@ describe("release configuration", () => {
     expect(workflow).toContain("npm test");
     expect(workflow).toContain("if: runner.os != 'Windows'");
     expect(workflow).toContain("tests/windows-destructive-policy.test.ts");
+    expect(workflow).toContain("tests/compat-v063.test.ts");
     expect(workflow).toContain("--testTimeout=30000");
     expect(workflow).toContain("npm run test:coverage");
     expect(workflow).toContain("npm run build");
@@ -178,6 +179,7 @@ describe("release configuration", () => {
     expect(releaseWorkflow).toContain("if: runner.os != 'Windows'");
     expect(releaseWorkflow).toContain("Verify Windows read-only safety gates");
     expect(releaseWorkflow).toContain("tests/windows-destructive-policy.test.ts");
+    expect(releaseWorkflow).toContain("tests/compat-v063.test.ts");
     expect(releaseWorkflow).toContain("--testTimeout=30000");
     expect(releaseWorkflow).toContain("npm run test:coverage");
     expect(releaseWorkflow).toContain("npm run smoke:release");
@@ -191,6 +193,10 @@ describe("release configuration", () => {
     expect(promoteWorkflow).toContain("Wait for dist-tag replication");
     expect(promoteWorkflow).toContain("--prefer-online");
     expect(promoteWorkflow).toContain("for ATTEMPT in {1..12}");
+    const candidatePrecheckIndex = promoteWorkflow.indexOf("Require security-verify candidate identity");
+    const moveLatestIndex = promoteWorkflow.indexOf("Move latest only after exact-version verification");
+    expect(candidatePrecheckIndex).toBeGreaterThan(-1);
+    expect(candidatePrecheckIndex).toBeLessThan(moveLatestIndex);
   });
 
   it("rejects private material from the actual npm dry-run manifest", () => {

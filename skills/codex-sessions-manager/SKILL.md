@@ -93,7 +93,7 @@ codex-sessions-mcp --profile admin       # all 22 tools including destructive op
 
 Invalid `--profile` values exit with code 1. Default is read-only for safety.
 
-`get_session` defaults to `detail=compact` (20 items / 64 KiB). `detail=full` is still bounded (200 items / 256 KiB). Both return explicit completeness metadata; `sourceCompleteness` preserves parse/unsupported status when the MCP envelope is also `truncated_limit`. Use CLI JSON for all locally parseable semantic items and `export` for byte-exact raw content.
+`get_session` defaults to `detail=compact` (20 items / 64 KiB / 1 MiB source read). `detail=full` is still bounded (200 items / 256 KiB / 8 MiB source read). Session metadata is bounded too. Both return explicit completeness metadata; `sourceCompleteness` preserves parse/unsupported status when the MCP envelope is also `truncated_limit`, and `itemsKnown=null` means the reader stopped before EOF. `list_sessions` defaults to 50 concise records, accepts at most 200, and caps the response at 256 KiB. Use CLI JSON for complete local results and `export` for byte-exact raw content.
 
 ## Detailed References
 

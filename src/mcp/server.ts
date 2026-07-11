@@ -39,7 +39,7 @@ import {
   summarizeTrashDuplicateSessions,
   trashEntryMatches,
 } from "../core/trash.js";
-import type { SessionEntry, SessionKind, SessionTimelineResult, SourceKind } from "../core/types.js";
+import type { ScanResult, SessionEntry, SessionKind, SessionTimelineResult, SourceKind } from "../core/types.js";
 import { TOOL_VERSION } from "../version.js";
 
 const VALID_PROFILES = ["read-only", "admin"] as const;
@@ -97,11 +97,209 @@ function normalizePlanDeleteLimit(limit: number | undefined): number {
 }
 
 const MCP_SESSION_LIMITS = {
-  compact: { items: 20, bytes: 64 * 1024 },
-  full: { items: 200, bytes: 256 * 1024 },
+  compact: { items: 20, bytes: 64 * 1024, readBytes: 1 * 1024 * 1024 },
+  full: { items: 200, bytes: 256 * 1024, readBytes: 8 * 1024 * 1024 },
 } as const;
 
+const MCP_LIST_DEFAULT_LIMIT = 50;
+const MCP_LIST_MAX_LIMIT = 200;
+const MCP_LIST_RESPONSE_BYTES = 256 * 1024;
+
 type McpSessionDetail = keyof typeof MCP_SESSION_LIMITS;
+
+function truncateMcpText(value: string | null, limit: number): { value: string | null; truncated: boolean } {
+  if (value === null || value.length <= limit) return { value, truncated: false };
+  return { value: `${value.slice(0, Math.max(0, limit - 3))}...`, truncated: true };
+}
+
+function toMcpSessionListItem(session: SessionEntry): Record<string, unknown> {
+  const textFields = {
+    id: truncateMcpText(session.id, 256),
+    displayTitle: truncateMcpText(session.displayTitle, 512),
+    indexTitle: truncateMcpText(session.indexTitle, 512),
+    sqliteTitle: truncateMcpText(session.sqliteTitle, 512),
+    title: truncateMcpText(session.title, 512),
+    firstUserMessage: truncateMcpText(session.firstUserMessage, 512),
+    previewSummary: truncateMcpText(session.previewSummary, 512),
+    projectPath: truncateMcpText(session.projectPath, 512),
+    projectName: truncateMcpText(session.projectName, 512),
+    projectKey: truncateMcpText(session.projectKey, 512),
+    model: truncateMcpText(session.model, 256),
+    modelProvider: truncateMcpText(session.modelProvider, 256),
+    cwd: truncateMcpText(session.cwd, 512),
+    rolloutPath: truncateMcpText(session.rolloutPath, 512),
+    source: truncateMcpText(session.source, 256),
+    threadSource: truncateMcpText(session.threadSource, 256),
+    agentRole: truncateMcpText(session.agentRole, 256),
+    agentNickname: truncateMcpText(session.agentNickname, 256),
+    agentPath: truncateMcpText(session.agentPath, 512),
+  };
+  const selectedTitleCandidates = session.titleCandidates.slice(0, 8);
+  const boundedTitleCandidates = selectedTitleCandidates.map((candidate) => {
+    const title = truncateMcpText(candidate.title, 512);
+    return { value: { source: candidate.source, title: title.value }, truncated: title.truncated };
+  });
+  const boundedSourceInfo = boundMcpValue(session.sourceInfo, { maxString: 256, maxArray: 8, maxDepth: 5 });
+  const metadataTruncated = Object.values(textFields).some((entry) => entry.truncated)
+    || session.titleCandidates.length > selectedTitleCandidates.length
+    || boundedTitleCandidates.some((entry) => entry.truncated)
+    || boundedSourceInfo.truncated;
+  return {
+    id: textFields.id.value,
+    displayTitle: textFields.displayTitle.value,
+    indexTitle: textFields.indexTitle.value,
+    sqliteTitle: textFields.sqliteTitle.value,
+    title: textFields.title.value,
+    titleSource: session.titleSource,
+    titleMismatch: session.titleMismatch,
+    titleCandidates: boundedTitleCandidates.map((entry) => entry.value),
+    firstUserMessage: textFields.firstUserMessage.value,
+    previewSummary: textFields.previewSummary.value,
+    kind: session.kind,
+    archived: session.archived,
+    projectPath: textFields.projectPath.value,
+    projectName: textFields.projectName.value,
+    projectKey: textFields.projectKey.value,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    recencyAt: session.recencyAt,
+    recencyAtMs: session.recencyAtMs,
+    historyMode: session.historyMode,
+    model: textFields.model.value,
+    modelProvider: textFields.modelProvider.value,
+    cwd: textFields.cwd.value,
+    rolloutPath: textFields.rolloutPath.value,
+    sourceKind: session.sourceKind,
+    sourceInfo: boundedSourceInfo.value,
+    source: textFields.source.value,
+    threadSource: textFields.threadSource.value,
+    agentRole: textFields.agentRole.value,
+    agentNickname: textFields.agentNickname.value,
+    agentPath: textFields.agentPath.value,
+    totalFileSize: session.totalFileSize,
+    fileTargetCount: session.fileTargets.length,
+    fileFormats: [...new Set(session.fileTargets.map((target) => target.format))],
+    hasThread: session.hasThread,
+    hasSessionIndex: session.hasSessionIndex,
+    hasHistory: session.hasHistory,
+    metadataTruncated,
+  };
+}
+
+function boundMcpValue(
+  value: unknown,
+  limits: { maxString: number; maxArray: number; maxDepth: number },
+  depth = 0,
+): { value: unknown; truncated: boolean } {
+  if (typeof value === "string") {
+    const bounded = truncateMcpText(value, limits.maxString);
+    return bounded;
+  }
+  if (value === null || value === undefined || typeof value !== "object") {
+    return { value, truncated: false };
+  }
+  if (depth >= limits.maxDepth) {
+    return { value: "[metadata depth omitted]", truncated: true };
+  }
+  if (Array.isArray(value)) {
+    const selected = value.slice(0, limits.maxArray);
+    const bounded = selected.map((entry) => boundMcpValue(entry, limits, depth + 1));
+    return {
+      value: bounded.map((entry) => entry.value),
+      truncated: value.length > selected.length || bounded.some((entry) => entry.truncated),
+    };
+  }
+
+  let truncated = false;
+  const entries = Object.entries(value as Record<string, unknown>).map(([key, nested]) => {
+    const bounded = boundMcpValue(nested, limits, depth + 1);
+    truncated ||= bounded.truncated;
+    return [key, bounded.value];
+  });
+  return { value: Object.fromEntries(entries), truncated };
+}
+
+function boundMcpSession(session: SessionEntry, detail: McpSessionDetail): {
+  session: Record<string, unknown>;
+  truncated: boolean;
+} {
+  const bounded = boundMcpValue(
+    session,
+    detail === "compact"
+      ? { maxString: 512, maxArray: 8, maxDepth: 6 }
+      : { maxString: 2_048, maxArray: 32, maxDepth: 8 },
+  );
+  return { session: bounded.value as Record<string, unknown>, truncated: bounded.truncated };
+}
+
+export function buildMcpSessionListPayload(
+  scan: Pick<ScanResult, "root" | "warnings">,
+  matches: SessionEntry[],
+  limitApplied: number,
+  groupBy?: "project",
+): Record<string, unknown> {
+  const selected = matches.slice(0, limitApplied);
+  const boundedRoot = boundMcpValue(scan.root, { maxString: 512, maxArray: 20, maxDepth: 6 });
+  const boundedWarnings = scan.warnings.slice(0, 20).map((warning) => truncateMcpText(warning, 512));
+
+  const createPayload = (sessionCount: number, byteLimited: boolean) => {
+    const sessions = selected.slice(0, sessionCount);
+    const projectSummaries = groupBy === "project"
+      ? listProjectSummaries(sessions).map((project) => (
+        boundMcpValue(project, { maxString: 512, maxArray: 8, maxDepth: 4 }).value
+      ))
+      : undefined;
+    const groupedSessions = groupBy === "project"
+      ? groupSessionsByProject(sessions).map((group) => ({
+        project: boundMcpValue(group.project, { maxString: 512, maxArray: 8, maxDepth: 4 }).value,
+        sessions: group.sessions.map(toMcpSessionListItem),
+      }))
+      : undefined;
+    return {
+      root: boundedRoot.value,
+      warnings: boundedWarnings.map((warning) => warning.value),
+      warningsKnown: scan.warnings.length,
+      warningsTruncated: scan.warnings.length > boundedWarnings.length
+        || boundedWarnings.some((warning) => warning.truncated),
+      rootMetadataTruncated: boundedRoot.truncated,
+      sessions: sessions.map(toMcpSessionListItem),
+      totalMatches: matches.length,
+      sessionsReturned: sessions.length,
+      limitApplied,
+      hasMore: matches.length > sessions.length,
+      byteLimited,
+      responseByteLimit: MCP_LIST_RESPONSE_BYTES,
+      omittedReason: byteLimited
+        ? `MCP list response byte limit (${MCP_LIST_RESPONSE_BYTES}); use CLI list --json for complete local results`
+        : null,
+      projectSummaries,
+      groupedSessions,
+    };
+  };
+
+  let payload = createPayload(selected.length, false);
+  if (Buffer.byteLength(JSON.stringify(payload), "utf8") <= MCP_LIST_RESPONSE_BYTES) {
+    return payload;
+  }
+
+  let lower = 0;
+  let upper = selected.length;
+  while (lower < upper) {
+    const candidate = Math.ceil((lower + upper) / 2);
+    const candidatePayload = createPayload(candidate, true);
+    if (Buffer.byteLength(JSON.stringify(candidatePayload), "utf8") <= MCP_LIST_RESPONSE_BYTES) {
+      lower = candidate;
+    } else {
+      upper = candidate - 1;
+    }
+  }
+  payload = createPayload(lower, true);
+
+  if (Buffer.byteLength(JSON.stringify(payload), "utf8") > MCP_LIST_RESPONSE_BYTES) {
+    throw new Error(`Unable to construct a bounded MCP list response (${MCP_LIST_RESPONSE_BYTES} bytes). Use CLI list --json.`);
+  }
+  return payload;
+}
 
 export function buildMcpSessionPayload(
   session: SessionEntry,
@@ -110,20 +308,24 @@ export function buildMcpSessionPayload(
 ): Record<string, unknown> {
   const limit = MCP_SESSION_LIMITS[detail];
   const { items, ...metadata } = result;
+  let boundedSession = boundMcpSession(session, detail);
   let timeline = items.slice(0, limit.items);
-  const itemLimited = items.length > limit.items;
-  let byteLimited = false;
+  const itemLimited = items.length > limit.items || result.collectionLimitReason === "items";
+  let byteLimited = result.collectionLimitReason === "bytes";
+  const readLimited = result.collectionLimitReason === "read_bytes";
+  let sessionMetadataTruncated = boundedSession.truncated;
 
   const createPayload = () => {
-    const limited = itemLimited || byteLimited;
-    const limitReason = byteLimited
-      ? `MCP ${detail} byte limit (${limit.bytes})`
-      : itemLimited
-        ? `MCP ${detail} item limit (${limit.items})`
-        : null;
-    const omittedReason = [limitReason, result.omittedReason].filter(Boolean).join("; ") || null;
+    const limitReasons = [
+      byteLimited ? `MCP ${detail} byte limit (${limit.bytes})` : null,
+      readLimited ? `MCP ${detail} source read limit (${limit.readBytes})` : null,
+      itemLimited ? `MCP ${detail} item limit (${limit.items})` : null,
+      sessionMetadataTruncated ? `MCP ${detail} session metadata limit` : null,
+    ].filter(Boolean);
+    const limited = limitReasons.length > 0;
+    const omittedReason = [...limitReasons, result.omittedReason].filter(Boolean).join("; ") || null;
     return {
-      session,
+      session: boundedSession.session,
       timeline,
       detail,
       ...metadata,
@@ -131,6 +333,7 @@ export function buildMcpSessionPayload(
       completeness: limited ? "truncated_limit" : result.completeness,
       itemsReturned: timeline.length,
       omittedReason,
+      sessionMetadataTruncated,
     };
   };
 
@@ -142,7 +345,25 @@ export function buildMcpSessionPayload(
   }
 
   if (Buffer.byteLength(JSON.stringify(payload), "utf8") > limit.bytes) {
-    throw new Error(`Session metadata exceeds the MCP ${detail} byte limit (${limit.bytes}). Use CLI show --json.`);
+    const title = truncateMcpText(session.displayTitle, 256).value;
+    boundedSession = {
+      session: {
+        id: session.id,
+        displayTitle: title,
+        kind: session.kind,
+        archived: session.archived,
+        updatedAt: session.updatedAt,
+        recencyAt: session.recencyAt,
+        historyMode: session.historyMode,
+      },
+      truncated: true,
+    };
+    sessionMetadataTruncated = true;
+    payload = createPayload();
+  }
+
+  if (Buffer.byteLength(JSON.stringify(payload), "utf8") > limit.bytes) {
+    throw new Error(`Unable to construct a bounded MCP ${detail} response (${limit.bytes} bytes). Use CLI show --json.`);
   }
 
   return payload;
@@ -191,7 +412,8 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
         project: z.string().optional().describe("Optional project filter matched against cwd-derived project fields."),
         groupBy: z.enum(["project"]).optional(),
         status: z.enum(["all", "active", "archived", "db-only", "stale"]).optional(),
-        limit: z.number().int().positive().optional(),
+        limit: z.number().int().min(1).max(MCP_LIST_MAX_LIMIT).optional()
+          .describe(`Maximum sessions to return. Defaults to ${MCP_LIST_DEFAULT_LIMIT}; maximum ${MCP_LIST_MAX_LIMIT}.`),
         updatedAfter: z.string().optional(),
         updatedBefore: z.string().optional(),
         createdAfter: z.string().optional(),
@@ -229,11 +451,10 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       model,
     }) => {
       const scan = await scanCodexRoot(root);
-      const sessions = filterSessions(scan, {
+      const matches = filterSessions(scan, {
         query,
         project,
         status,
-        limit,
         updatedAfter,
         updatedBefore,
         createdAfter,
@@ -246,13 +467,12 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
         modelProvider,
         model,
       });
-      return textResult(`Found ${sessions.length} matching sessions.`, {
-        root: scan.root,
-        warnings: scan.warnings,
-        sessions,
-        projectSummaries: groupBy === "project" ? listProjectSummaries(sessions) : undefined,
-        groupedSessions: groupBy === "project" ? groupSessionsByProject(sessions) : undefined,
-      });
+      const limitApplied = limit ?? MCP_LIST_DEFAULT_LIMIT;
+      const payload = buildMcpSessionListPayload(scan, matches, limitApplied, groupBy);
+      return textResult(
+        `Returned ${payload.sessionsReturned as number} of ${matches.length} matching sessions.`,
+        payload,
+      );
     },
   );
 
@@ -322,7 +542,12 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
     async ({ sessionId, root, detail = "compact" }) => {
       const scan = await scanCodexRoot(root);
       const session = resolveSessions(scan, [sessionId])[0];
-      const result = await readSessionTimelineResult(session);
+      const limit = MCP_SESSION_LIMITS[detail];
+      const result = await readSessionTimelineResult(session, undefined, {
+        maxItems: limit.items,
+        maxTimelineBytes: limit.bytes,
+        maxReadBytes: limit.readBytes,
+      });
       const payload = buildMcpSessionPayload(session, result, detail);
       return textResult(
         `Loaded ${payload.itemsReturned as number}/${payload.itemsKnown ?? "unknown"} timeline items for session ${session.id} (${payload.completeness as string}).`,

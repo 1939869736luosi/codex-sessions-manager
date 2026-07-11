@@ -83,6 +83,7 @@ jobs:
           npx vitest run
           tests/path-safety.test.ts
           tests/windows-destructive-policy.test.ts
+          tests/compat-v063.test.ts
           --testTimeout=30000
 
       - name: Build release artifact

@@ -325,6 +325,7 @@ export function formatShow(
     `SQLite 线程: ${session.hasThread ? "是" : "否"}`,
     `时间线完整性: ${timelineMetadata?.completeness ?? "complete"}`,
     `时间线返回: ${previewCount}/${knownCount}`,
+    `工具输出截断: ${timelineMetadata?.toolOutputTruncatedCount ?? timeline.filter((item) => item.truncated).length}`,
     `精确原始导出: ${timelineMetadata?.exactExportAvailable ?? session.fileTargets.length > 0 ? "可用" : "不可用"}`,
     ...(timelineMetadata?.omittedReason ? [`省略原因: ${timelineMetadata.omittedReason}`] : []),
     "",

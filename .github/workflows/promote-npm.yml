@@ -50,6 +50,14 @@ jobs:
           test "$(node "${RUNNER_TEMP}/smoke/node_modules/codex-sessions-manager/dist/mcp/server.js" --version)" = "${VERSION}"
           node "${RUNNER_TEMP}/smoke/node_modules/codex-sessions-manager/dist/cli/index.js" doctor --root "${RUNNER_TEMP}/empty-codex-root" --json > "${RUNNER_TEMP}/registry-doctor.json"
 
+      - name: Require security-verify candidate identity
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          CANDIDATE="$(npm view codex-sessions-manager@security-verify version --prefer-online --cache "${RUNNER_TEMP}/npm-candidate-precheck")"
+          test "${CANDIDATE}" = "${VERSION}"
+
       - name: Move latest only after exact-version verification
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_DIST_TAG_TOKEN }}

@@ -178,7 +178,9 @@ codex mcp add codex-sessions -- codex-sessions-mcp --profile read-only
 
 默认 **read-only** profile（16 个工具）。需要破坏性操作时使用 `--profile admin`（22 个工具）。
 
-MCP `get_session` 有固定上限：`compact` 最多 20 items / 64 KiB，`full` 最多 200 items / 256 KiB。两者都会返回 `completeness`、底层 `sourceCompleteness`、已返回/已知数量、省略原因和是否可精确导出。需要全部本地可解析 semantic items 时用 `codex-sessions show <id> --json`；需要 byte-exact 原始内容时用 `export`。
+MCP `get_session` 有固定上限：`compact` 最多 20 items / 64 KiB，并且最多读取 1 MiB rollout 源文件；`full` 最多 200 items / 256 KiB，并且最多读取 8 MiB。session metadata 同样受限。两种模式都会返回 `completeness`、底层 `sourceCompleteness`、已返回/已知数量、metadata 截断、省略原因和是否可精确导出。读取上限先于文件结尾触发时，`itemsKnown` 会返回 `null`，不会给出伪完整总数；工具输出截断也会标成 `truncated_limit`。需要全部本地可解析 semantic items 时用 `codex-sessions show <id> --json`；需要 byte-exact 原始内容时用 `export`。
+
+MCP `list_sessions` 只返回精简记录，默认最多 50 个 session，参数上限为 200，整个结构化结果最多 256 KiB。`totalMatches`、`sessionsReturned`、`hasMore`、`byteLimited` 和 `omittedReason` 会明确说明省略情况。需要完整结果集或完整 session metadata 时用 `codex-sessions list --json`。
 
 **Windows 上的 0.6 系列安全补丁仅支持只读。** 删除、移入回收站、恢复、永久清除、索引清理和中断恢复都会直接拒绝。待真实 Windows 环境完成 junction/reparse point、大小写和异常退出测试后，才会重新开放写操作。Windows 上即使请求 MCP `admin` profile，也只注册只读工具。
 
@@ -265,7 +267,7 @@ codex-sessions verify <session-id...> [--json]
 
 需要看会话来源时，用 `sources`。它只读，按推导出来的 `sourceKind`、raw `source`、`thread_source`、`model_provider`、`model` 和 `agent_role` 汇总。`sourceKind` 只会是 `subagent`、`mcp`、`vscode`、`cli`、`exec`、`unknown`。raw `source` 仍会保留在 JSON 输出里，人类输出也会显示；`sourceKind` 只是工具推导出来的分类，不替代原始字段。
 
-`list` 支持同一套来源筛选：`--source-kind`、`--source`、`--thread-source`、`--agent-role`、`--agent-nickname`、`--model-provider`、`--model`。不同字段之间是 AND；同一个字段写多次是 OR。MCP `list_sessions` 支持同名参数，MCP `summarize_sources` 返回和 CLI `sources --json` 相同结构的摘要。
+`list` 支持同一套来源筛选：`--source-kind`、`--source`、`--thread-source`、`--agent-role`、`--agent-nickname`、`--model-provider`、`--model`。不同字段之间是 AND；同一个字段写多次是 OR。MCP `list_sessions` 支持同名参数，但只返回受限的精简结果（默认 50、最大 200、总响应 256 KiB）；完整本地列表使用 CLI JSON。MCP `summarize_sources` 返回和 CLI `sources --json` 相同结构的摘要。
 
 来源字段的边界：
 

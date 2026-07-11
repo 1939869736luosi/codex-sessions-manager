@@ -331,6 +331,15 @@ export interface SessionTimelineResult {
   unsupportedItemCount: number;
   parseErrorCount: number;
   toolOutputTruncatedCount: number;
+  collectionLimitReason?: "items" | "bytes" | "read_bytes";
+  sourceBytesRead?: number;
+  sourceBytesKnown?: number;
+}
+
+export interface TimelineReadLimits {
+  maxItems?: number;
+  maxTimelineBytes?: number;
+  maxReadBytes?: number;
 }
 
 export interface SqliteDeletionCounts {

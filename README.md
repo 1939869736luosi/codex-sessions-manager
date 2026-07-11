@@ -189,7 +189,9 @@ Other MCP hosts may use their own JSON configuration, for example:
 
 Default profile is **read-only** (16 tools). For destructive operations, use `--profile admin` (22 tools).
 
-MCP `get_session` is intentionally bounded: `compact` returns at most 20 items / 64 KiB, and `full` at most 200 items / 256 KiB. Both report `completeness`, underlying `sourceCompleteness`, returned/known counts, omission reason, and exact-export availability. Use `codex-sessions show <id> --json` for all locally parseable semantic items and `export` for byte-exact raw content.
+MCP `get_session` is intentionally bounded: `compact` returns at most 20 items / 64 KiB and reads at most 1 MiB of the source rollout; `full` returns at most 200 items / 256 KiB and reads at most 8 MiB. Session metadata is bounded as well. Both modes report `completeness`, underlying `sourceCompleteness`, returned/known counts, metadata truncation, omission reason, and exact-export availability. When the source-read limit is reached before EOF, `itemsKnown` is `null` rather than a false total. Tool-output truncation is also reported as `truncated_limit`. Use `codex-sessions show <id> --json` for all locally parseable semantic items and `export` for byte-exact raw content.
+
+MCP `list_sessions` returns concise records, defaults to 50 sessions, accepts at most 200, and caps the structured response at 256 KiB. `totalMatches`, `sessionsReturned`, `hasMore`, `byteLimited`, and `omittedReason` disclose any omission. Use `codex-sessions list --json` when a local caller needs the complete result set or full session metadata.
 
 **Windows security-patch releases in the 0.6 line are read-only.** Delete, trash, restore, purge, cleanup, and interrupted-operation recovery fail closed until the real Windows junction/reparse-point, case-handling, and abrupt-termination matrix is verified. On Windows, requesting the MCP `admin` profile still registers only the read-only tools.
 
@@ -276,7 +278,7 @@ Human and JSON output include a summary: `filters`, `totalCandidatesBeforeFilter
 
 Use `sources` when you need a read-only overview of where sessions came from. It groups by inferred `sourceKind`, raw `source`, `thread_source`, `model_provider`, `model`, and `agent_role`. `sourceKind` can be `subagent`, `mcp`, `vscode`, `cli`, `exec`, or `unknown`. The raw `source` value is still kept in JSON output and shown in human output, because `sourceKind` is only this tool's inferred category.
 
-`list` supports the same source-facing filters: `--source-kind`, `--source`, `--thread-source`, `--agent-role`, `--agent-nickname`, `--model-provider`, and `--model`. Filters combine with AND across different fields. Repeating the same field uses OR. MCP `list_sessions` accepts the same fields, and MCP `summarize_sources` returns the same summary shape as CLI `sources --json`.
+`list` supports the same source-facing filters: `--source-kind`, `--source`, `--thread-source`, `--agent-role`, `--agent-nickname`, `--model-provider`, and `--model`. Filters combine with AND across different fields. Repeating the same field uses OR. MCP `list_sessions` accepts the same fields but returns a bounded concise view (50 by default, 200 maximum, 256 KiB response cap); use CLI JSON for the complete local list. MCP `summarize_sources` returns the same summary shape as CLI `sources --json`.
 
 Important source limits:
 

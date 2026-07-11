@@ -1,12 +1,13 @@
 import path from "node:path";
 
 import { safeJsonParse } from "./jsonl.js";
-import { createTrustedRootContext, readManagedText } from "./path-safety.js";
+import { createTrustedRootContext, readManagedText, readManagedTextPrefix } from "./path-safety.js";
 import type {
   SessionEntry,
   SessionFileTarget,
   SessionTimelineResult,
   ThreadHistoryMode,
+  TimelineReadLimits,
   TimelineItem,
 } from "./types.js";
 
@@ -395,23 +396,6 @@ function extractTimelineItems(
   return [unsupportedItem(rawOuterType, lineNumber, itemTimestamp(record))];
 }
 
-function dedupeTimeline(items: TimelineItem[]): TimelineItem[] {
-  const results: TimelineItem[] = [];
-  for (const item of items) {
-    const previous = results.at(-1);
-    if (
-      !item.parseError && !item.unsupported && previous &&
-      !previous.parseError && !previous.unsupported &&
-      previous.kind === item.kind &&
-      normalizeTimelineBody(previous.body) === normalizeTimelineBody(item.body)
-    ) {
-      continue;
-    }
-    results.push(item);
-  }
-  return results;
-}
-
 function historyItems(session: SessionEntry): TimelineItem[] {
   return session.historyPreview.map((body, index) => timelineItem({
     kind: "user",
@@ -432,99 +416,229 @@ function getPrimaryFileTarget(session: SessionEntry): SessionFileTarget | null {
   );
 }
 
-function historyModeFromRecords(
-  records: Array<{ parsed: Record<string, unknown>; lineNumber: number }>,
-  fallback: ThreadHistoryMode,
-): ThreadHistoryMode {
-  for (const { parsed } of records) {
-    if (normalizeType(parsed.type) !== "sessionmeta") continue;
-    const value = (parsed.payload as Record<string, unknown> | undefined)?.history_mode;
-    if (value === "legacy" || value === "paginated") return value;
-    if (value !== null && value !== undefined) return "unknown";
+function* numberedLines(text: string): Generator<{ line: string; lineNumber: number }> {
+  let start = 0;
+  let lineNumber = 1;
+  while (start < text.length) {
+    const newline = text.indexOf("\n", start);
+    const end = newline === -1 ? text.length : newline;
+    const rawLine = text.slice(start, end);
+    yield { line: rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine, lineNumber };
+    if (newline === -1) break;
+    start = newline + 1;
+    lineNumber += 1;
   }
-  return fallback;
 }
 
-function diagnosticReason(parseErrors: number, unsupportedItems: number): string | null {
+function historyModeFromText(
+  text: string,
+  fallback: ThreadHistoryMode,
+): { historyMode: ThreadHistoryMode; lineNumber: number | null } {
+  for (const { line, lineNumber } of numberedLines(text)) {
+    if (!line.trim()) continue;
+    const parsed = safeJsonParse<Record<string, unknown>>(line);
+    if (!parsed) continue;
+    if (normalizeType(parsed.type) !== "sessionmeta") continue;
+    const value = (parsed.payload as Record<string, unknown> | undefined)?.history_mode;
+    if (value === "legacy" || value === "paginated") return { historyMode: value, lineNumber };
+    if (value !== null && value !== undefined) return { historyMode: "unknown", lineNumber };
+  }
+  return { historyMode: fallback, lineNumber: null };
+}
+
+type TimelineCollector = {
+  items: TimelineItem[];
+  knownCount: number;
+  semanticCount: number;
+  parseErrorCount: number;
+  unsupportedItemCount: number;
+  toolOutputTruncatedCount: number;
+  collectedBytes: number;
+  previousItem: TimelineItem | null;
+  limitReason: "items" | "bytes" | undefined;
+};
+
+function createTimelineCollector(): TimelineCollector {
+  return {
+    items: [],
+    knownCount: 0,
+    semanticCount: 0,
+    parseErrorCount: 0,
+    unsupportedItemCount: 0,
+    toolOutputTruncatedCount: 0,
+    collectedBytes: 2,
+    previousItem: null,
+    limitReason: undefined,
+  };
+}
+
+function addTimelineItem(
+  collector: TimelineCollector,
+  item: TimelineItem,
+  limits: TimelineReadLimits | undefined,
+): void {
+  const previous = collector.previousItem;
+  if (
+    !item.parseError && !item.unsupported && previous &&
+    !previous.parseError && !previous.unsupported &&
+    previous.kind === item.kind &&
+    normalizeTimelineBody(previous.body) === normalizeTimelineBody(item.body)
+  ) {
+    return;
+  }
+
+  collector.previousItem = item;
+  collector.knownCount += 1;
+  if (!item.parseError && !item.unsupported) collector.semanticCount += 1;
+  if (item.parseError) collector.parseErrorCount += 1;
+  if (item.unsupported) collector.unsupportedItemCount += 1;
+  if (item.truncated) collector.toolOutputTruncatedCount += 1;
+
+  if (collector.limitReason) return;
+  if (limits?.maxItems !== undefined && collector.items.length >= limits.maxItems) {
+    collector.limitReason = "items";
+    return;
+  }
+
+  const itemBytes = Buffer.byteLength(JSON.stringify(item), "utf8") + (collector.items.length ? 1 : 0);
+  if (
+    limits?.maxTimelineBytes !== undefined &&
+    collector.collectedBytes + itemBytes > limits.maxTimelineBytes
+  ) {
+    collector.limitReason = "bytes";
+    return;
+  }
+
+  collector.items.push(item);
+  collector.collectedBytes += itemBytes;
+}
+
+function diagnosticReason(
+  parseErrors: number,
+  unsupportedItems: number,
+  truncatedToolOutputs: number,
+  exactExportAvailable: boolean,
+  readTruncation?: { bytesRead: number; fileSize: number },
+): string | null {
   const reasons: string[] = [];
+  if (readTruncation) {
+    reasons.push(`timeline source read stopped after ${readTruncation.bytesRead} of ${readTruncation.fileSize} bytes`);
+  }
   if (parseErrors) reasons.push(`${parseErrors} parse error${parseErrors === 1 ? "" : "s"}`);
   if (unsupportedItems) reasons.push(`${unsupportedItems} unsupported item${unsupportedItems === 1 ? "" : "s"}`);
+  if (truncatedToolOutputs) {
+    reasons.push(
+      `${truncatedToolOutputs} tool output${truncatedToolOutputs === 1 ? "" : "s"} truncated to ${TOOL_OUTPUT_LIMIT} characters` +
+      (exactExportAvailable ? "; exact export available" : ""),
+    );
+  }
   return reasons.length ? reasons.join("; ") : null;
 }
 
 export async function readSessionTimelineResult(
   session: SessionEntry,
   rootPath?: string,
+  limits?: TimelineReadLimits,
 ): Promise<SessionTimelineResult> {
   const primaryFile = getPrimaryFileTarget(session);
   const exactExportAvailable = session.fileTargets.length > 0;
 
   if (!primaryFile) {
-    const items = historyItems(session);
+    const collector = createTimelineCollector();
+    for (const item of historyItems(session)) addTimelineItem(collector, item, limits);
     const compressedUnread = session.fileTargets.some((target) => target.compressed);
     return {
       historyMode: session.historyMode,
-      items,
+      items: collector.items,
       completeness: compressedUnread ? "compressed_unread" : "complete",
-      itemsReturned: items.length,
-      itemsKnown: compressedUnread ? null : items.length,
+      itemsReturned: collector.items.length,
+      itemsKnown: compressedUnread ? null : collector.knownCount,
       omittedReason: compressedUnread ? "compressed rollout cannot be read as semantic timeline" : null,
       exactExportAvailable,
       unsupportedItemCount: 0,
       parseErrorCount: 0,
       toolOutputTruncatedCount: 0,
+      ...(collector.limitReason ? { collectionLimitReason: collector.limitReason } : {}),
     };
   }
 
   const relativeParts = primaryFile.relativePath.split(/[\\/]+/u).filter(Boolean);
   const inferredRoot = path.resolve(primaryFile.absolutePath, ...relativeParts.map(() => ".."));
   const trustedRoot = await createTrustedRootContext(rootPath ?? inferredRoot);
-  const text = await readManagedText(trustedRoot, primaryFile.relativePath);
-  const records: Array<{ parsed: Record<string, unknown>; lineNumber: number }> = [];
-  const diagnostics: TimelineItem[] = [];
-
-  text.split(/\r?\n/u).forEach((line, index) => {
-    if (!line.trim()) return;
-    const lineNumber = index + 1;
-    const parsed = safeJsonParse<Record<string, unknown>>(line);
-    if (!parsed) diagnostics.push(parseErrorItem(lineNumber));
-    else records.push({ parsed, lineNumber });
-  });
-
-  const historyMode = historyModeFromRecords(records, session.historyMode);
+  const readResult = limits?.maxReadBytes !== undefined
+    ? await readManagedTextPrefix(trustedRoot, primaryFile.relativePath, limits.maxReadBytes)
+    : {
+      text: await readManagedText(trustedRoot, primaryFile.relativePath),
+      bytesRead: primaryFile.size,
+      fileSize: primaryFile.size,
+      truncated: false,
+    };
+  const text = readResult.text;
+  const modeResult = historyModeFromText(text, session.historyMode);
+  const historyMode = modeResult.historyMode;
+  const collector = createTimelineCollector();
   if (historyMode === "unknown") {
-    diagnostics.unshift(unsupportedItem("history_mode", 1, null));
-  }
-  const parsedItems = records.flatMap(({ parsed, lineNumber }) =>
-    extractTimelineItems(parsed, lineNumber, historyMode),
-  );
-  let items = dedupeTimeline([...parsedItems, ...diagnostics].sort((a, b) =>
-    (a.lineNumber ?? Number.MAX_SAFE_INTEGER) - (b.lineNumber ?? Number.MAX_SAFE_INTEGER),
-  ));
-  const semanticItems = items.filter((item) => !item.parseError && !item.unsupported);
-  if (!semanticItems.length && session.historyPreview.length) {
-    items = [...historyItems(session), ...items];
+    addTimelineItem(
+      collector,
+      unsupportedItem("history_mode", modeResult.lineNumber ?? 1, null),
+      limits,
+    );
   }
 
-  const parseErrorCount = items.filter((item) => item.parseError).length;
-  const unsupportedItemCount = items.filter((item) => item.unsupported).length;
-  const completeness = parseErrorCount > 0
+  for (const { line, lineNumber } of numberedLines(text)) {
+    if (!line.trim()) continue;
+    const parsed = safeJsonParse<Record<string, unknown>>(line);
+    if (!parsed) {
+      addTimelineItem(collector, parseErrorItem(lineNumber), limits);
+      continue;
+    }
+    for (const item of extractTimelineItems(parsed, lineNumber, historyMode)) {
+      addTimelineItem(collector, item, limits);
+    }
+  }
+
+  let items = collector.items;
+  let itemsKnown: number | null = readResult.truncated ? null : collector.knownCount;
+  let collectionLimitReason: SessionTimelineResult["collectionLimitReason"] = readResult.truncated
+    ? "read_bytes"
+    : collector.limitReason;
+  if (collector.semanticCount === 0 && session.historyPreview.length) {
+    const rebound = createTimelineCollector();
+    for (const item of historyItems(session)) addTimelineItem(rebound, item, limits);
+    for (const item of collector.items) addTimelineItem(rebound, item, limits);
+    items = rebound.items;
+    if (itemsKnown !== null) itemsKnown += session.historyPreview.length;
+    collectionLimitReason = collectionLimitReason ?? rebound.limitReason ?? collector.limitReason;
+  }
+
+  const completeness = collector.parseErrorCount > 0
     ? "parse_error"
-    : unsupportedItemCount > 0
+    : collector.unsupportedItemCount > 0
       ? "unsupported_items"
-      : "complete";
+      : readResult.truncated || collector.toolOutputTruncatedCount > 0
+        ? "truncated_limit"
+        : "complete";
 
   return {
     historyMode,
     items,
     completeness,
     itemsReturned: items.length,
-    itemsKnown: items.length,
-    omittedReason: diagnosticReason(parseErrorCount, unsupportedItemCount),
+    itemsKnown,
+    omittedReason: diagnosticReason(
+      collector.parseErrorCount,
+      collector.unsupportedItemCount,
+      collector.toolOutputTruncatedCount,
+      exactExportAvailable,
+      readResult.truncated ? { bytesRead: readResult.bytesRead, fileSize: readResult.fileSize } : undefined,
+    ),
     exactExportAvailable,
-    unsupportedItemCount,
-    parseErrorCount,
-    toolOutputTruncatedCount: items.filter((item) => item.truncated).length,
+    unsupportedItemCount: collector.unsupportedItemCount,
+    parseErrorCount: collector.parseErrorCount,
+    toolOutputTruncatedCount: collector.toolOutputTruncatedCount,
+    sourceBytesRead: readResult.bytesRead,
+    sourceBytesKnown: readResult.fileSize,
+    ...(collectionLimitReason ? { collectionLimitReason } : {}),
   };
 }
 

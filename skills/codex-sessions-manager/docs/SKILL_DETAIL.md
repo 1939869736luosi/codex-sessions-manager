@@ -157,7 +157,9 @@ Reports remaining files, JSONL rows, SQLite rows (including goals DB), shell sna
 
 All admin tools require `confirm=true` to execute; without it they return preview only.
 
-`get_session` accepts `detail=compact|full`. `compact` is limited to 20 timeline items and 64 KiB; `full` is limited to 200 items and 256 KiB. Responses include `completeness`, underlying `sourceCompleteness`, `itemsReturned`, `itemsKnown`, `omittedReason`, and `exactExportAvailable`. These limits are intentional; use CLI JSON or export for complete local handoff.
+`get_session` accepts `detail=compact|full`. `compact` is limited to 20 timeline items, 64 KiB, and a 1 MiB source read; `full` is limited to 200 items, 256 KiB, and an 8 MiB source read. Session metadata is bounded independently. Responses include `completeness`, underlying `sourceCompleteness`, `itemsReturned`, `itemsKnown`, `sessionMetadataTruncated`, `omittedReason`, and `exactExportAvailable`. `itemsKnown=null` means the source reader stopped before EOF. Per-item tool-output truncation makes the overall result `truncated_limit`. These limits are intentional; use CLI JSON or export for complete local handoff.
+
+`list_sessions` defaults to 50 concise records, accepts a maximum `limit` of 200, and caps the structured response at 256 KiB. It omits large fields such as `historyPreview` and reports `totalMatches`, `sessionsReturned`, `hasMore`, `byteLimited`, and `omittedReason`. Use CLI `list --json` for a complete local list.
 
 ## Source Metadata Rules
 

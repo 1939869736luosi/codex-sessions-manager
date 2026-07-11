@@ -6,10 +6,11 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runCli } from "../src/cli/run.js";
+import { isDestructivePlatformSupported } from "../src/core/destructive-policy.js";
 import { scanCodexRoot } from "../src/core/scan.js";
 import { readSessionTimelineResult } from "../src/core/timeline.js";
 import { moveSessionsToTrash, restoreTrashEntry } from "../src/core/trash.js";
-import { createServer } from "../src/mcp/server.js";
+import { buildMcpSessionListPayload, buildMcpSessionPayload, createServer } from "../src/mcp/server.js";
 import { createFixture, FIXTURE_IDS, type Fixture } from "./helpers/fixture.js";
 
 function createIo() {
@@ -240,10 +241,12 @@ describe("Codex 0.144.1 compatibility", () => {
     ]);
     expect(archivedResult).toMatchObject({ completeness: "compressed_unread", exactExportAvailable: true });
 
-    const trashed = await moveSessionsToTrash(archivedScan, [archivedSession]);
-    await expect(readFile(archivedCompressedPath)).rejects.toMatchObject({ code: "ENOENT" });
-    await restoreTrashEntry(fixture.rootDir, trashed.trashEntry.trashId);
-    await expect(readFile(archivedCompressedPath)).resolves.toEqual(archivedCompressedBytes);
+    if (isDestructivePlatformSupported()) {
+      const trashed = await moveSessionsToTrash(archivedScan, [archivedSession]);
+      await expect(readFile(archivedCompressedPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await restoreTrashEntry(fixture.rootDir, trashed.trashEntry.trashId);
+      await expect(readFile(archivedCompressedPath)).resolves.toEqual(archivedCompressedBytes);
+    }
   });
 
   it("reports unknown history modes and per-item tool truncation without hiding semantic output", async () => {
@@ -283,6 +286,31 @@ describe("Codex 0.144.1 compatibility", () => {
     ]);
   });
 
+  it("never labels truncated tool content complete and shows the warning to humans", async () => {
+    await writeRollout(fixture, [
+      sessionMeta("legacy"),
+      {
+        type: "response_item",
+        timestamp: "2026-07-10T00:00:01.000Z",
+        payload: { type: "function_call_output", output: "x".repeat(1_200) },
+      },
+    ]);
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const session = scan.sessions.find((entry) => entry.id === FIXTURE_IDS.ACTIVE_ID)!;
+    const result = await readSessionTimelineResult(session, fixture.rootDir);
+    expect(result).toMatchObject({
+      completeness: "truncated_limit",
+      toolOutputTruncatedCount: 1,
+      omittedReason: "1 tool output truncated to 900 characters; exact export available",
+    });
+
+    const humanIo = createIo();
+    expect(await runCli(["show", FIXTURE_IDS.ACTIVE_ID, "--root", fixture.rootDir], humanIo.io)).toBe(0);
+    expect(humanIo.stdout.join("\n")).toContain("工具输出截断: 1");
+    expect(humanIo.stdout.join("\n")).toContain("时间线完整性: truncated_limit");
+  });
+
   it("keeps CLI JSON complete and enforces MCP compact/full item and byte limits", async () => {
     const smallItems = Array.from({ length: 35 }, (_, index) => completedItem({
       type: "UserMessage",
@@ -307,6 +335,43 @@ describe("Codex 0.144.1 compatibility", () => {
       itemsKnown: 35,
       exactExportAvailable: true,
     });
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const session = scan.sessions.find((entry) => entry.id === FIXTURE_IDS.ACTIVE_ID)!;
+    const boundedRead = await readSessionTimelineResult(session, fixture.rootDir, {
+      maxItems: 20,
+      maxTimelineBytes: 64 * 1024,
+    });
+    expect(boundedRead).toMatchObject({
+      itemsReturned: 20,
+      itemsKnown: 35,
+      collectionLimitReason: "items",
+    });
+    expect(boundedRead.items).toHaveLength(20);
+
+    const readBudgetItems = Array.from({ length: 40 }, (_, index) => completedItem({
+      type: "UserMessage",
+      id: `read-budget-${index}`,
+      content: [{ type: "text", text: `${index}:${"r".repeat(5_000)}` }],
+    }, index));
+    await writeRollout(fixture, [sessionMeta("paginated"), ...readBudgetItems]);
+    const readBudgetScan = await scanCodexRoot(fixture.rootDir);
+    const readBudgetSession = readBudgetScan.sessions.find((entry) => entry.id === FIXTURE_IDS.ACTIVE_ID)!;
+    const readBudgetResult = await readSessionTimelineResult(readBudgetSession, fixture.rootDir, {
+      maxItems: 20,
+      maxTimelineBytes: 64 * 1024,
+      maxReadBytes: 16 * 1024,
+    });
+    expect(readBudgetResult).toMatchObject({
+      completeness: "truncated_limit",
+      itemsKnown: null,
+      collectionLimitReason: "read_bytes",
+      sourceBytesKnown: expect.any(Number),
+    });
+    expect(readBudgetResult.sourceBytesRead).toBeLessThanOrEqual(16 * 1024);
+    expect(readBudgetResult.omittedReason).toContain("timeline source read stopped after");
+
+    await writeRollout(fixture, [sessionMeta("paginated"), ...smallItems]);
 
     const humanIo = createIo();
     expect(await runCli([
@@ -364,6 +429,21 @@ describe("Codex 0.144.1 compatibility", () => {
       expect(Number(byteBounded.structuredContent?.itemsReturned)).toBeLessThan(10);
       expect(Buffer.byteLength(JSON.stringify(byteBounded.structuredContent), "utf8")).toBeLessThanOrEqual(64 * 1024);
 
+      const hugeMetadataSession = {
+        ...session,
+        firstUserMessage: "m".repeat(100_000),
+        previewSummary: "p".repeat(100_000),
+        historyPreview: Array.from({ length: 500 }, () => "h".repeat(2_000)),
+      };
+      const metadataBounded = buildMcpSessionPayload(hugeMetadataSession, boundedRead, "compact");
+      expect(metadataBounded).toMatchObject({
+        completeness: "truncated_limit",
+        sourceCompleteness: "complete",
+        sessionMetadataTruncated: true,
+      });
+      expect(String(metadataBounded.omittedReason)).toContain("MCP compact session metadata limit");
+      expect(Buffer.byteLength(JSON.stringify(metadataBounded), "utf8")).toBeLessThanOrEqual(64 * 1024);
+
       const overFullLimitItems = Array.from({ length: 205 }, (_, index) => completedItem({
         type: "UserMessage",
         id: `full-limit-${index}`,
@@ -401,6 +481,50 @@ describe("Codex 0.144.1 compatibility", () => {
         itemsKnown: 22,
         omittedReason: "MCP compact item limit (20); 1 parse error",
       });
+
+      const listed = await connected.client.callTool({
+        name: "list_sessions",
+        arguments: { root: fixture.rootDir },
+      });
+      expect(listed.structuredContent).toMatchObject({
+        limitApplied: 50,
+        hasMore: false,
+      });
+      expect(Number(listed.structuredContent?.totalMatches)).toBeGreaterThan(0);
+      expect((listed.structuredContent?.sessions as Array<Record<string, unknown>>)[0]).not.toHaveProperty("historyPreview");
+      expect(Buffer.byteLength(JSON.stringify(listed.structuredContent), "utf8")).toBeLessThanOrEqual(256 * 1024);
+
+      const overListLimit = await connected.client.callTool({
+        name: "list_sessions",
+        arguments: { root: fixture.rootDir, limit: 201 },
+      });
+      expect(overListLimit.isError).toBe(true);
+
+      const oversizedMatches = Array.from({ length: 200 }, (_, index) => ({
+        ...session,
+        id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+        displayTitle: "l".repeat(2_000),
+        firstUserMessage: "m".repeat(2_000),
+        previewSummary: "p".repeat(2_000),
+        projectName: "n".repeat(300_000),
+        projectKey: "k".repeat(300_000),
+        model: "o".repeat(300_000),
+        modelProvider: "v".repeat(300_000),
+        titleCandidates: Array.from({ length: 20 }, () => ({
+          source: "sqlite" as const,
+          title: "t".repeat(2_000),
+        })),
+      }));
+      const boundedList = buildMcpSessionListPayload(scan, oversizedMatches, 200, "project");
+      expect(Buffer.byteLength(JSON.stringify(boundedList), "utf8")).toBeLessThanOrEqual(256 * 1024);
+      expect(boundedList).toMatchObject({
+        totalMatches: 200,
+        limitApplied: 200,
+        hasMore: true,
+        byteLimited: true,
+      });
+      expect((boundedList.sessions as Array<unknown>).length).toBeGreaterThan(0);
+      expect((boundedList.sessions as Array<unknown>).length).toBeLessThan(200);
     } finally {
       await Promise.all([connected.client.close(), connected.server.close()]);
     }
