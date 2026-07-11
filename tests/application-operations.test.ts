@@ -21,6 +21,7 @@ import {
   cleanupSessionIndexesOperation,
 } from "../src/application/mutation-operations.js";
 import { runCli } from "../src/cli/run.js";
+import { formatDoctor } from "../src/cli/format.js";
 import { createServer } from "../src/mcp/server.js";
 import { createFixture, FIXTURE_IDS, type Fixture } from "./helpers/fixture.js";
 
@@ -109,6 +110,7 @@ describe("shared application operations", () => {
     expect(details.report.counts.globalStateExactKeyRefs).toBe(details.report.globalState.exactKeyRefs.length);
     expect(details.report.counts.globalStatePossibleUnknownRefs).toBe(details.report.globalState.possibleUnknownRefs.length);
     expect(summary.report.counts).toEqual(details.report.counts);
+    expect(formatDoctor(summary.report).split("\n").length).toBeLessThanOrEqual(200);
   });
 
   it("exposes doctor details through an explicit CLI flag", async () => {
