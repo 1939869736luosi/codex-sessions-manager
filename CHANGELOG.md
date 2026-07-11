@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- Started the 0.7.0 shared application layer: CLI and MCP now reuse the same list, session-detail, and doctor operations while keeping adapter-specific presentation and response bounds.
+- Added the 0.7.0 shared application layer: CLI and MCP now reuse the same list, session-detail, doctor, audit, planning, export, verification, recovery, delete, trash, restore, purge, and index-cleanup operations while keeping adapter-specific presentation and response bounds.
+- Added adapter-boundary and parity tests so CLI/MCP cannot bypass the shared mutation policy, shell out to one another, or silently reintroduce separate confirmation and ID rules.
 - Added read-only session `memoryLink` metadata and bounded doctor memory statistics without returning raw memory text. Ordinary session delete previews and plans now state that memory is retained.
 - Changed doctor JSON/MCP output to summary mode by default, with at most five reference samples and bounded warnings; use `--details` or `includeDetails=true` for complete diagnostic arrays.
 - Added `events <exact-session-id>` canonical JSONL streaming for complete local reads and private `0600` file output. MCP exposes only authenticated, item-and-byte-bounded event pages and reports oversized event omission.
