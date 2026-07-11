@@ -5,7 +5,7 @@
 - Added an independent read-only npm registry verification workflow and made promotion consume its run-bound evidence before moving `latest`.
 - Added fresh-cache, `--prefer-online`, bounded registry tarball retries to candidate comparison and promotion, distinguishing registry propagation lag from an actual artifact mismatch.
 - Bound promotion to the independent verifier's workflow revision, immutable tag commit, candidate publish steps, and unchanged prior `latest` value so stale evidence cannot cause an accidental downgrade.
-- Restricted failed-candidate recovery to a verified exact-version `ETARGET` in the original job log; unknown compare failures and hash mismatches remain release blockers.
+- Restricted failed-candidate recovery to a verified exact-version `ETARGET` in the original job log, with a stable compare-step marker for future releases; unknown compare failures and hash mismatches remain release blockers.
 
 ## 0.6.3
 

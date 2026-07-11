@@ -130,9 +130,11 @@ jobs:
               const log = fs.readFileSync(process.argv[1], "utf8");
               const state = require(process.argv[2]);
               const version = process.argv[3];
+              const compareMarker = `CSM_REGISTRY_COMPARE_START version=${version}`;
               const packCommand = "npm pack \"codex-sessions-manager@${PACKAGE_VERSION}\"";
               const exactNotarget = `npm error notarget No matching version found for codex-sessions-manager@${version}.`;
-              const packIndex = log.lastIndexOf(packCommand);
+              const markerIndex = log.lastIndexOf(compareMarker);
+              const packIndex = markerIndex >= 0 ? markerIndex : log.lastIndexOf(packCommand);
               if (packIndex < 0) process.exit(1);
               const compareLog = log.slice(packIndex);
               if (!compareLog.includes("npm error code ETARGET")) process.exit(1);

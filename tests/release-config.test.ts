@@ -191,6 +191,7 @@ describe("release configuration", () => {
     expect(releaseWorkflow).toContain("--testTimeout=30000");
     expect(releaseWorkflow).toContain("npm run test:coverage");
     expect(releaseWorkflow).toContain("npm run smoke:release");
+    expect(releaseWorkflow).toContain("CSM_REGISTRY_COMPARE_START version=${PACKAGE_VERSION}");
     expect(releaseWorkflow).toContain("npm audit --omit=dev --audit-level=high");
     const sharedConcurrencyBlock = [
       "concurrency:",
@@ -290,6 +291,8 @@ describe("release configuration", () => {
     expect(verifyRegistryWorkflow).toContain("codex-sessions-manager@${PACKAGE_VERSION}");
     expect(verifyRegistryWorkflow).toContain('compareFailureReason = "ETARGET"');
     expect(verifyRegistryWorkflow).toContain("lastIndexOf(packCommand)");
+    expect(verifyRegistryWorkflow).toContain("lastIndexOf(compareMarker)");
+    expect(verifyRegistryWorkflow).toContain("CSM_REGISTRY_COMPARE_START version=${version}");
     expect(verifyRegistryWorkflow).toContain("compareFailureVersion = version");
     expect(verifyRegistryWorkflow).toContain('createHash("sha256")');
     expect(verifyRegistryWorkflow).toContain("candidate-state.json");
