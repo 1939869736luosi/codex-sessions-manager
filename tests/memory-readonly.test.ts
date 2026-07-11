@@ -89,17 +89,18 @@ describe("read-only memory association", () => {
       enabled: true,
       stage1Present: true,
       rolloutSummaryPresent: true,
-      phase2Influence: "known",
+      phase2Influence: "unknown",
       retainedAfterSessionDelete: true,
       schemaStatus: "recognized",
-      warnings: [],
+      warnings: [expect.stringContaining("Phase 2")],
     });
     expect(archived.data.memoryLink).toMatchObject({
       enabled: true,
       stage1Present: true,
       rolloutSummaryPresent: false,
-      phase2Influence: "none",
+      phase2Influence: "unknown",
       retainedAfterSessionDelete: true,
+      warnings: [expect.stringContaining("provenance")],
     });
     const serialized = JSON.stringify([active.data.memoryLink, archived.data.memoryLink]);
     expect(serialized).not.toContain("RAW_MEMORY_MUST_NOT_LEAK");
@@ -125,18 +126,40 @@ describe("read-only memory association", () => {
     expect(JSON.stringify(result.data.memoryLink)).not.toContain("PRIVATE_OLD_MEMORY");
   });
 
+  it("does not claim no Phase 2 influence when the database or stage1 row is absent", async () => {
+    const absent = await getSessionOperation({ root: fixture.rootDir, sessionId: FIXTURE_IDS.ACTIVE_ID });
+    expect(absent.data.memoryLink).toMatchObject({
+      schemaStatus: "absent",
+      stage1Present: false,
+      phase2Influence: "unknown",
+      warnings: [expect.stringContaining("historical Phase 2 provenance")],
+    });
+
+    const databasePath = createOfficialMemoriesDatabase(fixture.rootDir);
+    const db = new Database(databasePath);
+    db.prepare("delete from stage1_outputs where thread_id = ?").run(FIXTURE_IDS.ACTIVE_ID);
+    db.close();
+    const missingRow = await getSessionOperation({ root: fixture.rootDir, sessionId: FIXTURE_IDS.ACTIVE_ID });
+    expect(missingRow.data.memoryLink).toMatchObject({
+      schemaStatus: "recognized",
+      stage1Present: false,
+      phase2Influence: "unknown",
+      warnings: [expect.stringContaining("historical Phase 2 provenance")],
+    });
+  });
+
   it("adds bounded memory statistics to doctor without raw rows", async () => {
     createOfficialMemoriesDatabase(fixture.rootDir);
 
     const result = await inspectRootOperation({ root: fixture.rootDir });
 
     expect(result.report.memory).toEqual({
-      enabled: true,
+      enabled: "unknown",
       databaseExists: true,
       schemaStatus: "recognized",
       stage1: { total: 2, withRolloutSummary: 1, selectedForPhase2: 1 },
       jobs: { total: 2, byStatus: { done: 1, pending: 1 } },
-      warnings: [],
+      warnings: [expect.stringContaining("database presence")],
     });
     expect(JSON.stringify(result.report.memory)).not.toContain("RAW_MEMORY_MUST_NOT_LEAK");
   });

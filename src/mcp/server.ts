@@ -17,7 +17,6 @@ import { getSessionEventsPageOperation } from "../application/event-operations.j
 import {
   auditRootOperation,
   auditSessionOperation,
-  exportSessionOperation,
   getRecoveryStatusOperation,
   getSessionFamilyOperation,
   listProjectsOperation,
@@ -70,6 +69,9 @@ export function parseProfile(argv: string[] = process.argv): McpProfile {
 }
 
 const TOOL_OUTPUT_SCHEMA = z.object({}).passthrough();
+export const MCP_GENERIC_RESPONSE_BYTES = 256 * 1024;
+export const MCP_GENERIC_ARRAY_ITEMS = 200;
+const MCP_OPERATION_ID_LIMIT = 50;
 const stringOrStringArraySchema = z.union([z.string(), z.array(z.string())]);
 const sourceKindSchema = z.union([z.enum(SOURCE_KINDS), z.array(z.enum(SOURCE_KINDS))]);
 const planDeleteStatusSchema = z.union([
@@ -80,7 +82,7 @@ const planDeleteStatusSchema = z.union([
 function textResult(text: string, structuredContent?: Record<string, unknown> | undefined) {
   return {
     content: [{ type: "text" as const, text }],
-    structuredContent,
+    structuredContent: structuredContent ? boundMcpStructuredContent(structuredContent) : undefined,
   };
 }
 
@@ -193,7 +195,7 @@ function toMcpSessionListItem(session: SessionEntry): Record<string, unknown> {
 
 function boundMcpValue(
   value: unknown,
-  limits: { maxString: number; maxArray: number; maxDepth: number },
+  limits: { maxString: number; maxArray: number; maxDepth: number; maxObjectKeys?: number },
   depth = 0,
 ): { value: unknown; truncated: boolean } {
   if (typeof value === "string") {
@@ -216,12 +218,103 @@ function boundMcpValue(
   }
 
   let truncated = false;
-  const entries = Object.entries(value as Record<string, unknown>).map(([key, nested]) => {
+  const objectEntries = Object.entries(value as Record<string, unknown>);
+  const selectedEntries = objectEntries.slice(0, limits.maxObjectKeys ?? objectEntries.length);
+  const entries = selectedEntries.map(([key, nested]) => {
     const bounded = boundMcpValue(nested, limits, depth + 1);
     truncated ||= bounded.truncated;
     return [key, bounded.value];
   });
+  truncated ||= selectedEntries.length < objectEntries.length;
   return { value: Object.fromEntries(entries), truncated };
+}
+
+function mcpPayloadBytes(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+
+function overflowStatusSummary(structuredContent: Record<string, unknown>): Record<string, unknown> {
+  const summary: Record<string, unknown> = {};
+  const copyScalars = (source: Record<string, unknown>, target: Record<string, unknown>) => {
+    for (const [key, value] of Object.entries(source)) {
+      if (value === null || typeof value === "number" || typeof value === "boolean") {
+        target[key] = value;
+      } else if (typeof value === "string") {
+        target[key] = truncateMcpText(value, 512).value;
+      }
+    }
+  };
+  copyScalars(structuredContent, summary);
+  for (const [key, value] of Object.entries(structuredContent)) {
+    if (Array.isArray(value)) {
+      summary[key] = [];
+      summary[`${key}Known`] = value.length;
+    }
+  }
+  for (const nestedKey of ["result", "status", "preview", "audit", "report", "plan"]) {
+    const nested = structuredContent[nestedKey];
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+      const nestedRecord = nested as Record<string, unknown>;
+      const nestedSummary: Record<string, unknown> = {};
+      copyScalars(nestedRecord, nestedSummary);
+      if (nestedRecord.verificationScope && typeof nestedRecord.verificationScope === "object") {
+        nestedSummary.verificationScope = boundMcpValue(
+          nestedRecord.verificationScope,
+          { maxString: 512, maxArray: 20, maxDepth: 4, maxObjectKeys: 40 },
+        ).value;
+      }
+      if (Array.isArray(nestedRecord.warnings)) {
+        nestedSummary.warnings = nestedRecord.warnings
+          .slice(0, 20)
+          .map((warning) => truncateMcpText(String(warning), 512).value);
+        nestedSummary.warningsKnown = nestedRecord.warnings.length;
+      }
+      summary[nestedKey] = nestedSummary;
+    }
+  }
+  const warnings = structuredContent.warnings
+    ?? (structuredContent.result && typeof structuredContent.result === "object"
+      ? (structuredContent.result as Record<string, unknown>).warnings
+      : undefined);
+  if (Array.isArray(warnings)) {
+    summary.warnings = warnings.slice(0, 20).map((warning) => truncateMcpText(String(warning), 512).value);
+    summary.warningsKnown = warnings.length;
+  }
+  return summary;
+}
+
+export function boundMcpStructuredContent(
+  structuredContent: Record<string, unknown>,
+): Record<string, unknown> {
+  const bounded = boundMcpValue(structuredContent, {
+    maxString: 8 * 1024,
+    maxArray: MCP_GENERIC_ARRAY_ITEMS,
+    maxDepth: 12,
+    maxObjectKeys: MCP_GENERIC_ARRAY_ITEMS,
+  });
+  if (!bounded.truncated && mcpPayloadBytes(structuredContent) <= MCP_GENERIC_RESPONSE_BYTES) {
+    return structuredContent;
+  }
+
+  const omission = `MCP structured response limit (${MCP_GENERIC_ARRAY_ITEMS} items per collection / ${MCP_GENERIC_RESPONSE_BYTES} bytes); use the CLI JSON or file-output route for complete local results`;
+  const candidate = {
+    ...(bounded.value as Record<string, unknown>),
+    responseCompleteness: "truncated_limit",
+    responseItemsLimit: MCP_GENERIC_ARRAY_ITEMS,
+    responseByteLimit: MCP_GENERIC_RESPONSE_BYTES,
+    responseOmittedReason: omission,
+  };
+  if (mcpPayloadBytes(candidate) <= MCP_GENERIC_RESPONSE_BYTES) {
+    return candidate;
+  }
+  return {
+    ...overflowStatusSummary(structuredContent),
+    responseCompleteness: "truncated_limit",
+    responseItemsLimit: MCP_GENERIC_ARRAY_ITEMS,
+    responseByteLimit: MCP_GENERIC_RESPONSE_BYTES,
+    responsePayloadOmitted: true,
+    responseOmittedReason: omission,
+  };
 }
 
 function boundMcpSession(session: SessionEntry, detail: McpSessionDetail): {
@@ -640,7 +733,7 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       outputSchema: TOOL_OUTPUT_SCHEMA,
       inputSchema: z.object({
         root: z.string().optional().describe("Optional explicit path to the .codex root."),
-        limit: z.number().int().positive().optional().describe("Maximum candidates to return. Defaults to 50."),
+        limit: z.number().int().positive().max(MCP_GENERIC_ARRAY_ITEMS).optional().describe("Maximum candidates to return. Defaults to 50; maximum 200."),
         status: z.union([z.string(), z.array(z.string())]).optional().describe("Filter by one or more audit-root statuses. Multiple values use OR."),
         source: z.union([z.string(), z.array(z.string())]).optional().describe("Filter by one or more audit-root sources. Multiple values use OR."),
         all: z.boolean().optional().describe("Include complete non-residue sessions too. Defaults to false."),
@@ -676,7 +769,7 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       outputSchema: TOOL_OUTPUT_SCHEMA,
       inputSchema: z.object({
         root: z.string().optional().describe("Optional explicit path to the .codex root."),
-        limit: z.number().int().positive().optional().describe("Maximum candidates to preview. Defaults to 50."),
+        limit: z.number().int().positive().max(MCP_GENERIC_ARRAY_ITEMS).optional().describe("Maximum candidates to preview. Defaults to 50; maximum 200."),
         status: z.union([z.string(), z.array(z.string())]).optional().describe("Filter by one or more audit-root statuses. Multiple values use OR."),
         source: z.union([z.string(), z.array(z.string())]).optional().describe("Filter by one or more audit-root sources. Multiple values use OR."),
         all: z.boolean().optional().describe("Include complete non-residue sessions too. Defaults to false."),
@@ -703,34 +796,13 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
   );
 
   server.registerTool(
-    "export_session_backup",
-    {
-      description:
-        "Export a full backup bundle for a single Codex session. This is recovery data, not a preview: globalStateRefs may include full exact-key values such as prompt-history content.",
-      outputSchema: TOOL_OUTPUT_SCHEMA,
-      inputSchema: z.object({
-        sessionId: z.string(),
-        root: z.string().optional(),
-      }),
-      annotations: {
-        readOnlyHint: true,
-        idempotentHint: true,
-      },
-    },
-    async ({ sessionId, root }) => {
-      const result = await exportSessionOperation({ root, sessionId });
-      return textResult(`Exported backup bundle for ${result.session.id}.`, { bundle: result.data });
-    },
-  );
-
-  server.registerTool(
     "preview_delete_sessions",
     {
       description:
         "Read-only preview of what would be removed by deleting one or more explicit Codex sessions. This is the single-session or explicit-ID preview to inspect before any confirmed delete. P11 exact-key global-state refs show path, rule id, shape, byte estimate, and confirmation requirement without printing values.",
       outputSchema: TOOL_OUTPUT_SCHEMA,
       inputSchema: z.object({
-        sessionIds: z.array(z.string()).min(1),
+        sessionIds: z.array(z.string()).min(1).max(MCP_OPERATION_ID_LIMIT),
         root: z.string().optional(),
       }),
       annotations: {
@@ -752,7 +824,7 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       outputSchema: TOOL_OUTPUT_SCHEMA,
       inputSchema: z.object({
         root: z.string().optional().describe("Optional explicit path to the .codex root."),
-        sessionIds: z.array(z.string()).min(1).optional().describe("Explicit session ids or unique prefixes. Required unless using sourceKind candidate mode."),
+        sessionIds: z.array(z.string()).min(1).max(MCP_OPERATION_ID_LIMIT).optional().describe("Explicit session ids or unique prefixes. Required unless using sourceKind candidate mode."),
         includeChildren: z.boolean().optional().describe("Read-only include flag matching CLI --include-children."),
         includeSubagents: z.boolean().optional().describe("Read-only include flag matching CLI --include-subagents."),
         includeDescendants: z.boolean().optional().describe("Read-only include flag matching CLI --include-descendants."),
@@ -864,15 +936,27 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       outputSchema: TOOL_OUTPUT_SCHEMA,
       inputSchema: z.object({
         root: z.string().optional(),
+        limit: z.number().int().min(1).max(MCP_GENERIC_ARRAY_ITEMS).optional(),
       }),
       annotations: {
         readOnlyHint: true,
         idempotentHint: true,
       },
     },
-    async ({ root }) => {
+    async ({ root, limit = MCP_LIST_DEFAULT_LIMIT }) => {
       const result = await listTrashOperation({ root });
-      return textResult(`Found ${result.data.entries.length} trash entries.`, result.data);
+      const entries = result.data.entries.slice(0, limit);
+      const hasMore = result.data.entries.length > entries.length;
+      return textResult(`Returned ${entries.length} of ${result.data.entries.length} trash entries.`, {
+        ...result.data,
+        entries,
+        entriesKnown: result.data.entries.length,
+        entriesReturned: entries.length,
+        limitApplied: limit,
+        hasMore,
+        completeness: hasMore ? "truncated_limit" : "complete",
+        omittedReason: hasMore ? `MCP trash item limit (${limit}); use CLI trash-list --json for complete results` : null,
+      });
     },
   );
 
@@ -926,7 +1010,7 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
           "Delete explicit Codex sessions across files, JSONL indexes, SQLite, known global-state refs, and the two P11 exact-key global-state refs only. Preview may use a unique short prefix. Confirmed execution requires full UUID session IDs. Pass trash=true to move them to recoverable trash. Active sessions additionally require allowActive=true. Without confirm=true this returns a preview only; with confirm=true it executes after the caller has reviewed the intended scope. There is no preview token binding a prior preview call to the confirmed call. Unknown global-state refs outside the exact-key rules remain warnings, and unknown-only cleanup is refused. This tool never recursively adds parent, child, or family sessions.",
         outputSchema: TOOL_OUTPUT_SCHEMA,
         inputSchema: z.object({
-          sessionIds: z.array(z.string()).min(1),
+          sessionIds: z.array(z.string()).min(1).max(MCP_OPERATION_ID_LIMIT),
           root: z.string().optional(),
           confirm: z.boolean().optional().describe("Must be true to execute deletion after you have inspected a separate preview. Omit or false to return preview only."),
           trash: z.boolean().optional().describe("Move sessions to recoverable trash before deleting live surfaces. Defaults to false for permanent delete compatibility."),
@@ -1032,7 +1116,7 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
           "Remove JSONL index traces for specific sessions without deleting raw files or SQLite rows. Preview may use a unique short prefix. Confirmed execution requires full UUID session IDs; active sessions additionally require allowActive=true. Requires confirm=true; otherwise returns a preview only.",
         outputSchema: TOOL_OUTPUT_SCHEMA,
         inputSchema: z.object({
-          sessionIds: z.array(z.string()).min(1),
+          sessionIds: z.array(z.string()).min(1).max(MCP_OPERATION_ID_LIMIT),
           root: z.string().optional(),
           confirm: z.boolean().optional().describe("Must be true to rewrite JSONL indexes. Omit or false to return preview only."),
           allowActive: z.boolean().optional().describe("Must be true, together with confirm=true and full UUIDs, to rewrite indexes for an active session."),
@@ -1099,7 +1183,7 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
         "Verify whether sessions still have remaining files, JSONL index rows, SQLite rows, known global-state refs, P11 exact-key global-state refs, unknown global-state refs, or warnings.",
       outputSchema: TOOL_OUTPUT_SCHEMA,
       inputSchema: z.object({
-        sessionIds: z.array(z.string()).min(1),
+        sessionIds: z.array(z.string()).min(1).max(MCP_OPERATION_ID_LIMIT),
         root: z.string().optional(),
       }),
       annotations: {

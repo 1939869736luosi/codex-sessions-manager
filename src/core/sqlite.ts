@@ -444,10 +444,13 @@ function emptyMemoryLink(enabled: boolean, schemaStatus: MemorySchemaStatus, war
     enabled,
     stage1Present: false,
     rolloutSummaryPresent: false,
-    phase2Influence: schemaStatus === "unrecognized" ? "unknown" : "none",
+    phase2Influence: "unknown",
     retainedAfterSessionDelete: true,
     schemaStatus,
-    warnings,
+    warnings: [
+      ...warnings,
+      "historical Phase 2 provenance cannot be confirmed without a current stage1 association",
+    ],
   };
 }
 
@@ -484,19 +487,22 @@ export function inspectSessionMemoryLink(
     const sourceUpdatedAt = numberOrNull(row.source_updated_at);
     const selectedSourceUpdatedAt = numberOrNull(row.selected_for_phase2_source_updated_at);
     const selected = Number(row.selected_for_phase2 ?? 0) === 1;
-    const phase2Influence = selected
-      ? sourceUpdatedAt !== null && selectedSourceUpdatedAt === sourceUpdatedAt
-        ? "known"
-        : "unknown"
-      : "none";
+    const selectionMatchesCurrentSource = selected
+      && sourceUpdatedAt !== null
+      && selectedSourceUpdatedAt === sourceUpdatedAt;
+    const phase2Warning = selectionMatchesCurrentSource
+      ? "session is selected for Phase 2, but final Phase 2 provenance cannot be confirmed"
+      : selected
+        ? "session has ambiguous Phase 2 selection metadata; final provenance cannot be confirmed"
+        : "session is not currently selected for Phase 2; historical Phase 2 provenance cannot be confirmed";
     return {
       enabled,
       stage1Present: true,
       rolloutSummaryPresent: typeof row.rollout_summary === "string" && row.rollout_summary.trim().length > 0,
-      phase2Influence,
+      phase2Influence: "unknown",
       retainedAfterSessionDelete: true,
       schemaStatus,
-      warnings: [],
+      warnings: [phase2Warning],
     };
   });
 }
@@ -507,12 +513,15 @@ function emptyMemoryDoctorStats(
   warnings: string[],
 ): MemoryDoctorStats {
   return {
-    enabled: databaseExists,
+    enabled: "unknown",
     databaseExists,
     schemaStatus,
     stage1: { total: 0, withRolloutSummary: 0, selectedForPhase2: 0 },
     jobs: { total: 0, byStatus: {} },
-    warnings,
+    warnings: [
+      ...warnings,
+      "memory enablement cannot be inferred from database presence alone",
+    ],
   };
 }
 
@@ -542,7 +551,7 @@ export function inspectMemoryDoctorStats(memoriesPath: string | null): MemoryDoc
       return status ? [[status, Number(row.count ?? 0)]] : [];
     }));
     return {
-      enabled: true,
+      enabled: "unknown",
       databaseExists: true,
       schemaStatus,
       stage1: {
@@ -554,7 +563,7 @@ export function inspectMemoryDoctorStats(memoriesPath: string | null): MemoryDoc
         total: Object.values(byStatus).reduce((sum, count) => sum + count, 0),
         byStatus,
       },
-      warnings: [],
+      warnings: ["memory enablement cannot be inferred from database presence alone"],
     };
   });
 }

@@ -245,12 +245,12 @@ export async function inspectCodexRoot(rootArg?: string): Promise<DoctorReport> 
   } catch (error) {
     const message = `memories statistics unavailable: ${error instanceof Error ? error.message : String(error)}`;
     memory = {
-      enabled: Boolean(activeMemoriesPath),
+      enabled: "unknown",
       databaseExists: Boolean(activeMemoriesPath),
       schemaStatus: "unrecognized",
       stage1: { total: 0, withRolloutSummary: 0, selectedForPhase2: 0 },
       jobs: { total: 0, byStatus: {} },
-      warnings: [message],
+      warnings: [message, "memory enablement cannot be inferred from database presence alone"],
     };
     sqliteWarnings.push(message);
   }

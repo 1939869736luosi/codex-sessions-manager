@@ -29,7 +29,7 @@ codex-sessions show <session-id> [--root PATH] [--json]
 
 Human output shows at most 20 timeline items and reports returned/known counts. Use `--json` for every locally parseable semantic item; JSON has no total item-count limit and marks unknown items, parse errors, and truncated tool output. `export` is the byte-exact raw-content path. A compressed-only `.jsonl.zst` session reports `compressed_unread` instead of presenting an index/history summary as transcript text.
 
-Session JSON includes a read-only `memoryLink`. It reports only enabled/stage1/summary/Phase 2 linkage state and always says memory is retained after ordinary session deletion; it never returns raw memory or rollout-summary text.
+Session JSON includes a read-only `memoryLink`. It reports only enabled/stage1/summary/Phase 2 linkage state and always says memory is retained after ordinary session deletion; it never returns raw memory or rollout-summary text. Stage 1 selection does not prove final Phase 2 provenance, so uncertain influence is `unknown`. Doctor also keeps memory enablement separate from database existence and reports `enabled=unknown` when no reliable official signal exists.
 
 ### events
 
@@ -133,7 +133,9 @@ Reports remaining files, JSONL rows, SQLite rows (including goals DB), shell sna
 
 ## MCP Tools Reference
 
-### Read-only profile (17 tools, default)
+### Read-only profile (16 bounded tools, default)
+
+All structured responses have a final 256 KiB and 200-items-per-collection limit. Limit hits return `responseCompleteness=truncated_limit` plus `responseOmittedReason`. Explicit session operations accept at most 50 IDs. `list_trash` defaults to 50 entries and accepts at most 200. Exact backup export is CLI-only.
 
 | Tool | Purpose |
 |------|---------|
@@ -147,7 +149,6 @@ Reports remaining files, JSONL rows, SQLite rows (including goals DB), shell sna
 | `audit_session` | Session residue audit |
 | `audit_root` | Root residue scan |
 | `preview_root_delete` | Batch delete preview |
-| `export_session_backup` | Export backup |
 | `preview_delete_sessions` | Explicit-ID delete preview |
 | `plan_delete_sessions` | Read-only delete planning |
 | `preview_delete_plan` | Plan-file stale check |

@@ -138,7 +138,7 @@ export interface SessionMemoryLink {
 }
 
 export interface MemoryDoctorStats {
-  enabled: boolean;
+  enabled: boolean | "unknown";
   databaseExists: boolean;
   schemaStatus: MemorySchemaStatus;
   stage1: {

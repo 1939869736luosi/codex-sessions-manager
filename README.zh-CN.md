@@ -182,7 +182,7 @@ codex mcp add codex-sessions -- codex-sessions-mcp --profile read-only
 }
 ```
 
-默认 **read-only** profile（17 个工具）。需要破坏性操作时使用 `--profile admin`（23 个工具）。
+默认 **read-only** profile（16 个工具）。需要破坏性操作时使用 `--profile admin`（22 个工具）。
 
 MCP `get_session` 有固定上限：`compact` 最多 20 items / 64 KiB，并且最多读取 1 MiB rollout 源文件；`full` 最多 200 items / 256 KiB，并且最多读取 8 MiB。session metadata 同样受限。两种模式都会返回 `completeness`、底层 `sourceCompleteness`、已返回/已知数量、metadata 截断、省略原因和是否可精确导出。读取上限先于文件结尾触发时，`itemsKnown` 会返回 `null`，不会给出伪完整总数；工具输出截断也会标成 `truncated_limit`。需要全部本地可解析 semantic items 时用 `codex-sessions show <id> --json`；需要 byte-exact 原始内容时用 `export`。
 
@@ -204,7 +204,11 @@ MCP `list_sessions` 只返回精简记录，默认最多 50 个 session，参数
 
 ### 升级说明（v0.5.x → v0.6.0）
 
-v0.6.0 把 MCP 默认 profile 从 20 个工具缩减为 15 个。恢复支持把两个 profile 增至 16 和 22 个工具；0.7.0 的有界 canonical event reader 使其变为 17 和 23 个工具。需要写操作时添加 `--profile admin`，但仍然必须明确确认。
+v0.6.0 把 MCP 默认 profile 从 20 个工具缩减为 15 个。恢复支持把两个 profile 增至 16 和 22 个工具。0.7.0 用有界 canonical event reader 替换无界的 `export_session_backup`，因此两个 profile 仍是 16 和 22 个工具；精确导出只走 CLI。需要写操作时添加 `--profile admin`，但仍然必须明确确认。
+
+所有 MCP structured response 最后都经过统一的 256 KiB 和“每个集合最多 200 项”限制。触及限制时会返回 `responseCompleteness=truncated_limit` 与 `responseOmittedReason`；已经提交的写操作状态仍保留在原来的 `result` 内。显式 session 操作最多接收 50 个 ID；`list_trash` 默认返回 50 项，最大 200 项。完整本地结果请使用 CLI JSON 或文件输出。
+
+仅凭 `memories_N.sqlite` 存在不能证明 memory 已启用，因此 `doctor` 在没有可靠官方信号时返回 `enabled=unknown`。当前 Stage 1 的选中标记也不能证明最终 Phase 2 provenance；无法确认时只返回 `unknown`，不猜成 `known` 或 `none`。普通 session 删除仍会保留全部 memory surface。
 
 ## CLI 命令
 

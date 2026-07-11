@@ -193,7 +193,7 @@ Other MCP hosts may use their own JSON configuration, for example:
 }
 ```
 
-Default profile is **read-only** (17 tools). For destructive operations, use `--profile admin` (23 tools).
+Default profile is **read-only** (16 tools). For destructive operations, use `--profile admin` (22 tools).
 
 MCP `get_session` is intentionally bounded: `compact` returns at most 20 items / 64 KiB and reads at most 1 MiB of the source rollout; `full` returns at most 200 items / 256 KiB and reads at most 8 MiB. Session metadata is bounded as well. Both modes report `completeness`, underlying `sourceCompleteness`, returned/known counts, metadata truncation, omission reason, and exact-export availability. When the source-read limit is reached before EOF, `itemsKnown` is `null` rather than a false total. Tool-output truncation is also reported as `truncated_limit`. Use `codex-sessions show <id> --json` for all locally parseable semantic items and `export` for byte-exact raw content.
 
@@ -215,7 +215,9 @@ Platform-specific setup guides are in the `adapters/` directory:
 
 ### Migration Note (v0.5.x to v0.6.0)
 
-MCP default changed from 20 tools to 15 tools in v0.6.0. Recovery support brought the profiles to 16 and 22 tools; the bounded canonical event reader brings 0.7.0 to 17 and 23 tools. If you need destructive tools, add `--profile admin`; explicit confirmation remains mandatory.
+MCP default changed from 20 tools to 15 tools in v0.6.0. Recovery support brought the profiles to 16 and 22 tools. In 0.7.0, the bounded canonical event reader replaces the unbounded `export_session_backup` tool, so the profiles remain at 16 and 22 tools. Exact export stays CLI-only. If you need destructive tools, add `--profile admin`; explicit confirmation remains mandatory.
+
+Every MCP structured response now passes a final 256 KiB / 200-items-per-collection boundary. If that boundary is reached, the response reports `responseCompleteness=truncated_limit` and `responseOmittedReason`; committed mutation status remains under its original `result` wrapper. Explicit session-operation inputs accept at most 50 IDs, and `list_trash` returns 50 entries by default (200 maximum). Use CLI JSON or file output for complete local results.
 
 ## CLI Reference
 
@@ -256,7 +258,7 @@ Read-only lookups may resolve a unique short prefix. Confirmed session mutations
 
 `export` and trash bundles are recovery data, not previews. They may include full global-state exact-key values such as prompt-history content. Human delete previews show only path, rule, shape, and byte counts.
 
-`doctor` defaults to counts, risks, bounded warnings, and at most five samples per reference class. Use `--details` only when complete local diagnostic arrays are required. Session JSON and MCP detail include a read-only `memoryLink`; it never includes `raw_memory` or rollout-summary text, and ordinary session deletion retains all memory surfaces.
+`doctor` defaults to counts, risks, bounded warnings, and at most five samples per reference class. Use `--details` only when complete local diagnostic arrays are required. Session JSON and MCP detail include a read-only `memoryLink`; it never includes `raw_memory` or rollout-summary text, and ordinary session deletion retains all memory surfaces. Database presence alone does not prove that memory is enabled, so doctor reports `enabled=unknown` unless a future official signal can establish it. Current Stage 1 selection metadata also does not prove final Phase 2 provenance; uncertain influence is reported as `unknown`, not guessed as `known` or `none`.
 
 `events` requires a complete session UUID and streams canonical JSONL without shortening tool data. `--output` creates a new private `0600` file and refuses overwrite. MCP `get_session_events_page` is separately bounded to 100 events and 240 KiB of event data; oversized events are reported and omitted from MCP, with CLI/file output as the complete path.
 
