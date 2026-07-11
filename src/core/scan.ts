@@ -275,6 +275,14 @@ function formatIsoFromUnix(seconds: number | null): string | null {
   return new Date(seconds * 1000).toISOString();
 }
 
+function formatIsoFromUnixMillis(milliseconds: number | null): string | null {
+  if (!milliseconds) {
+    return null;
+  }
+
+  return new Date(milliseconds).toISOString();
+}
+
 function buildPreviewSummary(historyPreview: string[], firstUserMessage: string, fileTargets: SessionFileTarget[]): string {
   if (historyPreview.length > 0) {
     return historyPreview[0];
@@ -363,11 +371,18 @@ function buildSession(
       thread?.rolloutPath?.includes("/archived_sessions/"),
   );
   const titleMetadata = buildTitleMetadata(id, indexRecord, thread);
-  const createdAt = formatIsoFromUnix(thread?.createdAt ?? null);
+  const createdAt =
+    formatIsoFromUnixMillis(thread?.createdAtMs ?? null) ||
+    formatIsoFromUnix(thread?.createdAt ?? null);
   const updatedAt =
+    formatIsoFromUnixMillis(thread?.updatedAtMs ?? null) ||
     formatIsoFromUnix(thread?.updatedAt ?? null) ||
     indexRecord?.updated_at ||
     (fileTargets[0]?.lastModified ? new Date(fileTargets[0].lastModified).toISOString() : null);
+  const recencyAtMs = thread?.recencyAtMs ?? null;
+  const recencyAt =
+    formatIsoFromUnixMillis(recencyAtMs) ||
+    formatIsoFromUnix(thread?.recencyAt ?? null);
   const hasFile = fileTargets.length > 0;
   const hasThread = Boolean(thread);
   const kind = chooseSessionKind(hasFile, archived, hasThread);
@@ -395,6 +410,9 @@ function buildSession(
     projectKey: project.projectKey,
     createdAt,
     updatedAt,
+    recencyAt,
+    recencyAtMs,
+    historyMode: thread?.historyMode ?? "legacy",
     model: thread?.model ?? null,
     modelProvider: thread?.modelProvider ?? null,
     cwd: thread?.cwd ?? null,
@@ -481,9 +499,10 @@ export async function scanCodexRoot(rootArg?: string): Promise<ScanResult> {
       return buildSession(id, fileTargets, sessionIndex, history, threadsById.get(id));
     })
     .sort((left, right) => {
-      const rightTime = new Date(right.updatedAt ?? 0).getTime();
-      const leftTime = new Date(left.updatedAt ?? 0).getTime();
-      return rightTime - leftTime;
+      const rightTime = right.recencyAtMs ?? new Date(right.recencyAt ?? right.updatedAt ?? 0).getTime();
+      const leftTime = left.recencyAtMs ?? new Date(left.recencyAt ?? left.updatedAt ?? 0).getTime();
+      if (rightTime !== leftTime) return rightTime - leftTime;
+      return right.id.localeCompare(left.id);
     });
 
   return {

@@ -15,6 +15,7 @@ import type {
   RootResidueAudit,
   ScanResult,
   SessionEntry,
+  SessionTimelineResult,
   SessionFamily,
   SessionFamilyImpact,
   SessionFamilyNode,
@@ -139,7 +140,7 @@ function formatTimelinePreview(timeline: TimelineItem[]): string[] {
     .slice(0, TIMELINE_PREVIEW_LIMIT)
     .map((item) => `- [${item.roleLabel}] ${item.body.replace(/\s+/g, " ").slice(0, 220)}`);
   if (timeline.length > TIMELINE_PREVIEW_LIMIT) {
-    rows.push(`- ... 还有 ${timeline.length - TIMELINE_PREVIEW_LIMIT} 条，使用 show --json 查看完整时间线`);
+    rows.push(`- ... 还有 ${timeline.length - TIMELINE_PREVIEW_LIMIT} 条，使用 show --json 查看全部可解析项；原始字节使用 export`);
   }
   return rows;
 }
@@ -286,7 +287,15 @@ export function formatProjects(projects: ProjectSummary[]): string {
   ]);
 }
 
-export function formatShow(session: SessionEntry, timeline: TimelineItem[]): string {
+export function formatShow(
+  session: SessionEntry,
+  timeline: TimelineItem[],
+  timelineMetadata?: Omit<SessionTimelineResult, "items">,
+): string {
+  const previewCount = Math.min(timeline.length, TIMELINE_PREVIEW_LIMIT);
+  const knownCount = timelineMetadata?.itemsKnown === null
+    ? "未知"
+    : String(timelineMetadata?.itemsKnown ?? timeline.length);
   const lines = [
     `标题: ${trimDetailText(session.displayTitle)}`,
     `ID: ${session.id}`,
@@ -299,6 +308,8 @@ export function formatShow(session: SessionEntry, timeline: TimelineItem[]): str
     `状态: ${session.kind}`,
     `创建时间: ${formatDate(session.createdAt)}`,
     `更新时间: ${formatDate(session.updatedAt)}`,
+    `recency: ${formatDate(session.recencyAt)}`,
+    `history_mode: ${timelineMetadata?.historyMode ?? session.historyMode}`,
     `来源分类: ${session.sourceKind}`,
     `raw source: ${trimDetailText(session.source)}`,
     `thread_source: ${trimDetailText(session.threadSource)}`,
@@ -312,6 +323,11 @@ export function formatShow(session: SessionEntry, timeline: TimelineItem[]): str
     `session_index 命中: ${session.sessionIndexCount}`,
     `history 命中: ${session.historyCount}`,
     `SQLite 线程: ${session.hasThread ? "是" : "否"}`,
+    `时间线完整性: ${timelineMetadata?.completeness ?? "complete"}`,
+    `时间线返回: ${previewCount}/${knownCount}`,
+    `工具输出截断: ${timelineMetadata?.toolOutputTruncatedCount ?? timeline.filter((item) => item.truncated).length}`,
+    `精确原始导出: ${timelineMetadata?.exactExportAvailable ?? session.fileTargets.length > 0 ? "可用" : "不可用"}`,
+    ...(timelineMetadata?.omittedReason ? [`省略原因: ${timelineMetadata.omittedReason}`] : []),
     "",
     "时间线预览:",
     ...formatTimelinePreview(timeline),

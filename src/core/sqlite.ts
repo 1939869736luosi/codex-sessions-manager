@@ -3,7 +3,13 @@ import { lstatSync } from "node:fs";
 
 import { MutationSafetyError } from "./mutation-safety.js";
 import { deriveSourceInfo } from "./sources.js";
-import type { SqliteDeletionCounts, SqliteTableInspection, ThreadRow, ThreadSpawnEdgeRow } from "./types.js";
+import type {
+  SqliteDeletionCounts,
+  SqliteTableInspection,
+  ThreadHistoryMode,
+  ThreadRow,
+  ThreadSpawnEdgeRow,
+} from "./types.js";
 
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -280,6 +286,18 @@ function stringOrNull(value: unknown): string | null {
   return text ? text : null;
 }
 
+function numberOrNull(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function historyModeOrUnknown(value: unknown): ThreadHistoryMode {
+  const mode = stringOrNull(value);
+  if (mode === "legacy" || mode === "paginated") return mode;
+  return mode ? "unknown" : "legacy";
+}
+
 function addSessionId(value: unknown, ids: Set<string>): void {
   const text = stringOrNull(value);
   if (text && SESSION_ID_PATTERN.test(text)) {
@@ -327,8 +345,13 @@ function mapThreadRow(row: Record<string, unknown>): ThreadRow {
     id: String(row.id ?? ""),
     title: String(row.title ?? ""),
     firstUserMessage: String(row.first_user_message ?? ""),
-    createdAt: row.created_at === null || row.created_at === undefined ? null : Number(row.created_at),
-    updatedAt: row.updated_at === null || row.updated_at === undefined ? null : Number(row.updated_at),
+    createdAt: numberOrNull(row.created_at),
+    updatedAt: numberOrNull(row.updated_at),
+    createdAtMs: numberOrNull(row.created_at_ms),
+    updatedAtMs: numberOrNull(row.updated_at_ms),
+    recencyAt: numberOrNull(row.recency_at),
+    recencyAtMs: numberOrNull(row.recency_at_ms),
+    historyMode: historyModeOrUnknown(row.history_mode),
     archived: Number(row.archived ?? 0) === 1,
     rolloutPath: row.rollout_path ? String(row.rollout_path) : null,
     model: row.model ? String(row.model) : null,
@@ -355,10 +378,24 @@ export function scanThreads(sqlitePath: string | null): Map<string, ThreadRow> {
     }
 
     const columns = new Set(getTableColumns(db, "threads"));
-    const orderBy = columns.has("updated_at") ? "updated_at desc" : "id";
+    const orderBy = columns.has("recency_at_ms")
+      ? "recency_at_ms desc, id desc"
+      : columns.has("recency_at")
+        ? "recency_at desc, id desc"
+        : columns.has("updated_at_ms")
+          ? "updated_at_ms desc, id desc"
+          : columns.has("updated_at")
+            ? "updated_at desc, id desc"
+            : "id";
     const rows = db
       .prepare(
-        `select id, title, first_user_message, created_at, updated_at, archived, rollout_path, model,
+        `select id, title, first_user_message, created_at, updated_at,
+           ${selectOptionalColumn(columns, "created_at_ms")},
+           ${selectOptionalColumn(columns, "updated_at_ms")},
+           ${selectOptionalColumn(columns, "recency_at")},
+           ${selectOptionalColumn(columns, "recency_at_ms")},
+           ${selectOptionalColumn(columns, "history_mode")},
+           archived, rollout_path, model,
            ${selectOptionalColumn(columns, "model_provider")},
            cwd,
            ${selectOptionalColumn(columns, "source")},

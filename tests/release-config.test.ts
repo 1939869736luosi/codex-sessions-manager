@@ -48,10 +48,13 @@ describe("release configuration", () => {
     expect(packageJson.engines?.node).toBe(">=20");
     expect(packageJson.scripts).toMatchObject({
       build: "node scripts/build.mjs",
+      "compat:check": "node scripts/check-compat.mjs",
+      "compat:release-check": "node scripts/check-compat.mjs --release",
       test: "node scripts/test.mjs",
       typecheck: "tsc -p tsconfig.json --noEmit",
       "test:coverage": "node scripts/test-coverage.mjs",
       "pack:check": "node scripts/check-package.mjs",
+      "smoke:release": "node scripts/smoke-release.mjs",
     });
     expect(packageJson.files).toEqual(expect.arrayContaining(["dist", "README.md", "LICENSE"]));
     expect(packageJson.files).not.toEqual(expect.arrayContaining([".", "docs", "session-exports"]));
@@ -68,6 +71,65 @@ describe("release configuration", () => {
     expect(coverageScript).toContain("--coverage.thresholds.lines=80");
   });
 
+  it("ships the official Codex TOML adapter and nested Skill metadata without drift", async () => {
+    const adapter = await readRepositoryFile("adapters/codex/README.md");
+    const rootSkill = await readRepositoryFile("SKILL.md");
+    const packagedSkill = await readRepositoryFile("skills/codex-sessions-manager/SKILL.md");
+    const rootOpenAiMetadata = await readRepositoryFile("agents/openai.yaml");
+    const nestedOpenAiMetadata = await readRepositoryFile("skills/codex-sessions-manager/agents/openai.yaml");
+    const rootDetail = await readRepositoryFile("docs/SKILL_DETAIL.md");
+    const nestedDetail = await readRepositoryFile("skills/codex-sessions-manager/docs/SKILL_DETAIL.md");
+    const rootSafety = await readRepositoryFile("docs/SAFETY.md");
+    const nestedSafety = await readRepositoryFile("skills/codex-sessions-manager/docs/SAFETY.md");
+
+    expect(adapter).toContain("[mcp_servers.codex-sessions]");
+    expect(adapter).toContain("codex mcp add codex-sessions -- codex-sessions-mcp --profile read-only");
+    expect(adapter).not.toContain('"mcpServers"');
+    expect(rootSkill).toContain(".agents/skills/codex-sessions-manager");
+    expect(rootSkill).toContain("$HOME/.agents/skills/codex-sessions-manager");
+    expect(packagedSkill).toBe(rootSkill);
+    expect(nestedOpenAiMetadata.trimEnd()).toBe(rootOpenAiMetadata.trimEnd());
+    expect(nestedDetail).toBe(rootDetail);
+    expect(nestedSafety).toBe(rootSafety);
+  });
+
+  it("tracks an offline compatibility baseline and report-only upstream watch", async () => {
+    const baseline = JSON.parse(await readRepositoryFile("compat/upstream-baseline.json")) as {
+      stableVersion?: string;
+      checkedAt?: string;
+      commit?: { sha?: string; url?: string };
+    };
+    const compatReadme = await readRepositoryFile("compat/README.md");
+    const maintainerPrompt = await readRepositoryFile("compat/MAINTAINER_PROMPT.md");
+    const compatWorkflow = await readRepositoryFile(".github/workflows/compat-watch.yml");
+
+    expect(baseline).toMatchObject({
+      stableVersion: "0.144.1",
+      checkedAt: "2026-07-11",
+      commit: {
+        sha: "44918ea10c0f99151c6710411b4322c2f5c96bea",
+        url: "https://github.com/openai/codex/commit/44918ea10c0f99151c6710411b4322c2f5c96bea",
+      },
+    });
+    expect(compatReadme).toContain("Storage structure");
+    expect(compatReadme).toContain("Local read-only smoke");
+    expect(maintainerPrompt).toContain("maintainer-only");
+    expect(compatWorkflow).toContain("schedule:");
+    expect(compatWorkflow).toContain("workflow_dispatch:");
+    expect(compatWorkflow).toContain("scripts/check-upstream-version.mjs");
+    expect(compatWorkflow).toContain("GITHUB_TOKEN: ${{ github.token }}");
+    expect(compatWorkflow).not.toContain("issues: write");
+    expect(compatWorkflow).not.toContain("pull-requests: write");
+
+    const result = spawnSync(process.execPath, ["scripts/check-compat.mjs"], {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+      env: subprocessEnvironment(),
+    });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("Compatibility check passed");
+  });
+
   it("defines the required cross-platform CI matrix", async () => {
     const workflow = await readRepositoryFile(".github/workflows/ci.yml");
 
@@ -81,9 +143,11 @@ describe("release configuration", () => {
     expect(workflow).toContain("npm test");
     expect(workflow).toContain("if: runner.os != 'Windows'");
     expect(workflow).toContain("tests/windows-destructive-policy.test.ts");
+    expect(workflow).toContain("tests/compat-v063.test.ts");
     expect(workflow).toContain("--testTimeout=30000");
     expect(workflow).toContain("npm run test:coverage");
     expect(workflow).toContain("npm run build");
+    expect(workflow).toContain("npm run smoke:release");
     expect(workflow).toContain("npm run pack:check");
   });
 
@@ -99,7 +163,10 @@ describe("release configuration", () => {
     expect(releaseWorkflow).toContain("Wait for registry replication");
     expect(releaseWorkflow).toContain('npm view "codex-sessions-manager@${PACKAGE_VERSION}" version');
     expect(releaseWorkflow).toContain("for ATTEMPT in {1..12}");
+    expect(releaseWorkflow).toContain("--prefer-online --cache");
     expect(releaseWorkflow).toContain("Compare the registry tarball with the reviewed tarball");
+    expect(releaseWorkflow).toContain("node scripts/check-compat.mjs --release");
+    expect(releaseWorkflow).toContain("npm run compat:release-check");
     expect(releaseWorkflow).not.toContain("dist-tag add");
     expect(releaseWorkflow).toContain("needs: [release-metadata, verify-matrix, production-audit]");
     expect(releaseWorkflow).toContain('git merge-base --is-ancestor "${GITHUB_SHA}" refs/remotes/origin/main');
@@ -112,15 +179,39 @@ describe("release configuration", () => {
     expect(releaseWorkflow).toContain("if: runner.os != 'Windows'");
     expect(releaseWorkflow).toContain("Verify Windows read-only safety gates");
     expect(releaseWorkflow).toContain("tests/windows-destructive-policy.test.ts");
+    expect(releaseWorkflow).toContain("tests/compat-v063.test.ts");
     expect(releaseWorkflow).toContain("--testTimeout=30000");
     expect(releaseWorkflow).toContain("npm run test:coverage");
+    expect(releaseWorkflow).toContain("npm run smoke:release");
     expect(releaseWorkflow).toContain("npm audit --omit=dev --audit-level=high");
+    const sharedConcurrencyBlock = [
+      "concurrency:",
+      "  group: npm-package-codex-sessions-manager",
+      "  cancel-in-progress: false",
+    ].join("\n");
+    expect(releaseWorkflow).toContain(sharedConcurrencyBlock);
 
     expect(promoteWorkflow).toContain("workflow_dispatch:");
     expect(promoteWorkflow).toContain("environment: npm-production");
     expect(promoteWorkflow).toContain("NPM_DIST_TAG_TOKEN");
     expect(promoteWorkflow).toContain('dist-tag add "codex-sessions-manager@${{ inputs.version }}" latest');
     expect(promoteWorkflow).toContain("expected_sha256");
+    expect(promoteWorkflow).toContain("Wait for dist-tag replication");
+    expect(promoteWorkflow).toContain("--prefer-online");
+    expect(promoteWorkflow).toContain("for ATTEMPT in {1..12}");
+    expect(promoteWorkflow).toContain(sharedConcurrencyBlock);
+    const candidatePrecheckIndex = promoteWorkflow.indexOf("Require security-verify candidate identity");
+    const moveLatestIndex = promoteWorkflow.indexOf("Move latest only after exact-version verification");
+    const replicationIndex = promoteWorkflow.indexOf("Wait for dist-tag replication");
+    expect(candidatePrecheckIndex).toBeGreaterThan(-1);
+    expect(candidatePrecheckIndex).toBeLessThan(moveLatestIndex);
+    expect(moveLatestIndex).toBeLessThan(replicationIndex);
+    const replicationBlock = promoteWorkflow.slice(replicationIndex);
+    expect(replicationBlock).toContain("LATEST=\"$(npm view codex-sessions-manager@latest version");
+    expect(replicationBlock).toContain("CANDIDATE=\"$(npm view codex-sessions-manager@security-verify version");
+    expect(replicationBlock).toContain(
+      'if [ "${LATEST}" = "${VERSION}" ] && [ "${CANDIDATE}" = "${VERSION}" ]; then',
+    );
   });
 
   it("rejects private material from the actual npm dry-run manifest", () => {

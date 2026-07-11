@@ -23,6 +23,13 @@ codex-sessions --version
 
 The default Codex root is `~/.codex`. Use `--root <path>` for a different root.
 
+For official Codex Skill discovery, place this Skill directory at either:
+
+- project scope: `.agents/skills/codex-sessions-manager`
+- user scope: `$HOME/.agents/skills/codex-sessions-manager`
+
+The distributed Skill includes `agents/openai.yaml` inside the Skill directory.
+
 ## When To Use
 
 - List/filter/search sessions (by project, time, status, source)
@@ -45,7 +52,7 @@ codex-sessions doctor [--json]
 codex-sessions list [--limit N] [--project TEXT] [--status S] [--source-kind K]
 codex-sessions sources [--json]
 codex-sessions projects
-codex-sessions show <id>
+codex-sessions show <id> [--json]
 codex-sessions family <id> [--children|--parents|--subagents|--impact|--full]
 codex-sessions audit <id> [--json]
 codex-sessions audit-root [--limit 50] [--status S...] [--source S...]
@@ -85,6 +92,8 @@ codex-sessions-mcp --profile admin       # all 22 tools including destructive op
 ```
 
 Invalid `--profile` values exit with code 1. Default is read-only for safety.
+
+`get_session` defaults to `detail=compact` (20 items / 64 KiB / 1 MiB source read). `detail=full` is still bounded (200 items / 256 KiB / 8 MiB source read). Session metadata is bounded too. Both return explicit completeness metadata; `sourceCompleteness` preserves parse/unsupported status when the MCP envelope is also `truncated_limit`, and `itemsKnown=null` means the reader stopped before EOF. `list_sessions` defaults to 50 concise records, accepts at most 200, and caps the response at 256 KiB. Use CLI JSON for complete local results and `export` for byte-exact raw content.
 
 ## Detailed References
 

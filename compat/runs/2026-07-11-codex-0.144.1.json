@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "runId": "2026-07-11-codex-0.144.1",
+  "immutable": true,
+  "baselineVersion": "0.144.1",
+  "checkedAt": "2026-07-11",
+  "findings": [
+    "Paginated history persists canonical ItemCompleted data inside event_msg payloads.",
+    "Thread ordering now exposes recency_at_ms, recency_at, and history_mode.",
+    "Active and archived rollout discovery includes .jsonl.zst files.",
+    "Codex MCP configuration and Skill discovery use TOML and .agents/skills packaging."
+  ],
+  "fixes": [
+    "Added legacy and paginated timeline parsing with explicit unknown and parse diagnostics.",
+    "Added recency and history mode output plus deterministic fallback ordering.",
+    "Added bounded MCP detail modes and explicit completeness metadata.",
+    "Replaced the Codex JSON adapter example and added nested Skill metadata."
+  ],
+  "postFixVerification": [
+    "Synthetic old and new timeline fixtures pass.",
+    "Compressed-only fixtures remain discoverable without pretending to expose semantic transcript text.",
+    "CLI JSON is unbounded by item count; MCP compact and full modes remain byte and item bounded.",
+    "Offline adapter, Skill packaging, baseline, and privacy validation passes."
+  ],
+  "privacy": {
+    "syntheticOnly": true,
+    "containsLocalPaths": false,
+    "containsSessionText": false,
+    "containsMachineCounts": false
+  }
+}

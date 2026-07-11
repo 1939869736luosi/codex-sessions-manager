@@ -1,4 +1,11 @@
 export type SessionKind = "active" | "archived" | "db-only" | "stale";
+export type ThreadHistoryMode = "legacy" | "paginated" | "unknown";
+export type TimelineCompleteness =
+  | "complete"
+  | "compressed_unread"
+  | "unsupported_items"
+  | "parse_error"
+  | "truncated_limit";
 export type SourceKind = "subagent" | "mcp" | "vscode" | "cli" | "exec" | "unknown";
 export type OfficialCodexSourceKind =
   | "cli"
@@ -97,6 +104,11 @@ export interface ThreadRow {
   firstUserMessage: string;
   createdAt: number | null;
   updatedAt: number | null;
+  createdAtMs: number | null;
+  updatedAtMs: number | null;
+  recencyAt: number | null;
+  recencyAtMs: number | null;
+  historyMode: ThreadHistoryMode;
   archived: boolean;
   rolloutPath: string | null;
   model: string | null;
@@ -167,6 +179,9 @@ export interface SessionEntry {
   projectKey: string;
   createdAt: string | null;
   updatedAt: string | null;
+  recencyAt: string | null;
+  recencyAtMs: number | null;
+  historyMode: ThreadHistoryMode;
   model: string | null;
   modelProvider: string | null;
   cwd: string | null;
@@ -297,6 +312,34 @@ export interface TimelineItem {
   roleLabel: string;
   timestamp: string | null;
   body: string;
+  source?: "event_msg" | "response_item" | "history" | "diagnostic";
+  sourceType?: string | null;
+  lineNumber?: number | null;
+  truncated?: boolean;
+  unsupported?: boolean;
+  parseError?: boolean;
+}
+
+export interface SessionTimelineResult {
+  historyMode: ThreadHistoryMode;
+  items: TimelineItem[];
+  completeness: TimelineCompleteness;
+  itemsReturned: number;
+  itemsKnown: number | null;
+  omittedReason: string | null;
+  exactExportAvailable: boolean;
+  unsupportedItemCount: number;
+  parseErrorCount: number;
+  toolOutputTruncatedCount: number;
+  collectionLimitReason?: "items" | "bytes" | "read_bytes";
+  sourceBytesRead?: number;
+  sourceBytesKnown?: number;
+}
+
+export interface TimelineReadLimits {
+  maxItems?: number;
+  maxTimelineBytes?: number;
+  maxReadBytes?: number;
 }
 
 export interface SqliteDeletionCounts {

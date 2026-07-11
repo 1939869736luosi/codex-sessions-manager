@@ -19,12 +19,14 @@ This checklist is intentionally stricter than a normal package publish. A releas
 
 ## Release window
 
+The candidate and promotion workflows share one package-level concurrency queue. Do not bypass or replace that queue with per-version groups: overlapping versions must never race while changing `security-verify` or `latest`.
+
 1. Merge the reviewed commit to public `main` only after private review passes.
 2. Wait for all required Linux, macOS, Windows, coverage, package, and production-audit checks on that exact commit.
 3. Create the immutable `v<version>` tag. Do not move or replace an existing tag.
 4. The tag workflow publishes the exact reviewed tarball with the non-default `security-verify` npm tag, installs the exact registry version, smokes CLI and MCP, downloads the registry tarball, and requires its SHA-256 to match.
 5. Review the candidate workflow artifact. It may contain only the public tarball, package manifest, and SHA-256 file.
-6. Run `Promote verified npm release` with the exact version and candidate SHA-256. Approve the protected environment only after the registry evidence matches.
+6. Run `Promote verified npm release` with the exact version and candidate SHA-256. The workflow must confirm that `security-verify` already points to that exact version before it moves `latest`; approve the protected environment only after the registry evidence matches.
 7. Confirm both `latest` and `security-verify` point to the exact version.
 8. Publish the prepared GitHub Release and, for a security release, the Security Advisory.
 9. Confirm Git tag, GitHub Release, npm package, npm dist-tags, advisory patched version, and reviewed commit all identify the same release.

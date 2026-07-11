@@ -24,7 +24,7 @@ import { scanCodexRoot } from "../core/scan.js";
 import { assertCanonicalSessionIds, MutationSafetyError } from "../core/mutation-safety.js";
 import { getRecoveryStatus, recoverInterruptedOperation } from "../core/recovery.js";
 import { parseSourceKind, summarizeSources } from "../core/sources.js";
-import { readSessionTimeline } from "../core/timeline.js";
+import { readSessionTimelineResult } from "../core/timeline.js";
 import {
   listTrashEntries,
   moveSessionsToTrash,
@@ -402,8 +402,13 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
       }
 
       const session = resolveSessions(scan, [rest[0]])[0];
-      const timeline = await readSessionTimeline(session);
-      io.stdout(asJson ? JSON.stringify({ session, timeline }, null, 2) : formatShow(session, timeline));
+      const timelineResult = await readSessionTimelineResult(session);
+      const { items: timeline, ...timelineMetadata } = timelineResult;
+      io.stdout(
+        asJson
+          ? JSON.stringify({ session, timeline, ...timelineMetadata }, null, 2)
+          : formatShow(session, timeline, timelineMetadata),
+      );
       return 0;
     }
 

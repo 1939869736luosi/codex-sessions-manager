@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.3
+
+### Codex compatibility
+
+- Added Codex 0.144.1 paginated timeline support. Canonical `item_completed` events now produce user, assistant, command, tool, and supported system items without duplicating legacy raw records.
+- Added explicit `historyMode`, `recencyAt`, and `recencyAtMs` output. Session ordering now follows `recency_at_ms`, then `recency_at`, then `updated_at`.
+- Added timeline completeness metadata: `complete`, `compressed_unread`, `unsupported_items`, `parse_error`, and `truncated_limit`, plus returned/known counts, omission reasons, exact-export availability, and per-item diagnostics.
+- Kept CLI `show --json` unbounded by total semantic item count. Human output remains compact, reports returned/known counts, and now exposes tool-output truncation. Any truncated tool output makes overall completeness `truncated_limit`. Byte-exact raw content remains exclusive to `export`.
+- Added bounded MCP `get_session` detail modes: compact (20 items / 64 KiB / 1 MiB source read) and full (200 items / 256 KiB / 8 MiB source read). Session metadata is bounded too; source-read truncation reports an unknown total instead of implying a complete count.
+- Bounded MCP `list_sessions` to 50 sessions by default, 200 maximum, and a 256 KiB response. It now returns concise session records plus explicit count, limit, truncation, and omission metadata.
+
+### Integration and maintenance
+
+- Replaced the incorrect Codex JSON MCP example with official TOML and `codex mcp add` instructions.
+- Added official `.agents/skills` installation paths and nested `skills/codex-sessions-manager/agents/openai.yaml` packaging, with drift checks against the root copies.
+- Added a tracked, synthetic `compat/` baseline, legacy/paginated/SQLite/zstd/source fixtures, public run summaries, an offline validator, and a report-only weekly upstream version check.
+- Added the compatibility fixture suite to Windows CI while keeping destructive Windows behavior fail-closed.
+- Added a seven-day compatibility-baseline release gate and bounded retry for npm dist-tag replication. Candidate publishing and promotion now share one package-level concurrency queue, and promotion verifies that `security-verify` already points to the requested version before moving `latest`.
+
 ## 0.6.2
 
 - Reissued the security patch because `v0.6.1` reached only the non-default `security-verify` tag and its first registry verification did not complete; it was never promoted to `latest`.

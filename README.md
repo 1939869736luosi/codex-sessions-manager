@@ -7,7 +7,7 @@
 
 > Codex Desktop now includes a delete action for archived chats. Local testing shows that it removes the main session file and some thread rows, but may still leave session index rows, execution logs, and desktop state references behind.
 
-**codex-sessions-manager** is a local Codex session audit and cleanup tool. It works as a **Skill** (Claude Code / Codex), a **CLI**, and an **MCP server** — all sharing the same core. Use it to inspect what remains under `~/.codex`, audit leftovers after the official UI delete/archive flow, clean hidden local residues by exact session ID, and verify the local surfaces this release understands.
+**codex-sessions-manager** is a CLI-first local Codex session audit and cleanup tool. Its **Skill**, **CLI**, and bounded **MCP server** share the same core. Use it to inspect what remains under `~/.codex`, audit leftovers after the official UI delete/archive flow, clean hidden local residues by exact session ID, and verify the local surfaces this release understands.
 
 It is built for safety-critical local history work: prompt/history privacy, exact-session deletion, rollback, restore conflict checks, SQLite/global-state consistency, and post-delete verification.
 
@@ -26,7 +26,7 @@ Codex Desktop's built-in delete is the right first stop for ordinary archived-ch
 | AI agents can call it (MCP server) | ✅ | ❌ |
 | Detects `/side` and `/fork` child relationships | ✅ | ❌ |
 
-Current compatibility limit: Codex can store SQLite files outside the Codex root via `sqlite_home` or `CODEX_SQLITE_HOME`. This tool resolves that split in this order: `config.toml sqlite_home`, then `CODEX_SQLITE_HOME`, then the Codex root. It warns when both locations contain SQLite databases. It also recognizes compressed rollout files (`.jsonl.zst`) and preserves them through trash/restore as binary data. If a session has only `.jsonl.zst`, `show` / timeline output does not decompress the transcript body; it uses index/history summaries instead. `memories_N.sqlite` is recognized by `doctor` as an official memory surface, but memory rows and Phase 2 memory outputs are read-only and are not mutated by session cleanup. `logs_N.sqlite` execution logs and remote-control state are also not ordinary session cleanup surfaces.
+Current compatibility limit: Codex can store SQLite files outside the Codex root via `sqlite_home` or `CODEX_SQLITE_HOME`. This tool resolves that split in this order: `config.toml sqlite_home`, then `CODEX_SQLITE_HOME`, then the Codex root. It warns when both locations contain SQLite databases. Legacy `event_msg` / `response_item` timelines and paginated `item_completed` timelines are parsed with explicit completeness diagnostics. Session ordering follows `recency_at_ms`, then `recency_at`, then `updated_at`; `historyMode` is exposed in structured output. Compressed rollout files (`.jsonl.zst`) are preserved through trash/restore as binary data. If a session has only `.jsonl.zst`, `show` does not decompress the transcript body and reports `compressed_unread`; use `export` for the exact compressed bytes. `memories_N.sqlite` is recognized by `doctor` as an official memory surface, but memory rows and Phase 2 memory outputs are read-only and are not mutated by session cleanup. `logs_N.sqlite` execution logs and remote-control state are also not ordinary session cleanup surfaces.
 
 Confirmed mutations require canonical full session UUIDs; deleting an active session needs the additional `--allow-active` / `allowActive=true` override. Managed symlinks, junctions, hard-linked files, outside-root paths, and stale plans are rejected. Interrupted mutations keep a durable recovery record and block further writes until the exact recovery operation completes. See [Safety Guide](./docs/SAFETY.md) for exit statuses, verification scope, and the same-user filesystem-race boundary.
 
@@ -146,23 +146,35 @@ codex-sessions delete <session-id>   # preview only without --yes
 
 This works in Amp, Claude Code, Codex, Cursor, Factory Droid, and any other agent with shell access.
 
-### 2. Skill (Claude Code, Amp)
+### 2. Skill (Codex, Claude Code, Amp)
 
 Copy the self-contained skill directory for richer agent integration:
 
 ```bash
+# Codex, project scope (official shared Skill path)
+mkdir -p .agents/skills/codex-sessions-manager
+cp -r skills/codex-sessions-manager/* .agents/skills/codex-sessions-manager/
+
+# Codex, user scope
+mkdir -p "$HOME/.agents/skills/codex-sessions-manager"
+cp -r skills/codex-sessions-manager/* "$HOME/.agents/skills/codex-sessions-manager/"
+
 # Claude Code
 mkdir -p ~/.claude/skills/codex-sessions-manager
 cp -r skills/codex-sessions-manager/* ~/.claude/skills/codex-sessions-manager/
 
-# Amp
-mkdir -p .agents/skills/codex-sessions-manager
-cp -r skills/codex-sessions-manager/* .agents/skills/codex-sessions-manager/
+# The distributed Skill includes nested agents/openai.yaml metadata.
 ```
 
 ### 3. MCP (Optional, Advanced)
 
-For agents that benefit from structured JSON responses:
+For Codex, use the official registration command or the equivalent TOML in the [Codex adapter](adapters/codex/):
+
+```bash
+codex mcp add codex-sessions -- codex-sessions-mcp --profile read-only
+```
+
+Other MCP hosts may use their own JSON configuration, for example:
 
 ```json
 {
@@ -176,6 +188,10 @@ For agents that benefit from structured JSON responses:
 ```
 
 Default profile is **read-only** (16 tools). For destructive operations, use `--profile admin` (22 tools).
+
+MCP `get_session` is intentionally bounded: `compact` returns at most 20 items / 64 KiB and reads at most 1 MiB of the source rollout; `full` returns at most 200 items / 256 KiB and reads at most 8 MiB. Session metadata is bounded as well. Both modes report `completeness`, underlying `sourceCompleteness`, returned/known counts, metadata truncation, omission reason, and exact-export availability. When the source-read limit is reached before EOF, `itemsKnown` is `null` rather than a false total. Tool-output truncation is also reported as `truncated_limit`. Use `codex-sessions show <id> --json` for all locally parseable semantic items and `export` for byte-exact raw content.
+
+MCP `list_sessions` returns concise records, defaults to 50 sessions, accepts at most 200, and caps the structured response at 256 KiB. `totalMatches`, `sessionsReturned`, `hasMore`, `byteLimited`, and `omittedReason` disclose any omission. Use `codex-sessions list --json` when a local caller needs the complete result set or full session metadata.
 
 **Windows security-patch releases in the 0.6 line are read-only.** Delete, trash, restore, purge, cleanup, and interrupted-operation recovery fail closed until the real Windows junction/reparse-point, case-handling, and abrupt-termination matrix is verified. On Windows, requesting the MCP `admin` profile still registers only the read-only tools.
 
@@ -207,7 +223,7 @@ codex-sessions list --agent-role subagent --agent-nickname helper
 codex-sessions sources [--json]
 codex-sessions projects
 codex-sessions doctor [--json]
-codex-sessions show <session-id>
+codex-sessions show <session-id> [--json]
 codex-sessions family <session-id> [--json] [--children|--parents|--subagents|--impact] [--full] [--source-kind KIND]
 codex-sessions audit <session-id> [--json]
 codex-sessions audit-root [--json] [--limit 50] [--status STATUS...] [--source SOURCE...] [--all]
@@ -262,7 +278,7 @@ Human and JSON output include a summary: `filters`, `totalCandidatesBeforeFilter
 
 Use `sources` when you need a read-only overview of where sessions came from. It groups by inferred `sourceKind`, raw `source`, `thread_source`, `model_provider`, `model`, and `agent_role`. `sourceKind` can be `subagent`, `mcp`, `vscode`, `cli`, `exec`, or `unknown`. The raw `source` value is still kept in JSON output and shown in human output, because `sourceKind` is only this tool's inferred category.
 
-`list` supports the same source-facing filters: `--source-kind`, `--source`, `--thread-source`, `--agent-role`, `--agent-nickname`, `--model-provider`, and `--model`. Filters combine with AND across different fields. Repeating the same field uses OR. MCP `list_sessions` accepts the same fields, and MCP `summarize_sources` returns the same summary shape as CLI `sources --json`.
+`list` supports the same source-facing filters: `--source-kind`, `--source`, `--thread-source`, `--agent-role`, `--agent-nickname`, `--model-provider`, and `--model`. Filters combine with AND across different fields. Repeating the same field uses OR. MCP `list_sessions` accepts the same fields but returns a bounded concise view (50 by default, 200 maximum, 256 KiB response cap); use CLI JSON for the complete local list. MCP `summarize_sources` returns the same summary shape as CLI `sources --json`.
 
 Important source limits:
 
@@ -358,7 +374,7 @@ When Codex Desktop deletes an archived chat, it may already remove some of these
 
 SQLite databases may live directly under `~/.codex` or under a separate SQLite home selected by `config.toml sqlite_home` / `CODEX_SQLITE_HOME`. `config.toml sqlite_home` wins when both are set. `doctor` reports the active SQLite home and warns when both locations contain candidate databases.
 
-Compressed `.jsonl.zst` files are covered as session files for scan, preview, delete, trash, restore, and stale detection. They are not decompressed for transcript display; compressed-only sessions use index/history summaries in `show` and timeline output.
+Compressed `.jsonl.zst` files are covered as session files for scan, preview, delete, trash, restore, and stale detection. They are not decompressed for transcript display; compressed-only sessions report `compressed_unread`, and any index/history preview is labeled as history rather than transcript text.
 
 ## Documentation
 
@@ -368,6 +384,7 @@ Compressed `.jsonl.zst` files are covered as session files for scan, preview, de
 - [SKILL.md](./SKILL.md) — AI skill instructions (slim routing file, ~90 lines)
 - [Detailed tool reference](./skills/codex-sessions-manager/docs/SKILL_DETAIL.md) — full CLI/MCP parameter reference
 - [Ecosystem adapters](./adapters/) — platform-specific setup for Amp, Claude Code, Codex, Cursor, Factory Droid
+- [Compatibility baseline](https://github.com/1939869736luosi/codex-sessions-manager/tree/main/compat) — pinned Codex version, synthetic fixtures, public run summaries, and release freshness rules
 
 ## Development
 

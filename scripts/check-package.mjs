@@ -33,6 +33,7 @@ const allowedFiles = new Set([
   "adapters/cursor/mcp.json.example",
   "adapters/factory-droid/README.md",
   "skills/codex-sessions-manager/SKILL.md",
+  "skills/codex-sessions-manager/agents/openai.yaml",
   "skills/codex-sessions-manager/docs/SAFETY.md",
   "skills/codex-sessions-manager/docs/SKILL_DETAIL.md",
 ]);

@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: npm-publish-${{ github.ref }}
+  group: npm-package-codex-sessions-manager
   cancel-in-progress: false
 
 jobs:
@@ -32,6 +32,9 @@ jobs:
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
           test "${GITHUB_REF_NAME}" = "v${PACKAGE_VERSION}"
           grep -F "## ${PACKAGE_VERSION}" CHANGELOG.md
+
+      - name: Require a compatibility baseline checked within seven days
+        run: node scripts/check-compat.mjs --release
 
   verify-matrix:
     name: Release verify / ${{ matrix.os }} / Node ${{ matrix.node }}
@@ -64,6 +67,9 @@ jobs:
       - name: Install exact locked dependencies
         run: npm ci
 
+      - name: Validate tracked compatibility fixtures
+        run: npm run compat:check
+
       - name: Type-check release sources
         run: npm run typecheck
 
@@ -77,10 +83,14 @@ jobs:
           npx vitest run
           tests/path-safety.test.ts
           tests/windows-destructive-policy.test.ts
+          tests/compat-v063.test.ts
           --testTimeout=30000
 
       - name: Build release artifact
         run: npm run build
+
+      - name: Smoke CLI and read-only MCP process entrypoints
+        run: npm run smoke:release
 
       - name: Check release package contents
         run: npm run pack:check
@@ -137,8 +147,10 @@ jobs:
 
       - name: Rebuild and recheck the publish artifact
         run: |
+          npm run compat:release-check
           npm run typecheck
           npm run build
+          npm run smoke:release
           npm run pack:check
 
       - name: Build the reviewed tarball and record its identity
@@ -162,7 +174,8 @@ jobs:
         run: |
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
           for ATTEMPT in {1..12}; do
-            if npm view "codex-sessions-manager@${PACKAGE_VERSION}" version --json > /dev/null 2>&1; then
+            CACHE_DIR="${RUNNER_TEMP}/npm-view-cache-${ATTEMPT}"
+            if npm view "codex-sessions-manager@${PACKAGE_VERSION}" version --json --prefer-online --cache "${CACHE_DIR}" > /dev/null 2>&1; then
               exit 0
             fi
             if [ "${ATTEMPT}" -eq 12 ]; then

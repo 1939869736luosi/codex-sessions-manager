@@ -45,6 +45,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Validate tracked compatibility fixtures
+        run: npm run compat:check
+
       - name: Type-check
         run: npm run typecheck
 
@@ -54,6 +57,7 @@ jobs:
           npx vitest run
           tests/path-safety.test.ts
           tests/windows-destructive-policy.test.ts
+          tests/compat-v063.test.ts
           --testTimeout=30000
 
       - name: Run tests
@@ -66,6 +70,9 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Smoke CLI and read-only MCP process entrypoints
+        run: npm run smoke:release
 
       - name: Check npm package contents
         run: npm run pack:check

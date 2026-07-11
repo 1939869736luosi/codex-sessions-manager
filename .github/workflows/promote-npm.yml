@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: npm-promote-${{ inputs.version }}
+  group: npm-package-codex-sessions-manager
   cancel-in-progress: false
 
 jobs:
@@ -50,13 +50,34 @@ jobs:
           test "$(node "${RUNNER_TEMP}/smoke/node_modules/codex-sessions-manager/dist/mcp/server.js" --version)" = "${VERSION}"
           node "${RUNNER_TEMP}/smoke/node_modules/codex-sessions-manager/dist/cli/index.js" doctor --root "${RUNNER_TEMP}/empty-codex-root" --json > "${RUNNER_TEMP}/registry-doctor.json"
 
+      - name: Require security-verify candidate identity
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          CANDIDATE="$(npm view codex-sessions-manager@security-verify version --prefer-online --cache "${RUNNER_TEMP}/npm-candidate-precheck")"
+          test "${CANDIDATE}" = "${VERSION}"
+
       - name: Move latest only after exact-version verification
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_DIST_TAG_TOKEN }}
         run: npm dist-tag add "codex-sessions-manager@${{ inputs.version }}" latest
 
-      - name: Verify dist-tags
+      - name: Wait for dist-tag replication
         shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          test "$(npm view codex-sessions-manager@latest version)" = "${{ inputs.version }}"
-          test "$(npm view codex-sessions-manager@security-verify version)" = "${{ inputs.version }}"
+          for ATTEMPT in {1..12}; do
+            CACHE_DIR="${RUNNER_TEMP}/npm-dist-tag-cache-${ATTEMPT}"
+            LATEST="$(npm view codex-sessions-manager@latest version --prefer-online --cache "${CACHE_DIR}" 2>/dev/null || true)"
+            CANDIDATE="$(npm view codex-sessions-manager@security-verify version --prefer-online --cache "${CACHE_DIR}" 2>/dev/null || true)"
+            if [ "${LATEST}" = "${VERSION}" ] && [ "${CANDIDATE}" = "${VERSION}" ]; then
+              exit 0
+            fi
+            if [ "${ATTEMPT}" -eq 12 ]; then
+              echo "dist-tags did not converge to ${VERSION} within the bounded retry window" >&2
+              exit 1
+            fi
+            sleep 5
+          done

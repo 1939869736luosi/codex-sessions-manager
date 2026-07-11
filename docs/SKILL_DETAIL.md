@@ -27,7 +27,7 @@ Date-only filters use the local calendar day. Timezone-less datetime strings mus
 codex-sessions show <session-id> [--root PATH] [--json]
 ```
 
-Human output shortens long titles and timeline previews. Use `--json` for full values.
+Human output shows at most 20 timeline items and reports returned/known counts. Use `--json` for every locally parseable semantic item; JSON has no total item-count limit and marks unknown items, parse errors, and truncated tool output. `export` is the byte-exact raw-content path. A compressed-only `.jsonl.zst` session reports `compressed_unread` instead of presenting an index/history summary as transcript text.
 
 ### family
 
@@ -156,6 +156,10 @@ Reports remaining files, JSONL rows, SQLite rows (including goals DB), shell sna
 | `recover_operation` | Recover the exact interrupted operation after explicit confirmation |
 
 All admin tools require `confirm=true` to execute; without it they return preview only.
+
+`get_session` accepts `detail=compact|full`. `compact` is limited to 20 timeline items, 64 KiB, and a 1 MiB source read; `full` is limited to 200 items, 256 KiB, and an 8 MiB source read. Session metadata is bounded independently. Responses include `completeness`, underlying `sourceCompleteness`, `itemsReturned`, `itemsKnown`, `sessionMetadataTruncated`, `omittedReason`, and `exactExportAvailable`. `itemsKnown=null` means the source reader stopped before EOF. Per-item tool-output truncation makes the overall result `truncated_limit`. These limits are intentional; use CLI JSON or export for complete local handoff.
+
+`list_sessions` defaults to 50 concise records, accepts a maximum `limit` of 200, and caps the structured response at 256 KiB. It omits large fields such as `historyPreview` and reports `totalMatches`, `sessionsReturned`, `hasMore`, `byteLimited`, and `omittedReason`. Use CLI `list --json` for a complete local list.
 
 ## Source Metadata Rules
 

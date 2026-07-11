@@ -1,6 +1,6 @@
 {
   "name": "codex-sessions-manager",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "Audit and clean local Codex session leftovers: list, export, delete, trash, restore, verify, and cleanup — via CLI or MCP server.",
   "type": "module",
   "bin": {
@@ -45,6 +45,9 @@
     "build": "node scripts/build.mjs",
     "cli": "node dist/cli/index.js",
     "mcp": "node dist/mcp/server.js",
+    "compat:check": "node scripts/check-compat.mjs",
+    "compat:release-check": "node scripts/check-compat.mjs --release",
+    "smoke:release": "node scripts/smoke-release.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node scripts/test.mjs",
     "test:coverage": "node scripts/test-coverage.mjs",
