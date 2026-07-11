@@ -109,6 +109,7 @@ export interface ThreadRow {
   recencyAt: number | null;
   recencyAtMs: number | null;
   historyMode: ThreadHistoryMode;
+  memoryMode: string | null;
   archived: boolean;
   rolloutPath: string | null;
   model: string | null;
@@ -121,6 +122,35 @@ export interface ThreadRow {
   agentRole: string | null;
   agentNickname: string | null;
   agentPath: string | null;
+}
+
+export type MemoryPhase2Influence = "known" | "none" | "unknown";
+export type MemorySchemaStatus = "absent" | "recognized" | "unrecognized";
+
+export interface SessionMemoryLink {
+  enabled: boolean;
+  stage1Present: boolean;
+  rolloutSummaryPresent: boolean;
+  phase2Influence: MemoryPhase2Influence;
+  retainedAfterSessionDelete: true;
+  schemaStatus: MemorySchemaStatus;
+  warnings: string[];
+}
+
+export interface MemoryDoctorStats {
+  enabled: boolean;
+  databaseExists: boolean;
+  schemaStatus: MemorySchemaStatus;
+  stage1: {
+    total: number;
+    withRolloutSummary: number;
+    selectedForPhase2: number;
+  };
+  jobs: {
+    total: number;
+    byStatus: Record<string, number>;
+  };
+  warnings: string[];
 }
 
 export interface ThreadSpawnEdgeRow {
@@ -721,6 +751,8 @@ export interface DeletePreviewItem {
 }
 
 export interface DeletePreview {
+  memoryRetained: true;
+  retainedSurfaces: string[];
   items: DeletePreviewItem[];
   familyWarnings: DeleteFamilyWarning[];
   totals: {
@@ -1219,5 +1251,6 @@ export interface DoctorReport {
     sessionCount: number | null;
     warnings: string[];
   };
+  memory: MemoryDoctorStats;
   warnings: string[];
 }

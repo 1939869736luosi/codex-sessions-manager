@@ -67,5 +67,34 @@ describe("shared application operations", () => {
 
     expect(result.report.rootPath).toBe(fixture.rootDir);
     expect(result.warnings).toEqual(result.report.warnings);
+    expect(result.report.detailsIncluded).toBe(false);
+    expect(result.report.sampleLimit).toBe(5);
+    expect(result.report.globalState.knownRefs.length).toBeLessThanOrEqual(5);
+    expect(result.report.globalState.exactKeyRefs.length).toBeLessThanOrEqual(5);
+    expect(result.report.globalState.possibleUnknownRefs.length).toBeLessThanOrEqual(5);
+    expect(result.report.warnings.length).toBeLessThanOrEqual(20);
+  });
+
+  it("returns complete doctor references only when details are explicit", async () => {
+    const summary = await inspectRootOperation({ root: fixture.rootDir });
+    const details = await inspectRootOperation({ root: fixture.rootDir, includeDetails: true });
+
+    expect(details.report.detailsIncluded).toBe(true);
+    expect(details.report.sampleLimit).toBeNull();
+    expect(details.report.counts.globalStateKnownRefs).toBe(details.report.globalState.knownRefs.length);
+    expect(details.report.counts.globalStateExactKeyRefs).toBe(details.report.globalState.exactKeyRefs.length);
+    expect(details.report.counts.globalStatePossibleUnknownRefs).toBe(details.report.globalState.possibleUnknownRefs.length);
+    expect(summary.report.counts).toEqual(details.report.counts);
+  });
+
+  it("exposes doctor details through an explicit CLI flag", async () => {
+    const compact = createIo();
+    const detailed = createIo();
+
+    await expect(runCli(["doctor", "--root", fixture.rootDir, "--json"], compact.io)).resolves.toBe(0);
+    await expect(runCli(["doctor", "--root", fixture.rootDir, "--json", "--details"], detailed.io)).resolves.toBe(0);
+
+    expect(JSON.parse(compact.stdout.join("\n"))).toMatchObject({ detailsIncluded: false, sampleLimit: 5 });
+    expect(JSON.parse(detailed.stdout.join("\n"))).toMatchObject({ detailsIncluded: true, sampleLimit: null });
   });
 });

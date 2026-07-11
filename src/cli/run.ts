@@ -128,7 +128,7 @@ Usage:
                      [--model-provider PROVIDER] [--model MODEL]
   codex-sessions sources [--root PATH] [--json]
   codex-sessions projects [--root PATH] [--json]
-  codex-sessions doctor [--root PATH] [--json]
+  codex-sessions doctor [--root PATH] [--json] [--details]
   codex-sessions show <session-id> [--root PATH] [--json]
   codex-sessions family <session-id> [--root PATH] [--json]
                        [--children | --parents | --subagents | --impact] [--full]
@@ -155,6 +155,7 @@ Usage:
 
 Notes:
   - 默认根目录是 ~/.codex
+  - doctor 默认只返回统计、风险和每类最多 5 个样本；--details 才展开完整引用
   - delete 未带 --yes 时只展示预览，不执行删除
   - 真正删除前应先单独预览供检查，再显式加 --yes；当前没有 preview token；family / impact 不能替代 delete preview
   - family 只读查看 parent / child / side / fork / subagent 关系，不会自动递归处理
@@ -239,6 +240,7 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
       subagents: { type: "boolean", default: false },
       impact: { type: "boolean", default: false },
       full: { type: "boolean", default: false },
+      details: { type: "boolean", default: false },
       "include-children": { type: "boolean", default: false },
       "include-subagents": { type: "boolean", default: false },
       "include-descendants": { type: "boolean", default: false },
@@ -288,7 +290,7 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
   const modelProviderValues = normalizeOptionValues(values["model-provider"]);
   const modelValues = normalizeOptionValues(values.model);
   if (command === "doctor") {
-    const { report } = await inspectRootOperation({ root: rootArg });
+    const { report } = await inspectRootOperation({ root: rootArg, includeDetails: values.details });
     io.stdout(asJson ? JSON.stringify(report, null, 2) : formatDoctor(report));
     return 0;
   }

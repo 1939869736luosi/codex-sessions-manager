@@ -16,7 +16,7 @@ import {
   revalidateManagedPath,
   type TrustedRootContext,
 } from "./path-safety.js";
-import { inspectNamedSqliteTables, inspectSqliteTables } from "./sqlite.js";
+import { inspectMemoryDoctorStats, inspectNamedSqliteTables, inspectSqliteTables } from "./sqlite.js";
 import { getRecoveryStatus } from "./recovery.js";
 import type { DoctorReport, GlobalStateReference } from "./types.js";
 
@@ -210,6 +210,7 @@ export async function inspectCodexRoot(rootArg?: string): Promise<DoctorReport> 
   let logsTables: DoctorReport["sqlite"]["logsTables"] = [];
   let goalsTables: DoctorReport["sqlite"]["goalsTables"] = [];
   let memoriesTables: DoctorReport["sqlite"]["memoriesTables"] = [];
+  let memory = inspectMemoryDoctorStats(null);
 
   try {
     stateTables = inspectSqliteTables(activeStatePath);
@@ -237,6 +238,21 @@ export async function inspectCodexRoot(rootArg?: string): Promise<DoctorReport> 
   } catch (error) {
     sqliteWarnings.push(`memories SQLite 无法读取：${error instanceof Error ? error.message : String(error)}`);
     memoriesTables = inspectNamedSqliteTables(null, ["stage1_outputs", "jobs"]);
+  }
+
+  try {
+    memory = inspectMemoryDoctorStats(activeMemoriesPath);
+  } catch (error) {
+    const message = `memories statistics unavailable: ${error instanceof Error ? error.message : String(error)}`;
+    memory = {
+      enabled: Boolean(activeMemoriesPath),
+      databaseExists: Boolean(activeMemoriesPath),
+      schemaStatus: "unrecognized",
+      stage1: { total: 0, withRolloutSummary: 0, selectedForPhase2: 0 },
+      jobs: { total: 0, byStatus: {} },
+      warnings: [message],
+    };
+    sqliteWarnings.push(message);
   }
 
   warnings.push(...sqliteWarnings);
@@ -318,6 +334,7 @@ export async function inspectCodexRoot(rootArg?: string): Promise<DoctorReport> 
       sessionCount,
       warnings: scanWarnings,
     },
+    memory,
     warnings: uniqueMessages(warnings),
   };
 }

@@ -392,14 +392,15 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
       outputSchema: TOOL_OUTPUT_SCHEMA,
       inputSchema: z.object({
         root: z.string().optional().describe("Optional explicit path to the .codex root."),
+        includeDetails: z.boolean().optional().describe("Defaults to false. Set true only when full reference arrays are required."),
       }),
       annotations: {
         readOnlyHint: true,
         idempotentHint: true,
       },
     },
-    async ({ root }) => {
-      const result = await inspectRootOperation({ root });
+    async ({ root, includeDetails }) => {
+      const result = await inspectRootOperation({ root, includeDetails });
       return textResult(`Inspected Codex root ${result.report.rootPath}.`, {
         report: result.report,
         warnings: result.warnings,
