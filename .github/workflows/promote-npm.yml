@@ -27,6 +27,10 @@ on:
         description: Successful independent registry verification workflow run ID
         required: true
         type: string
+      expected_latest:
+        description: Current latest version recorded by the independent verification workflow
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -61,6 +65,7 @@ jobs:
           EXPECTED_COMMIT: ${{ inputs.expected_commit }}
           CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
           VERIFICATION_RUN_ID: ${{ inputs.verification_run_id }}
+          EXPECTED_LATEST: ${{ inputs.expected_latest }}
         run: |
           [[ "${VERIFICATION_RUN_ID}" =~ ^[0-9]+$ ]]
           [[ "${CANDIDATE_RUN_ID}" =~ ^[0-9]+$ ]]
@@ -95,6 +100,7 @@ jobs:
               candidateRunId: process.argv[7],
               verificationRunId: process.argv[8],
             };
+            const expectedLatest = process.argv[9];
             for (const [key, value] of Object.entries(expected)) {
               if (String(report[key]) !== String(value)) process.exit(1);
             }
@@ -102,13 +108,15 @@ jobs:
             if (report.registrySha256 !== expected.expectedSha256) process.exit(1);
             if (report.sourceSha256 !== expected.expectedSha256) process.exit(1);
             if (report.securityVerify !== expected.version) process.exit(1);
+            if (report.latestBefore !== expectedLatest) process.exit(1);
+            if (report.latestAfter !== expectedLatest) process.exit(1);
             if (report.workflowCommit !== run.head_sha || report.workflowCommit !== process.env.GITHUB_SHA) process.exit(1);
             if (report.workflowRef !== run.head_branch || report.workflowRef !== process.env.GITHUB_REF_NAME) process.exit(1);
             if (report.workflowPath !== run.path) process.exit(1);
             if (report.candidate?.publish !== true || report.candidate?.replication !== true) process.exit(1);
             if (report.candidate?.registrySmoke !== true || report.candidate?.compareFailureOnlyRecovery !== true) process.exit(1);
             if (report.smoke?.cli !== true || report.smoke?.mcp !== true || report.smoke?.doctor !== true) process.exit(1);
-          ' "${EVIDENCE_DIR}/verification.json" "${EVIDENCE_DIR}/run.json" "${VERSION}" "${EXPECTED_SHA256}" "${TAG}" "${EXPECTED_COMMIT}" "${CANDIDATE_RUN_ID}" "${VERIFICATION_RUN_ID}"
+          ' "${EVIDENCE_DIR}/verification.json" "${EVIDENCE_DIR}/run.json" "${VERSION}" "${EXPECTED_SHA256}" "${TAG}" "${EXPECTED_COMMIT}" "${CANDIDATE_RUN_ID}" "${VERIFICATION_RUN_ID}" "${EXPECTED_LATEST}"
 
       - name: Verify registry bytes and smoke the exact version
         shell: bash
@@ -151,6 +159,14 @@ jobs:
         run: |
           CANDIDATE="$(npm view codex-sessions-manager@security-verify version --prefer-online --cache "${RUNNER_TEMP}/npm-candidate-precheck")"
           test "${CANDIDATE}" = "${VERSION}"
+
+      - name: Require current latest has not changed
+        shell: bash
+        env:
+          EXPECTED_LATEST: ${{ inputs.expected_latest }}
+        run: |
+          CURRENT_LATEST="$(npm view codex-sessions-manager@latest version --prefer-online --cache "${RUNNER_TEMP}/npm-latest-precheck")"
+          test "${CURRENT_LATEST}" = "${EXPECTED_LATEST}"
 
       - name: Require live release tag identity
         shell: bash

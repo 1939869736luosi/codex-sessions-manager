@@ -207,6 +207,7 @@ describe("release configuration", () => {
     expect(promoteWorkflow).toContain("verification_run_id");
     expect(promoteWorkflow).toContain("candidate_run_id");
     expect(promoteWorkflow).toContain("expected_commit");
+    expect(promoteWorkflow).toContain("expected_latest");
     expect(promoteWorkflow).toContain("actions: read");
     expect(promoteWorkflow).toContain("Require independent registry verification evidence");
     expect(promoteWorkflow).toContain("gh run download");
@@ -220,6 +221,10 @@ describe("release configuration", () => {
     expect(promoteWorkflow).toContain('git/tags/${OBJECT_SHA}');
     expect(promoteWorkflow).toContain('test "${OBJECT_SHA}" = "${EXPECTED_COMMIT}"');
     expect(promoteWorkflow).toContain("workflowCommit");
+    expect(promoteWorkflow).toContain("report.latestBefore !== expectedLatest");
+    expect(promoteWorkflow).toContain("report.latestAfter !== expectedLatest");
+    expect(promoteWorkflow).toContain("Require current latest has not changed");
+    expect(promoteWorkflow).toContain('test "${CURRENT_LATEST}" = "${EXPECTED_LATEST}"');
     expect(promoteWorkflow).toContain("Wait for dist-tag replication");
     expect(promoteWorkflow).toContain("--prefer-online");
     expect(promoteWorkflow).toContain("for ATTEMPT in {1..12}");
@@ -227,6 +232,7 @@ describe("release configuration", () => {
     const candidatePrecheckIndex = promoteWorkflow.indexOf("Require security-verify candidate identity");
     const verificationEvidenceIndex = promoteWorkflow.indexOf("Require independent registry verification evidence");
     const liveTagIdentityIndex = promoteWorkflow.indexOf("Require live release tag identity");
+    const liveLatestIndex = promoteWorkflow.indexOf("Require current latest has not changed");
     const moveLatestIndex = promoteWorkflow.indexOf("Move latest only after exact-version verification");
     const replicationIndex = promoteWorkflow.indexOf("Wait for dist-tag replication");
     expect(candidatePrecheckIndex).toBeGreaterThan(-1);
@@ -234,6 +240,8 @@ describe("release configuration", () => {
     expect(verificationEvidenceIndex).toBeLessThan(moveLatestIndex);
     expect(liveTagIdentityIndex).toBeGreaterThan(verificationEvidenceIndex);
     expect(liveTagIdentityIndex).toBeLessThan(moveLatestIndex);
+    expect(liveLatestIndex).toBeGreaterThan(verificationEvidenceIndex);
+    expect(liveLatestIndex).toBeLessThan(moveLatestIndex);
     expect(candidatePrecheckIndex).toBeLessThan(moveLatestIndex);
     expect(moveLatestIndex).toBeLessThan(replicationIndex);
     const replicationBlock = promoteWorkflow.slice(replicationIndex);
@@ -274,6 +282,8 @@ describe("release configuration", () => {
     expect(verifyRegistryWorkflow).toContain("Install the exact registry version and smoke both entrypoints");
     expect(verifyRegistryWorkflow).toContain('step.conclusion !== "success"');
     expect(verifyRegistryWorkflow).toContain("workflowCommit");
+    expect(verifyRegistryWorkflow).toContain("provenanceMetadataPresent: true");
+    expect(verifyRegistryWorkflow).not.toContain("provenance: true");
     expect(verifyRegistryWorkflow).toContain("files.length !== 110");
     expect(verifyRegistryWorkflow).toContain('tags["security-verify"]');
     expect(verifyRegistryWorkflow).toContain("tags.latest");

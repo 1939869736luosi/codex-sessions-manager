@@ -293,7 +293,7 @@ jobs:
               latestBefore: process.env.EXPECTED_LATEST,
               latestAfter: process.env.EXPECTED_LATEST,
               fileCount: 110,
-              provenance: true,
+              provenanceMetadataPresent: true,
               candidate: {
                 publish: true,
                 replication: true,
