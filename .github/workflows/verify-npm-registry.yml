@@ -76,14 +76,35 @@ jobs:
           grep -F "export const TOOL_VERSION = \"${VERSION}\";" src/version.ts
           grep -F "## ${VERSION}" CHANGELOG.md
           gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${CANDIDATE_RUN_ID}" > "${RUNNER_TEMP}/candidate-run.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${CANDIDATE_RUN_ID}/jobs?per_page=100" > "${RUNNER_TEMP}/candidate-jobs.json"
           node -e '
             const run = require(process.argv[1]);
+            const jobs = require(process.argv[2]).jobs ?? [];
             if (run.status !== "completed") process.exit(1);
             if (!["success", "failure"].includes(run.conclusion)) process.exit(1);
             if (run.event !== "push") process.exit(1);
             if (run.path !== ".github/workflows/release.yml") process.exit(1);
-            if (run.head_sha !== process.argv[2] || run.head_branch !== process.argv[3]) process.exit(1);
-          ' "${RUNNER_TEMP}/candidate-run.json" "${EXPECTED_COMMIT}" "${TAG}"
+            if (run.head_sha !== process.argv[3] || run.head_branch !== process.argv[4]) process.exit(1);
+            const job = jobs.find((entry) => entry.name === "Verify and publish to security-verify");
+            if (!job) process.exit(1);
+            const requiredSteps = [
+              "Publish with the non-default security-verify tag",
+              "Wait for registry replication",
+              "Install the exact registry version and smoke both entrypoints",
+            ];
+            for (const name of requiredSteps) {
+              const step = job.steps?.find((entry) => entry.name === name);
+              if (!step || step.conclusion !== "success") process.exit(1);
+            }
+            const compare = job.steps?.find((entry) => entry.name === "Compare the registry tarball with the reviewed tarball");
+            if (!compare) process.exit(1);
+            if (run.conclusion === "success" && (job.conclusion !== "success" || compare.conclusion !== "success")) process.exit(1);
+            if (run.conclusion === "failure") {
+              if (job.conclusion !== "failure" || compare.conclusion !== "failure") process.exit(1);
+              const failedSteps = (job.steps ?? []).filter((step) => step.conclusion === "failure");
+              if (failedSteps.length !== 1 || failedSteps[0].name !== compare.name) process.exit(1);
+            }
+          ' "${RUNNER_TEMP}/candidate-run.json" "${RUNNER_TEMP}/candidate-jobs.json" "${EXPECTED_COMMIT}" "${TAG}"
 
       - name: Rebuild the reviewed source tarball from the immutable tag
         shell: bash
@@ -262,6 +283,9 @@ jobs:
               expectedCommit: process.env.EXPECTED_COMMIT,
               candidateRunId: process.env.CANDIDATE_RUN_ID,
               verificationRunId: process.env.GITHUB_RUN_ID,
+              workflowCommit: process.env.GITHUB_SHA,
+              workflowRef: process.env.GITHUB_REF_NAME,
+              workflowPath: ".github/workflows/verify-npm-registry.yml",
               expectedSha256: process.env.EXPECTED_SHA256,
               sourceSha256: process.env.SOURCE_SHA256,
               registrySha256: process.env.REGISTRY_SHA256,
@@ -270,6 +294,12 @@ jobs:
               latestAfter: process.env.EXPECTED_LATEST,
               fileCount: 110,
               provenance: true,
+              candidate: {
+                publish: true,
+                replication: true,
+                registrySmoke: true,
+                compareFailureOnlyRecovery: true
+              },
               smoke: { cli: true, mcp: true, doctor: true }
             };
             fs.writeFileSync(process.argv[1], `${JSON.stringify(report, null, 2)}\n`);
@@ -293,6 +323,7 @@ jobs:
             ${{ runner.temp }}/dist-tags-after.json
             ${{ runner.temp }}/registry-doctor.json
             ${{ runner.temp }}/candidate-run.json
+            ${{ runner.temp }}/candidate-jobs.json
             ${{ runner.temp }}/verification.json
           if-no-files-found: error
           retention-days: 30
