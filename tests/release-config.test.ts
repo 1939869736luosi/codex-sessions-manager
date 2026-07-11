@@ -155,6 +155,7 @@ describe("release configuration", () => {
     const releaseWorkflow = await readRepositoryFile(".github/workflows/release.yml");
     const promoteWorkflow = await readRepositoryFile(".github/workflows/promote-npm.yml");
     const verifyRegistryWorkflow = await readRepositoryFile(".github/workflows/verify-npm-registry.yml");
+    const recoveryParser = await readRepositoryFile("scripts/verify-candidate-compare-log.mjs");
 
     expect(releaseWorkflow).toContain("tags:");
     expect(releaseWorkflow).toContain('uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6');
@@ -191,7 +192,10 @@ describe("release configuration", () => {
     expect(releaseWorkflow).toContain("--testTimeout=30000");
     expect(releaseWorkflow).toContain("npm run test:coverage");
     expect(releaseWorkflow).toContain("npm run smoke:release");
-    expect(releaseWorkflow).toContain("CSM_REGISTRY_COMPARE_START version=${PACKAGE_VERSION}");
+    expect(releaseWorkflow).toContain("CSM_REGISTRY_COMPARE_ATTEMPT_START attempt=${ATTEMPT} version=${PACKAGE_VERSION}");
+    expect(releaseWorkflow).toContain("CSM_REGISTRY_COMPARE_PACK_SUCCESS attempt=${ATTEMPT} version=${PACKAGE_VERSION}");
+    expect(releaseWorkflow).toContain("reason=HASH_MISMATCH");
+    expect(releaseWorkflow).toContain("reason=${FAILURE_REASON}");
     expect(releaseWorkflow).toContain("npm audit --omit=dev --audit-level=high");
     const sharedConcurrencyBlock = [
       "concurrency:",
@@ -286,15 +290,18 @@ describe("release configuration", () => {
     expect(verifyRegistryWorkflow).toContain("candidate-jobs.json");
     expect(verifyRegistryWorkflow).toContain('actions/jobs/${JOB_ID}/logs');
     expect(verifyRegistryWorkflow).toContain("candidate-job.log");
-    expect(verifyRegistryWorkflow).toContain("npm error code ETARGET");
-    expect(verifyRegistryWorkflow).toContain("No matching version found for codex-sessions-manager@");
-    expect(verifyRegistryWorkflow).toContain("codex-sessions-manager@${PACKAGE_VERSION}");
-    expect(verifyRegistryWorkflow).toContain('compareFailureReason = "ETARGET"');
-    expect(verifyRegistryWorkflow).toContain("lastIndexOf(packCommand)");
-    expect(verifyRegistryWorkflow).toContain("lastIndexOf(compareMarker)");
-    expect(verifyRegistryWorkflow).toContain("CSM_REGISTRY_COMPARE_START version=${version}");
-    expect(verifyRegistryWorkflow).toContain("compareFailureVersion = version");
-    expect(verifyRegistryWorkflow).toContain('createHash("sha256")');
+    expect(verifyRegistryWorkflow).toContain("scripts/verify-candidate-compare-log.mjs?ref=${GITHUB_SHA}");
+    expect(verifyRegistryWorkflow).toContain("application/vnd.github.raw+json");
+    expect(recoveryParser).toContain("npm error code ETARGET");
+    expect(recoveryParser).toContain("No matching version found for codex-sessions-manager@");
+    expect(recoveryParser).toContain("CSM_REGISTRY_COMPARE_ATTEMPT_START");
+    expect(recoveryParser).toContain("CSM_REGISTRY_COMPARE_PACK_SUCCESS");
+    expect(recoveryParser).toContain("HASH_MISMATCH");
+    expect(recoveryParser).toContain('compareFailureReason = "ETARGET"');
+    expect(recoveryParser).toContain("legacy recovery is restricted to the known 0.6.3 incident");
+    expect(recoveryParser).toContain("29150488700");
+    expect(recoveryParser).toContain("compareFailureVersion = version");
+    expect(recoveryParser).toContain('createHash("sha256")');
     expect(verifyRegistryWorkflow).toContain("candidate-state.json");
     expect(verifyRegistryWorkflow).toContain("Publish with the non-default security-verify tag");
     expect(verifyRegistryWorkflow).toContain("Install the exact registry version and smoke both entrypoints");

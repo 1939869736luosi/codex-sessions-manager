@@ -124,27 +124,15 @@ jobs:
             JOB_ID="$(node -p "require(process.argv[1]).jobId" "${RUNNER_TEMP}/candidate-state.json")"
             [[ "${JOB_ID}" =~ ^[0-9]+$ ]]
             gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/${JOB_ID}/logs" > "${RUNNER_TEMP}/candidate-job.log"
-            node -e '
-              const fs = require("node:fs");
-              const crypto = require("node:crypto");
-              const log = fs.readFileSync(process.argv[1], "utf8");
-              const state = require(process.argv[2]);
-              const version = process.argv[3];
-              const compareMarker = `CSM_REGISTRY_COMPARE_START version=${version}`;
-              const packCommand = "npm pack \"codex-sessions-manager@${PACKAGE_VERSION}\"";
-              const exactNotarget = `npm error notarget No matching version found for codex-sessions-manager@${version}.`;
-              const markerIndex = log.lastIndexOf(compareMarker);
-              const packIndex = markerIndex >= 0 ? markerIndex : log.lastIndexOf(packCommand);
-              if (packIndex < 0) process.exit(1);
-              const compareLog = log.slice(packIndex);
-              if (!compareLog.includes("npm error code ETARGET")) process.exit(1);
-              if (!compareLog.includes(exactNotarget)) process.exit(1);
-              state.compareFailureReason = "ETARGET";
-              state.compareFailureOnlyRecovery = true;
-              state.compareFailureVersion = version;
-              state.candidateJobLogSha256 = crypto.createHash("sha256").update(log).digest("hex");
-              fs.writeFileSync(process.argv[2], `${JSON.stringify(state, null, 2)}\n`);
-            ' "${RUNNER_TEMP}/candidate-job.log" "${RUNNER_TEMP}/candidate-state.json" "${VERSION}"
+            PARSER_PATH="${RUNNER_TEMP}/verify-candidate-compare-log.mjs"
+            gh api \
+              -H "Accept: application/vnd.github.raw+json" \
+              "repos/${GITHUB_REPOSITORY}/contents/scripts/verify-candidate-compare-log.mjs?ref=${GITHUB_SHA}" > "${PARSER_PATH}"
+            node "${PARSER_PATH}" \
+              --log "${RUNNER_TEMP}/candidate-job.log" \
+              --state "${RUNNER_TEMP}/candidate-state.json" \
+              --version "${VERSION}" \
+              --candidate-run-id "${CANDIDATE_RUN_ID}"
           fi
 
       - name: Rebuild the reviewed source tarball from the immutable tag
