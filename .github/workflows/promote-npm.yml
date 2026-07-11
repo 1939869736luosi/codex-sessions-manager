@@ -11,9 +11,30 @@ on:
         description: SHA-256 from the candidate publish workflow
         required: true
         type: string
+      tag:
+        description: Immutable release tag verified by the registry verification workflow
+        required: true
+        type: string
+      expected_commit:
+        description: Commit peeled from the immutable release tag
+        required: true
+        type: string
+      candidate_run_id:
+        description: Original candidate publish workflow run ID
+        required: true
+        type: string
+      verification_run_id:
+        description: Successful independent registry verification workflow run ID
+        required: true
+        type: string
+      expected_latest:
+        description: Current latest version recorded by the independent verification workflow
+        required: true
+        type: string
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: npm-package-codex-sessions-manager
@@ -34,6 +55,81 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
 
+      - name: Require independent registry verification evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
+          TAG: ${{ inputs.tag }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          VERIFICATION_RUN_ID: ${{ inputs.verification_run_id }}
+          EXPECTED_LATEST: ${{ inputs.expected_latest }}
+        run: |
+          [[ "${VERIFICATION_RUN_ID}" =~ ^[0-9]+$ ]]
+          [[ "${CANDIDATE_RUN_ID}" =~ ^[0-9]+$ ]]
+          EVIDENCE_DIR="${RUNNER_TEMP}/registry-verification"
+          mkdir -p "${EVIDENCE_DIR}"
+          test "${GITHUB_REF_NAME}" = "main"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${VERIFICATION_RUN_ID}" > "${EVIDENCE_DIR}/run.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/verify-npm-registry.yml" > "${EVIDENCE_DIR}/workflow.json"
+          node -e '
+            const run = require(process.argv[1]);
+            const workflow = require(process.argv[2]);
+            if (run.status !== "completed" || run.conclusion !== "success") process.exit(1);
+            if (run.event !== "workflow_dispatch") process.exit(1);
+            if (run.path !== ".github/workflows/verify-npm-registry.yml") process.exit(1);
+            if (run.head_sha !== process.env.GITHUB_SHA) process.exit(1);
+            if (run.head_branch !== process.env.GITHUB_REF_NAME) process.exit(1);
+            if (run.workflow_id !== workflow.id) process.exit(1);
+          ' "${EVIDENCE_DIR}/run.json" "${EVIDENCE_DIR}/workflow.json"
+          ARTIFACT_NAME="npm-registry-verification-${VERSION}-${VERIFICATION_RUN_ID}"
+          gh run download "${VERIFICATION_RUN_ID}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --name "${ARTIFACT_NAME}" \
+            --dir "${EVIDENCE_DIR}"
+          node -e '
+            const report = require(process.argv[1]);
+            const run = require(process.argv[2]);
+            const expected = {
+              version: process.argv[3],
+              expectedSha256: process.argv[4],
+              tag: process.argv[5],
+              expectedCommit: process.argv[6],
+              candidateRunId: process.argv[7],
+              verificationRunId: process.argv[8],
+            };
+            const expectedLatest = process.argv[9];
+            for (const [key, value] of Object.entries(expected)) {
+              if (String(report[key]) !== String(value)) process.exit(1);
+            }
+            if (report.status !== "passed") process.exit(1);
+            if (report.registrySha256 !== expected.expectedSha256) process.exit(1);
+            if (report.sourceSha256 !== expected.expectedSha256) process.exit(1);
+            if (report.securityVerify !== expected.version) process.exit(1);
+            if (report.latestBefore !== expectedLatest) process.exit(1);
+            if (report.latestAfter !== expectedLatest) process.exit(1);
+            if (report.workflowCommit !== run.head_sha || report.workflowCommit !== process.env.GITHUB_SHA) process.exit(1);
+            if (report.workflowRef !== run.head_branch || report.workflowRef !== process.env.GITHUB_REF_NAME) process.exit(1);
+            if (report.workflowPath !== run.path) process.exit(1);
+            const candidate = report.candidate;
+            if (candidate?.publish !== true || candidate?.replication !== true || candidate?.registrySmoke !== true) process.exit(1);
+            if (candidate.runConclusion === "failure") {
+              if (candidate.compareStep !== "failure") process.exit(1);
+              if (candidate.compareFailureReason !== "ETARGET" || candidate.compareFailureOnlyRecovery !== true) process.exit(1);
+              if (candidate.compareFailureVersion !== expected.version) process.exit(1);
+              if (!/^[0-9a-f]{64}$/.test(candidate.candidateJobLogSha256)) process.exit(1);
+            } else if (candidate.runConclusion === "success") {
+              if (candidate.compareStep !== "success") process.exit(1);
+              if (candidate.compareFailureReason !== null || candidate.compareFailureOnlyRecovery !== false) process.exit(1);
+              if (candidate.compareFailureVersion !== null || candidate.candidateJobLogSha256 !== null) process.exit(1);
+            } else {
+              process.exit(1);
+            }
+            if (report.smoke?.cli !== true || report.smoke?.mcp !== true || report.smoke?.doctor !== true) process.exit(1);
+          ' "${EVIDENCE_DIR}/verification.json" "${EVIDENCE_DIR}/run.json" "${VERSION}" "${EXPECTED_SHA256}" "${TAG}" "${EXPECTED_COMMIT}" "${CANDIDATE_RUN_ID}" "${VERIFICATION_RUN_ID}" "${EXPECTED_LATEST}"
+
       - name: Verify registry bytes and smoke the exact version
         shell: bash
         env:
@@ -42,10 +138,28 @@ jobs:
         run: |
           [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           mkdir -p "${RUNNER_TEMP}/registry-pack" "${RUNNER_TEMP}/smoke" "${RUNNER_TEMP}/empty-codex-root"
-          TARBALL_NAME="$(npm pack "codex-sessions-manager@${VERSION}" --pack-destination "${RUNNER_TEMP}/registry-pack")"
+          for ATTEMPT in {1..12}; do
+            CACHE_DIR="${RUNNER_TEMP}/npm-promotion-pack-cache-${ATTEMPT}"
+            if TARBALL_NAME="$(npm pack \
+              "codex-sessions-manager@${VERSION}" \
+              --ignore-scripts \
+              --prefer-online \
+              --cache "${CACHE_DIR}" \
+              --pack-destination "${RUNNER_TEMP}/registry-pack")"; then
+              break
+            fi
+            if [ "${ATTEMPT}" -eq 12 ]; then
+              echo "registry tarball was not available within the bounded retry window" >&2
+              exit 1
+            fi
+            sleep 5
+          done
           ACTUAL_SHA256="$(sha256sum "${RUNNER_TEMP}/registry-pack/${TARBALL_NAME}" | cut -d ' ' -f 1)"
           test "${ACTUAL_SHA256}" = "${EXPECTED_SHA256}"
-          npm install --prefix "${RUNNER_TEMP}/smoke" "codex-sessions-manager@${VERSION}"
+          npm install \
+            --prefix "${RUNNER_TEMP}/smoke" \
+            "${RUNNER_TEMP}/registry-pack/${TARBALL_NAME}" \
+            --cache "${RUNNER_TEMP}/npm-promotion-install-cache"
           test "$(node "${RUNNER_TEMP}/smoke/node_modules/codex-sessions-manager/dist/cli/index.js" --version)" = "${VERSION}"
           test "$(node "${RUNNER_TEMP}/smoke/node_modules/codex-sessions-manager/dist/mcp/server.js" --version)" = "${VERSION}"
           node "${RUNNER_TEMP}/smoke/node_modules/codex-sessions-manager/dist/cli/index.js" doctor --root "${RUNNER_TEMP}/empty-codex-root" --json > "${RUNNER_TEMP}/registry-doctor.json"
@@ -57,6 +171,50 @@ jobs:
         run: |
           CANDIDATE="$(npm view codex-sessions-manager@security-verify version --prefer-online --cache "${RUNNER_TEMP}/npm-candidate-precheck")"
           test "${CANDIDATE}" = "${VERSION}"
+
+      - name: Require live release tag identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          TAG: ${{ inputs.tag }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+        run: |
+          test "${TAG}" = "v${VERSION}"
+          REF_JSON="${RUNNER_TEMP}/live-tag-ref.json"
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" > "${REF_JSON}"
+          OBJECT_TYPE="$(node -p "require(process.argv[1]).object.type" "${REF_JSON}")"
+          OBJECT_SHA="$(node -p "require(process.argv[1]).object.sha" "${REF_JSON}")"
+          for DEPTH in {1..5}; do
+            if [ "${OBJECT_TYPE}" = "commit" ]; then
+              break
+            fi
+            test "${OBJECT_TYPE}" = "tag"
+            TAG_JSON="${RUNNER_TEMP}/live-tag-object-${DEPTH}.json"
+            gh api "repos/${GITHUB_REPOSITORY}/git/tags/${OBJECT_SHA}" > "${TAG_JSON}"
+            OBJECT_TYPE="$(node -p "require(process.argv[1]).object.type" "${TAG_JSON}")"
+            OBJECT_SHA="$(node -p "require(process.argv[1]).object.sha" "${TAG_JSON}")"
+          done
+          test "${OBJECT_TYPE}" = "commit"
+          test "${OBJECT_SHA}" = "${EXPECTED_COMMIT}"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${CANDIDATE_RUN_ID}" > "${RUNNER_TEMP}/live-candidate-run.json"
+          node -e '
+            const run = require(process.argv[1]);
+            const report = require(process.argv[4]);
+            if (run.status !== "completed") process.exit(1);
+            if (run.event !== "push" || run.path !== ".github/workflows/release.yml") process.exit(1);
+            if (run.head_sha !== process.argv[2] || run.head_branch !== process.argv[3]) process.exit(1);
+            if (run.conclusion !== report.candidate?.runConclusion) process.exit(1);
+          ' "${RUNNER_TEMP}/live-candidate-run.json" "${EXPECTED_COMMIT}" "${TAG}" "${RUNNER_TEMP}/registry-verification/verification.json"
+
+      - name: Require current latest has not changed
+        shell: bash
+        env:
+          EXPECTED_LATEST: ${{ inputs.expected_latest }}
+        run: |
+          CURRENT_LATEST="$(npm view codex-sessions-manager@latest version --prefer-online --cache "${RUNNER_TEMP}/npm-latest-precheck")"
+          test "${CURRENT_LATEST}" = "${EXPECTED_LATEST}"
 
       - name: Move latest only after exact-version verification
         env:

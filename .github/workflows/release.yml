@@ -193,7 +193,11 @@ jobs:
           EMPTY_CODEX_ROOT="${RUNNER_TEMP}/empty-codex-root"
           mkdir -p "${SMOKE_ROOT}"
           mkdir -p "${EMPTY_CODEX_ROOT}"
-          npm install --prefix "${SMOKE_ROOT}" "codex-sessions-manager@${PACKAGE_VERSION}"
+          npm install \
+            --prefix "${SMOKE_ROOT}" \
+            "codex-sessions-manager@${PACKAGE_VERSION}" \
+            --prefer-online \
+            --cache "${RUNNER_TEMP}/npm-registry-install-cache"
           test "$(node "${SMOKE_ROOT}/node_modules/codex-sessions-manager/dist/cli/index.js" --version)" = "${PACKAGE_VERSION}"
           test "$(node "${SMOKE_ROOT}/node_modules/codex-sessions-manager/dist/mcp/server.js" --version)" = "${PACKAGE_VERSION}"
           node "${SMOKE_ROOT}/node_modules/codex-sessions-manager/dist/cli/index.js" doctor --root "${EMPTY_CODEX_ROOT}" --json > "${RUNNER_TEMP}/registry-doctor.json"
@@ -203,10 +207,40 @@ jobs:
         shell: bash
         run: |
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-          mkdir -p "${RUNNER_TEMP}/registry-pack"
-          REGISTRY_NAME="$(npm pack "codex-sessions-manager@${PACKAGE_VERSION}" --pack-destination "${RUNNER_TEMP}/registry-pack")"
-          REGISTRY_SHA256="$(sha256sum "${RUNNER_TEMP}/registry-pack/${REGISTRY_NAME}" | cut -d ' ' -f 1)"
-          test "${REGISTRY_SHA256}" = "${{ steps.package.outputs.sha256 }}"
+          for ATTEMPT in {1..12}; do
+            echo "CSM_REGISTRY_COMPARE_ATTEMPT_START attempt=${ATTEMPT} version=${PACKAGE_VERSION}"
+            CACHE_DIR="${RUNNER_TEMP}/npm-registry-pack-cache-${ATTEMPT}"
+            PACK_DIR="${RUNNER_TEMP}/registry-pack-${ATTEMPT}"
+            PACK_STDERR="${RUNNER_TEMP}/npm-registry-pack-${ATTEMPT}.stderr"
+            mkdir -p "${PACK_DIR}"
+            if REGISTRY_NAME="$(npm pack \
+              "codex-sessions-manager@${PACKAGE_VERSION}" \
+              --ignore-scripts \
+              --prefer-online \
+              --cache "${CACHE_DIR}" \
+              --pack-destination "${PACK_DIR}" 2> "${PACK_STDERR}")"; then
+              cat "${PACK_STDERR}" >&2
+              echo "CSM_REGISTRY_COMPARE_PACK_SUCCESS attempt=${ATTEMPT} version=${PACKAGE_VERSION}"
+              REGISTRY_SHA256="$(sha256sum "${PACK_DIR}/${REGISTRY_NAME}" | cut -d ' ' -f 1)"
+              if [ "${REGISTRY_SHA256}" != "${{ steps.package.outputs.sha256 }}" ]; then
+                echo "CSM_REGISTRY_COMPARE_ATTEMPT_FAILURE attempt=${ATTEMPT} reason=HASH_MISMATCH version=${PACKAGE_VERSION}"
+                exit 1
+              fi
+              exit 0
+            fi
+            cat "${PACK_STDERR}" >&2
+            FAILURE_REASON=OTHER
+            if grep -F "npm error code ETARGET" "${PACK_STDERR}" > /dev/null \
+              && grep -F "npm error notarget No matching version found for codex-sessions-manager@${PACKAGE_VERSION}." "${PACK_STDERR}" > /dev/null; then
+              FAILURE_REASON=ETARGET
+            fi
+            echo "CSM_REGISTRY_COMPARE_ATTEMPT_FAILURE attempt=${ATTEMPT} reason=${FAILURE_REASON} version=${PACKAGE_VERSION}"
+            if [ "${ATTEMPT}" -eq 12 ]; then
+              echo "registry tarball was not available within the bounded retry window" >&2
+              exit 1
+            fi
+            sleep 5
+          done
 
       - name: Preserve only the public package evidence
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
