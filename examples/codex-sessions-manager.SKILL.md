@@ -51,6 +51,7 @@ codex-sessions family <id> [--children|--parents|--subagents|--impact|--full]
 codex-sessions audit <id> [--json]
 codex-sessions audit-root [--limit 50] [--status S...] [--source S...]
 codex-sessions preview-root [--limit 50] [--status S...] [--source S...]
+codex-sessions monthly-review [--limit 50] [--status S...] [--source S...] [--details]
 codex-sessions export <id> [--output ./backup.json]
 codex-sessions plan-delete <id...> [--include-children] [--include-family] [--json]
 codex-sessions plan-delete --source-kind K --limit N [--json]
@@ -68,7 +69,8 @@ codex-sessions verify <id...>
 
 - All destructive commands require `--yes` (CLI) or `confirm=true` (MCP); without it you get preview only.
 - Always run a separate preview before any destructive action, then require explicit user confirmation.
-- `preview`, `plan-delete`, `family`, `impact`, `audit-root`, `preview-root` are read-only. They are never deletion authorization.
+- `preview`, `plan-delete`, `family`, `impact`, `audit-root`, `preview-root`, `monthly-review` are read-only. They are never deletion authorization.
+- Permanent delete removes only exact thread-linked logs. Trash retains them; restore leaves them unchanged; final purge removes them unless that ID is live again. Memory is always retained.
 - Delete never recursively adds parent, child, or family sessions. List every intended ID explicitly.
 - P11 exact-key global-state refs are removable only through explicit-ID confirmed delete.
 - Unknown global-state refs are warnings only; do not delete them automatically.

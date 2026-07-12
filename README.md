@@ -65,12 +65,12 @@ Do not directly edit `memories_N.sqlite`, and do not treat manual edits to `MEMO
 ## Recommended periodic workflow
 
 1. Use official Codex for normal permanent deletion.
-2. Monthly or when storage looks inconsistent, run `audit-root` to find legacy, damaged, or orphaned candidates.
+2. Monthly or when storage looks inconsistent, run `monthly-review` to get one bounded, read-only audit and preview report.
 3. Use `audit <id>` to distinguish confirmed residue from an ID that was never observed.
 4. Batch-preview only the confirmed residual IDs, then prefer `delete --trash --yes` when local cleanup is still needed.
 5. Run `verify` and retain the structured result as the local deletion receipt.
 
-Current compatibility limit: Codex can store SQLite files outside the Codex root via `sqlite_home` or `CODEX_SQLITE_HOME`. This tool resolves that split in this order: `config.toml sqlite_home`, then `CODEX_SQLITE_HOME`, then the Codex root. It warns when both locations contain SQLite databases. Legacy `event_msg` / `response_item` timelines and paginated `item_completed` timelines are parsed with explicit completeness diagnostics. Session ordering follows `recency_at_ms`, then `recency_at`, then `updated_at`; `historyMode` is exposed in structured output. Compressed rollout files (`.jsonl.zst`) are preserved through trash/restore as binary data. If a session has only `.jsonl.zst`, `show` does not decompress the transcript body and reports `compressed_unread`; `export` stores the original compressed bytes as base64 inside its JSON recovery bundle. `memories_N.sqlite` is recognized by `doctor` as an official memory surface, but memory rows and Phase 2 memory outputs are read-only and are not mutated by session cleanup. `logs_N.sqlite` execution logs and remote-control state are also not ordinary session cleanup surfaces.
+Current compatibility limit: Codex can store SQLite files outside the Codex root via `sqlite_home` or `CODEX_SQLITE_HOME`. This tool resolves that split in this order: `config.toml sqlite_home`, then `CODEX_SQLITE_HOME`, then the Codex root. It warns when both locations contain SQLite databases. Legacy `event_msg` / `response_item` timelines and paginated `item_completed` timelines are parsed with explicit completeness diagnostics. Session ordering follows `recency_at_ms`, then `recency_at`, then `updated_at`; `historyMode` is exposed in structured output. Compressed rollout files (`.jsonl.zst`) are preserved through trash/restore as binary data. If a session has only `.jsonl.zst`, `show` does not decompress the transcript body and reports `compressed_unread`; `export` stores the original compressed bytes as base64 inside its JSON recovery bundle. `memories_N.sqlite` is recognized by `doctor` as an official memory surface, but memory rows and Phase 2 memory outputs remain read-only. A confirmed permanent delete removes only `logs.thread_id` rows matching the exact selected UUID; trash keeps those logs recoverable until final purge. Remote-control state remains observation-only.
 
 Confirmed mutations require canonical full session UUIDs; deleting an active session needs the additional `--allow-active` / `allowActive=true` override. Managed symlinks, junctions, hard-linked files, outside-root paths, and stale plans are rejected. Interrupted mutations keep a durable recovery record and block further writes until the exact recovery operation completes. See [Safety Guide](./docs/SAFETY.md) for exit statuses, verification scope, and the same-user filesystem-race boundary.
 
@@ -147,13 +147,13 @@ For a legacy, orphaned, or explicitly selected recoverable cleanup, this tool:
 2. Acquire the mutation lock and write a durable operation journal.
 3. Precompute safe replacements for session_index.jsonl, history.jsonl, and allowlisted global-state references.
 4. Delete the selected rollout and shell-snapshot files.
-5. Delete only the known session rows from state/goals SQLite databases. Execution logs in logs_N.sqlite remain read-only.
+5. Delete only the known session rows from state/goals SQLite databases and exact `logs.thread_id` rows from the dedicated logs database.
 6. Verify the declared files, indexes, global-state references, and SQLite rows.
 ```
 
 A failure before commit performs no mutation. A failure during commit is rolled back when the journal proves that recovery is safe; otherwise the operation becomes `recovery_required` and blocks later mutations until explicit recovery. A mutation that committed but later failed or only partially completed verification remains reported as committed, with exit status `2` and the verified scope stated explicitly.
 
-After deletion, run `verify` to confirm no residue remains in the surfaces this release covers. `verify` may still report retained logs as `retained_sqlite=logs=N`; that is expected. Memory state in `memories_N.sqlite` remains read-only and needs a separate memory-delete safety design before this tool can claim full memory cleanup.
+After deletion, run `verify` to confirm no residue remains in the surfaces this release covers. A permanent delete must report zero exact thread-linked log rows. Trash intentionally retains them; restore leaves them unchanged; final purge removes them unless the same session ID has been restored into live storage. Memory state in `memories_N.sqlite` remains read-only, and verification reports its observable association without changing it.
 
 ## Features
 
@@ -167,7 +167,8 @@ After deletion, run `verify` to confirm no residue remains in the surfaces this 
 | **Residue audit** | Read-only report for raw rollout files, shell snapshots, session indexes, history, SQLite rows, global-state refs, thread edges, family status, and broken parent/child links |
 | **Root residue scan** | Read-only root-level scan for likely leftover IDs, without requiring a session ID first |
 | **Root delete preview** | Read-only batch delete preview for root residue candidates, without requiring you to list session IDs by hand |
-| **Codex SQLite layout** | Resolves `config.toml sqlite_home` / `CODEX_SQLITE_HOME` / root fallback, in that order; detects `state_N.sqlite`, `logs_N.sqlite`, `goals_N.sqlite`, and read-only `memories_N.sqlite`; `doctor`, `audit`, `verify`, and previews count `goals_N.sqlite.thread_goals`, while `logs_N.sqlite` and `memories_N.sqlite` stay out of default deletion. |
+| **Monthly residue review** | One bounded, read-only report combining root audit and preview; warning details require `--details` |
+| **Codex SQLite layout** | Resolves `config.toml sqlite_home` / `CODEX_SQLITE_HOME` / root fallback, in that order; exact thread-linked logs follow permanent-delete/purge lifecycle, while `memories_N.sqlite` remains read-only. |
 | **Explicit delete plan** | Read-only `plan-delete` for explicit session IDs; the plan itself cannot execute, and any later deletion must return to a separate explicit-ID preview and confirmation |
 | **Trash & Restore** | Full snapshot saved; `.jsonl.zst` session files are stored as binary-safe data; restore checks for SQLite key conflicts before writing |
 | **Verify** | Reports remaining files, index rows, and DB records for the surfaces this release supports |
@@ -276,6 +277,7 @@ codex-sessions family <session-id> [--json] [--children|--parents|--subagents|--
 codex-sessions audit <session-id> [--json]
 codex-sessions audit-root [--json] [--limit 50] [--status STATUS...] [--source SOURCE...] [--all]
 codex-sessions preview-root [--json] [--limit 50] [--status STATUS...] [--source SOURCE...] [--all]
+codex-sessions monthly-review [--json] [--details] [--limit 50] [--status STATUS...] [--source SOURCE...] [--all]
 codex-sessions export <session-id> [--output ./backup.json]
 codex-sessions plan-delete <session-id...> [--json] [--write-plan FILE] [--include-children] [--include-subagents] [--include-descendants] [--include-family]
 codex-sessions plan-delete --source-kind KIND [--source-kind KIND...] --limit N [--status STATUS...] [--json]
@@ -341,7 +343,9 @@ Important source limits:
 - `source=mcp` means the thread was recorded with that source. It is not a log of every MCP tool call inside the conversation.
 - `model_provider` is only displayed and filtered here. This tool does not repair provider identity or rewrite provider history.
 
-Use `preview-root` when you want a read-only batch delete preview for the same candidates `audit-root` would select. It reuses the same status/source filters and conservative default `--limit 50`, then summarizes what a read-only preview would touch across rollout files, compressed `.jsonl.zst` rollout files, shell snapshots, `session_index`, `history`, SQLite (including `goals_N.sqlite.thread_goals` when present), known global-state refs, allowlisted exact-key global-state refs, unknown global-state refs, and `thread_spawn_edges`. `logs_N.sqlite` and `memories_N.sqlite` are not default deletion surfaces. It does not delete, does not rewrite JSONL, SQLite, shell snapshots, or global-state, does not accept `--yes`, does not recommend deleting any session, and does not recursively add parent, child, or family sessions. A `preview-root` result is not a deletion recommendation; it only shows what would be touched if you later choose explicit `delete` commands. Actual deletion should use a separate explicit-ID `delete` preview for review, followed by an explicitly confirmed `delete ... --yes` command.
+Use `preview-root` when you want a read-only batch delete preview for the same candidates `audit-root` would select. It reuses the same status/source filters and conservative default `--limit 50`, then summarizes rollout files, compressed `.jsonl.zst` files, shell snapshots, indexes, exact thread-linked SQLite rows (including dedicated logs), global-state references, and family edges. Memory is never a deletion surface. It does not delete, does not accept `--yes`, does not recommend deleting a session, and does not recursively add relatives. Actual deletion still requires a separate explicit-ID preview and confirmation.
+
+Use `monthly-review` for the normal periodic check. It combines `audit-root` and `preview-root` without changing data, defaults to five warning samples, and expands warnings only with `--details`. Its next steps are per-session read-only audits, never confirmed delete commands.
 
 Use `plan-delete` when you already have explicit session IDs and want a safer relationship-aware plan before any deletion preview or write. It is read-only, has `readOnly: true` and `executionSupported: false`, and is also available through the read-only MCP `plan_delete_sessions` tool. By default only the seed IDs are selected. Related parents, children, subagents, descendants, family members, and side/fork ambiguous sessions are reported in `availableIncludes` or warnings. `--include-children`, `--include-subagents`, `--include-descendants`, and `--include-family` only change `selectedIds`; they do not execute deletion. `--include-family` is highest risk and emits a strong warning. Exact-key global-state output shows only path, rule, shape, and byte metadata; unknown global-state remains warning-only.
 
@@ -421,7 +425,7 @@ Codex 0.144.1 official deletion removes the persisted thread, spawned descendant
 ├── history.jsonl        ← conversation history index     ✅ cleaned
 ├── state_N.sqlite       ← threads and related records     ✅ cleaned
 ├── goals_N.sqlite       ← thread goals, when split out    ✅ cleaned
-├── logs_N.sqlite        ← execution logs                 👁 retained by default
+├── logs_N.sqlite        ← exact thread-linked logs follow permanent delete/purge; retained in trash
 ├── memories_N.sqlite    ← official memory state           👁 doctor/schema watch only
 └── .codex-global-state.json ← known active-session refs   ✅ cleaned
 ```

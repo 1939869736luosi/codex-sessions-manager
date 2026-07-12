@@ -71,6 +71,15 @@ codex-sessions preview-root [--root PATH] [--json] [--limit 50] [--all]
 
 Read-only batch delete preview. Does not delete, does not accept `--yes`, does not recommend deletion.
 
+### monthly-review
+
+```bash
+codex-sessions monthly-review [--root PATH] [--json] [--details] [--limit 50]
+  [--status STATUS...] [--source SOURCE...]
+```
+
+Combines the existing root audit and preview into one periodic read-only report. It returns at most five warning samples by default. It never generates confirmed delete commands.
+
 ### plan-delete
 
 ```bash
@@ -199,7 +208,7 @@ Removable only when the session ID is the whole object key and value shape match
 - A committed operation with partial or failed verification is reported as committed, with the verification status and scope attached.
 - No preview token binding between preview and confirmed calls; confirmed delete rescans.
 - If global-state changes during confirmed delete or cannot be parsed, the write is refused.
-- `logs_N.sqlite` execution logs are retained by default.
+- Permanent delete removes only exact `logs.thread_id` rows. Trash retains them, restore leaves them unchanged, and final purge removes them unless that session ID is live again.
 - `memories_N.sqlite` is read-only and not mutated by session cleanup.
 - Compressed `.jsonl.zst` files are handled as binary-safe data through trash/restore.
 - Export and trash bundles may include prompt-history content; do not print unless explicitly requested.

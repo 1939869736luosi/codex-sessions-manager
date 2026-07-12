@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { appendFile, chmod, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { appendFile, chmod, cp, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import Database from "better-sqlite3";
@@ -17,6 +17,7 @@ import {
 } from "../src/core/delete.js";
 import { buildSessionFamily, buildSessionFamilyQuery } from "../src/core/family.js";
 import { buildPlanDelete } from "../src/core/plan-delete.js";
+import { setMutationCheckpointHookForTests } from "../src/core/mutation-safety.js";
 import { inspectCodexRoot } from "../src/core/doctor.js";
 import { listProjectSummaries } from "../src/core/project.js";
 import { filterSessions, resolveSessions } from "../src/core/query.js";
@@ -1036,6 +1037,37 @@ describe("core integration", () => {
     expect(audit.recommendedNextCommandNote).toContain("不是残留");
   });
 
+  it("reports the same session in active and archived storage as a conflict", async () => {
+    const duplicateActivePath = path.join(
+      fixture.rootDir,
+      "sessions",
+      "2026",
+      "04",
+      "04",
+      `rollout-2026-04-04T12-00-00-${FIXTURE_IDS.ARCHIVED_ID}.jsonl`,
+    );
+    await mkdir(path.dirname(duplicateActivePath), { recursive: true });
+    await writeFile(duplicateActivePath, `${JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: "duplicate" } })}\n`);
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const session = resolveSessions(scan, [FIXTURE_IDS.ARCHIVED_ID])[0];
+    const audit = buildSessionResidueAudit(scan, FIXTURE_IDS.ARCHIVED_ID);
+    const preview = buildDeletePreview(scan, [session]);
+
+    expect(audit.overallStatus).toContain("storage-conflict");
+    expect(audit.currentState.message).toContain("sessions 和 archived_sessions");
+    expect(audit.warnings).toEqual(expect.arrayContaining([expect.stringContaining("同时存在")]));
+    expect(audit.recommendedNextCommand).toBe(
+      `codex-sessions delete ${FIXTURE_IDS.ARCHIVED_ID} --root ${fixture.rootDir}`,
+    );
+    expect(audit.recommendedNextCommandNote).not.toContain("不是残留");
+    expect(preview.items[0]).toMatchObject({
+      storageConflict: true,
+      warnings: expect.arrayContaining([expect.stringContaining("同时存在")]),
+    });
+    expect(preview.items[0].filePaths).toHaveLength(2);
+  });
+
   it("treats archived SQLite and index rows without an archived rollout as deletion residue", async () => {
     await rm(fixture.paths.archivedSessionFile);
 
@@ -1412,7 +1444,7 @@ describe("core integration", () => {
     expect(result.validation.every((item) => item.historyRowsRemaining === 0)).toBe(true);
     expect(result.validation.every((item) => item.sqlite.stage1Rows === 0)).toBe(true);
     expect(result.validation.every((item) => item.sqlite.dynamicToolRows === 0)).toBe(true);
-    expect(result.validation.every((item) => item.sqlite.logRows === 1)).toBe(true);
+    expect(result.validation.every((item) => item.sqlite.logRows === 0)).toBe(true);
     expect(result.validation.every((item) => item.sqlite.threadGoalRows === 0)).toBe(true);
     expect(result.validation.every((item) => item.sqlite.threadRows === 0)).toBe(true);
     await expect(readFile(fixture.paths.activeShellSnapshot, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
@@ -1428,6 +1460,100 @@ describe("core integration", () => {
     expect(globalState["some-user-setting"]).toBe(FIXTURE_IDS.ACTIVE_ID);
     expect(globalState["prompt-history"][0]).toContain(FIXTURE_IDS.ACTIVE_ID);
     expect(bakText).toBe("backup must not change\n");
+  });
+
+  it("refuses permanent deletion before any mutation when dedicated logs schema is unknown", async () => {
+    const logsDb = new Database(fixture.paths.logsSqlite as string);
+    logsDb.exec("drop table logs; create table logs (id integer primary key, ts integer not null)");
+    logsDb.close();
+    const beforeIndex = await readFile(fixture.paths.sessionIndex, "utf8");
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const sessions = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID]);
+
+    await expect(deleteSessions(scan, sessions, { allowActive: true })).rejects.toThrow(/schema|thread_id/iu);
+
+    await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
+    await expect(readFile(fixture.paths.sessionIndex, "utf8")).resolves.toBe(beforeIndex);
+    const stateDb = new Database(fixture.paths.sqlite, { readonly: true });
+    expect((stateDb.prepare("select count(*) as count from threads where id = ?").get(FIXTURE_IDS.ACTIVE_ID) as { count: number }).count).toBe(1);
+    stateDb.close();
+  });
+
+  it("refuses permanent deletion when logs have no stable primary key", async () => {
+    const logsDb = new Database(fixture.paths.logsSqlite as string);
+    logsDb.exec("drop table logs; create table logs (id integer, thread_id text)");
+    logsDb.prepare("insert into logs values (1, ?)").run(FIXTURE_IDS.ACTIVE_ID);
+    logsDb.close();
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const sessions = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID]);
+
+    await expect(deleteSessions(scan, sessions, { allowActive: true })).rejects.toThrow(/primary key|schema/iu);
+    await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
+  });
+
+  it("refuses a dedicated logs composite primary key that cannot be recovered by id alone", async () => {
+    const logsDb = new Database(fixture.paths.logsSqlite as string);
+    logsDb.exec("drop table logs; create table logs (id integer, shard integer, thread_id text, primary key(id, shard))");
+    logsDb.prepare("insert into logs values (1, 1, ?)").run(FIXTURE_IDS.ACTIVE_ID);
+    logsDb.close();
+    const scan = await scanCodexRoot(fixture.rootDir);
+
+    await expect(deleteSessions(scan, resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID]), { allowActive: true }))
+      .rejects.toThrow(/primary key|schema/iu);
+    await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
+  });
+
+  it("rolls back without deleting a log inserted after the recovery plan", async () => {
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const session = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID])[0];
+    let injected = false;
+    setMutationCheckpointHookForTests(async (event) => {
+      if (!injected && event.name === "recovery-payload" && event.status === "committed") {
+        injected = true;
+        const db = new Database(fixture.paths.logsSqlite as string);
+        db.prepare(`
+          insert into logs (ts, ts_nanos, level, target, feedback_log_body, thread_id, process_uuid, estimated_bytes)
+          values (999, 0, 'INFO', 'race', 'new log', ?, 'race-process', 7)
+        `).run(FIXTURE_IDS.ACTIVE_ID);
+        db.close();
+      }
+    });
+    try {
+      await expect(deleteSessions(scan, [session], { allowActive: true })).rejects.toThrow(/STALE_PLAN|changed/iu);
+    } finally {
+      setMutationCheckpointHookForTests(null);
+    }
+
+    await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
+    const db = new Database(fixture.paths.logsSqlite as string, { readonly: true });
+    expect((db.prepare("select count(*) as count from logs where thread_id = ?").get(FIXTURE_IDS.ACTIVE_ID) as { count: number }).count).toBe(2);
+    db.close();
+  });
+
+  it("refuses permanent deletion when a planned log row is updated before commit", async () => {
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const session = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID])[0];
+    let injected = false;
+    setMutationCheckpointHookForTests(async (event) => {
+      if (!injected && event.name === "recovery-payload" && event.status === "committed") {
+        injected = true;
+        const db = new Database(fixture.paths.logsSqlite as string);
+        db.prepare("update logs set feedback_log_body = 'updated externally' where thread_id = ?")
+          .run(FIXTURE_IDS.ACTIVE_ID);
+        db.close();
+      }
+    });
+    try {
+      await expect(deleteSessions(scan, [session], { allowActive: true })).rejects.toThrow(/STALE_PLAN|contents changed/iu);
+    } finally {
+      setMutationCheckpointHookForTests(null);
+    }
+
+    const db = new Database(fixture.paths.logsSqlite as string, { readonly: true });
+    expect((db.prepare("select feedback_log_body as body from logs where thread_id = ?").get(FIXTURE_IDS.ACTIVE_ID) as { body: string }).body)
+      .toBe("updated externally");
+    db.close();
+    await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
   });
 
   it("deletes residual-only shell snapshots and global state references when explicitly targeted", async () => {
@@ -1976,6 +2102,27 @@ describe("core integration", () => {
     expect(await readFile(fixture.paths.activeShellSnapshot, "utf8")).toContain(FIXTURE_IDS.ACTIVE_ID);
   });
 
+  it("restores dedicated logs when a failure occurs immediately after their deletion", async () => {
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const session = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID])[0];
+    setMutationCheckpointHookForTests(async (event) => {
+      if (event.name === "sqlite-state" && event.status === "committed") {
+        throw new Error("injected after dedicated logs delete");
+      }
+    });
+    try {
+      await expect(deleteSessions(scan, [session], { allowActive: true })).rejects.toThrow("删除失败");
+    } finally {
+      setMutationCheckpointHookForTests(null);
+    }
+
+    const validation = await validateDeletion(await scanCodexRoot(fixture.rootDir), [session]);
+    expect(validation[0].filePathsRemaining).toHaveLength(1);
+    expect(validation[0].sessionIndexRowsRemaining).toBe(1);
+    expect(validation[0].sqlite.threadRows).toBe(1);
+    expect(validation[0].sqlite.logRows).toBe(1);
+  });
+
   it("cleans only index traces without touching raw files or sqlite", async () => {
     const scan = await scanCodexRoot(fixture.rootDir);
     const session = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID])[0];
@@ -2326,6 +2473,155 @@ describe("core integration", () => {
     expect(await listTrashEntries(fixture.rootDir)).toEqual([]);
     await expect(restoreTrashEntry(fixture.rootDir, trashResult.trashEntry.trashId)).rejects.toThrow("找不到回收站记录");
     await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
+    const logsDb = new Database(fixture.paths.logsSqlite as string, { readonly: true });
+    expect((logsDb.prepare("select count(*) as count from logs where thread_id = ?").get(FIXTURE_IDS.ACTIVE_ID) as { count: number }).count).toBe(1);
+    logsDb.close();
+  });
+
+  it("retains dedicated logs while trashed and deletes only that entry's logs on purge", async () => {
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const sessions = resolveSessions(scan, [FIXTURE_IDS.ARCHIVED_ID]);
+    const trashed = await moveSessionsToTrash(scan, sessions);
+    const logsPath = fixture.paths.logsSqlite as string;
+    const count = (sessionId: string) => {
+      const db = new Database(logsPath, { readonly: true });
+      try {
+        return (db.prepare("select count(*) as count from logs where thread_id = ?").get(sessionId) as { count: number }).count;
+      } finally {
+        db.close();
+      }
+    };
+
+    expect(count(FIXTURE_IDS.ARCHIVED_ID)).toBe(1);
+    expect(count(FIXTURE_IDS.ACTIVE_ID)).toBe(1);
+
+    await purgeTrashEntry(fixture.rootDir, trashed.trashEntry.trashId);
+
+    expect(count(FIXTURE_IDS.ARCHIVED_ID)).toBe(0);
+    expect(count(FIXTURE_IDS.ACTIVE_ID)).toBe(1);
+  });
+
+  it("purges more than the direct-delete recovery row limit using fixed keys only", async () => {
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const trashed = await moveSessionsToTrash(scan, resolveSessions(scan, [FIXTURE_IDS.ARCHIVED_ID]));
+    const db = new Database(fixture.paths.logsSqlite as string);
+    const insert = db.prepare(`
+      insert into logs (ts, ts_nanos, level, target, feedback_log_body, thread_id, process_uuid, estimated_bytes)
+      values (?, 0, 'INFO', 'purge-bulk', 'x', ?, 'purge-bulk', 1)
+    `);
+    const fill = db.transaction(() => {
+      for (let index = 0; index < 10_000; index += 1) insert.run(20_000 + index, FIXTURE_IDS.ARCHIVED_ID);
+    });
+    fill();
+    db.close();
+
+    await purgeTrashEntry(fixture.rootDir, trashed.trashEntry.trashId);
+
+    const check = new Database(fixture.paths.logsSqlite as string, { readonly: true });
+    expect((check.prepare("select count(*) as count from logs where thread_id = ?").get(FIXTURE_IDS.ARCHIVED_ID) as { count: number }).count).toBe(0);
+    check.close();
+  });
+
+  it("refuses purge before removing trash when dedicated logs schema is unknown", async () => {
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const sessions = resolveSessions(scan, [FIXTURE_IDS.ARCHIVED_ID]);
+    const trashed = await moveSessionsToTrash(scan, sessions);
+    const logsDb = new Database(fixture.paths.logsSqlite as string);
+    logsDb.exec("drop table logs; create table logs (id integer primary key, ts integer not null)");
+    logsDb.close();
+
+    await expect(purgeTrashEntry(fixture.rootDir, trashed.trashEntry.trashId)).rejects.toThrow(/schema|thread_id/iu);
+    expect((await listTrashEntries(fixture.rootDir)).map((entry) => entry.trashId)).toContain(trashed.trashEntry.trashId);
+  });
+
+  it("refuses purge when the session becomes live after the purge plan", async () => {
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const trashed = await moveSessionsToTrash(scan, resolveSessions(scan, [FIXTURE_IDS.ARCHIVED_ID]));
+    let injected = false;
+    setMutationCheckpointHookForTests(async (event) => {
+      if (!injected && event.kind === "purge" && event.name === "recovery-payload" && event.status === "committed") {
+        injected = true;
+        const activePath = path.join(
+          fixture.rootDir,
+          "sessions",
+          "2026",
+          "07",
+          "12",
+          `rollout-2026-07-12T00-00-00-${FIXTURE_IDS.ARCHIVED_ID}.jsonl`,
+        );
+        await mkdir(path.dirname(activePath), { recursive: true });
+        await writeFile(activePath, "{}\n");
+      }
+    });
+    try {
+      await expect(purgeTrashEntry(fixture.rootDir, trashed.trashEntry.trashId)).rejects.toThrow(/STALE_PLAN|became live/iu);
+    } finally {
+      setMutationCheckpointHookForTests(null);
+    }
+
+    expect((await listTrashEntries(fixture.rootDir)).map((item) => item.trashId)).toContain(trashed.trashEntry.trashId);
+    const db = new Database(fixture.paths.logsSqlite as string, { readonly: true });
+    expect((db.prepare("select count(*) as count from logs where thread_id = ?").get(FIXTURE_IDS.ARCHIVED_ID) as { count: number }).count).toBe(1);
+    db.close();
+  });
+
+  it("refuses purge when another recoverable trash entry appears after planning", async () => {
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const trashed = await moveSessionsToTrash(scan, resolveSessions(scan, [FIXTURE_IDS.ARCHIVED_ID]));
+    const duplicateTrashId = "00000000-0000-4000-8000-000000000099";
+    let injected = false;
+    setMutationCheckpointHookForTests(async (event) => {
+      if (!injected && event.kind === "purge" && event.name === "recovery-payload" && event.status === "committed") {
+        injected = true;
+        const trashRoot = path.join(fixture.rootDir, ".codex-sessions-trash");
+        const duplicateDir = path.join(trashRoot, duplicateTrashId);
+        await cp(path.join(trashRoot, trashed.trashEntry.trashId), duplicateDir, { recursive: true });
+        const manifestPath = path.join(duplicateDir, "manifest.json");
+        const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { manifest: { trashId: string } };
+        manifest.manifest.trashId = duplicateTrashId;
+        await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+        const injectedEntry = (await listTrashEntries(fixture.rootDir)).find((item) => item.trashId === duplicateTrashId);
+        if (injectedEntry?.status !== "valid") {
+          throw new Error(`injected trash entry invalid: ${injectedEntry?.invalidReason ?? "missing"}`);
+        }
+      }
+    });
+    try {
+      await expect(purgeTrashEntry(fixture.rootDir, trashed.trashEntry.trashId))
+        .rejects.toThrow(/STALE_PLAN|another recoverable trash/iu);
+    } finally {
+      setMutationCheckpointHookForTests(null);
+    }
+
+    const entries = await listTrashEntries(fixture.rootDir);
+    expect(entries.map((item) => item.trashId)).toEqual(expect.arrayContaining([
+      trashed.trashEntry.trashId,
+      duplicateTrashId,
+    ]));
+    const db = new Database(fixture.paths.logsSqlite as string, { readonly: true });
+    expect((db.prepare("select count(*) as count from logs where thread_id = ?").get(FIXTURE_IDS.ARCHIVED_ID) as { count: number }).count).toBe(1);
+    db.close();
+  });
+
+  it("retains logs while another trash entry for the same session is recoverable", async () => {
+    const initialScan = await scanCodexRoot(fixture.rootDir);
+    const first = await moveSessionsToTrash(
+      initialScan,
+      resolveSessions(initialScan, [FIXTURE_IDS.ARCHIVED_ID]),
+    );
+    await restoreTrashEntry(fixture.rootDir, first.trashEntry.trashId);
+    const secondScan = await scanCodexRoot(fixture.rootDir);
+    const second = await moveSessionsToTrash(secondScan, resolveSessions(secondScan, [FIXTURE_IDS.ARCHIVED_ID]));
+
+    await purgeTrashEntry(fixture.rootDir, first.trashEntry.trashId);
+    let db = new Database(fixture.paths.logsSqlite as string, { readonly: true });
+    expect((db.prepare("select count(*) as count from logs where thread_id = ?").get(FIXTURE_IDS.ARCHIVED_ID) as { count: number }).count).toBe(1);
+    db.close();
+
+    await purgeTrashEntry(fixture.rootDir, second.trashEntry.trashId);
+    db = new Database(fixture.paths.logsSqlite as string, { readonly: true });
+    expect((db.prepare("select count(*) as count from logs where thread_id = ?").get(FIXTURE_IDS.ARCHIVED_ID) as { count: number }).count).toBe(0);
+    db.close();
   });
 
   it("keeps restored trash entries and refuses ambiguous duplicate writes by session id", async () => {

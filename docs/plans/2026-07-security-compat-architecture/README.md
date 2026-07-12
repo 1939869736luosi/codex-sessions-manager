@@ -1,8 +1,8 @@
 # Security, compatibility, and architecture program
 
-Status: **completed through v0.7.0**
+Status: **completed through v0.7.0, with the v0.7.1 corrective release recorded as a postscript**
 Program window: 2026-07-10 to 2026-07-12
-Latest release covered by this program: **v0.7.0**
+Latest corrective release recorded by this program: **v0.7.1**
 
 This directory is the maintained repository copy of the security, compatibility, and architecture plan that guided the v0.6.1–v0.7.0 work. It replaces a single oversized chat plan with smaller documents that can be reviewed and updated independently.
 
@@ -41,12 +41,15 @@ The original plan expected three public versions: v0.6.1, v0.6.2, and v0.7.0. Re
 | v0.6.2 | Fully verified security release |
 | v0.6.3 | Codex 0.144.1 compatibility, preview boundaries, packaging, and compatibility-watch release |
 | v0.7.0 | Shared application operations, bounded MCP responses, read-only memory association, doctor/Skill context controls, and governance |
+| v0.7.1 | Recovery truthfulness corrections, documentation alignment, and a release-process correction after npm required interactive dist-tag confirmation |
 
 Published versions were never overwritten and existing tags were never moved.
 
 ## Completion boundary
 
 “Completed through v0.7.0” means the security, compatibility, architecture, read-only memory, bounded-output, release, and governance commitments described in documents 01–03 passed their release gates.
+
+v0.7.1 is a corrective postscript, not a rewrite of the historical three-release plan.
 
 It does **not** mean every future idea from the original discussion has been implemented. Memory mutation, logs analysis, Amp exploration, a real multi-host harness, stronger descriptor-relative TOCTOU protection, and MCP resource handoff remain separate projects in document 04 and in the repository [Roadmap](../../../ROADMAP.md).
 

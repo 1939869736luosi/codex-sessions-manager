@@ -157,7 +157,11 @@ describe("release configuration", () => {
 
   it("defines the required cross-platform CI matrix", async () => {
     const workflow = await readRepositoryFile(".github/workflows/ci.yml");
+    const dependabot = await readRepositoryFile(".github/dependabot.yml");
 
+    expect(workflow).toContain("push:\n    branches: [main]");
+    expect(workflow).toContain("pull_request:");
+    expect(workflow).toContain("cancel-in-progress: true");
     expect(workflow).toContain("os: ubuntu-latest");
     expect(workflow).toContain("node: 20");
     expect(workflow).toContain("node: 22");
@@ -174,12 +178,15 @@ describe("release configuration", () => {
     expect(workflow).toContain("npm run build");
     expect(workflow).toContain("npm run smoke:release");
     expect(workflow).toContain("npm run pack:check");
+    expect(dependabot).toContain("github-actions-dependencies:");
+    expect(dependabot).toContain("patterns:\n          - \"*\"");
   });
 
-  it("publishes an immutable candidate before a separately approved latest promotion", async () => {
+  it("publishes an immutable candidate before a verified local interactive latest promotion", async () => {
     const releaseWorkflow = await readRepositoryFile(".github/workflows/release.yml");
-    const promoteWorkflow = await readRepositoryFile(".github/workflows/promote-npm.yml");
     const verifyRegistryWorkflow = await readRepositoryFile(".github/workflows/verify-npm-registry.yml");
+    const releaseGuide = await readRepositoryFile("docs/RELEASE.md");
+    const localPromotion = await readRepositoryFile("scripts/promote-npm.mjs");
     const recoveryParser = await readRepositoryFile("scripts/verify-candidate-compare-log.mjs");
 
     expect(releaseWorkflow).toContain("tags:");
@@ -229,62 +236,35 @@ describe("release configuration", () => {
     ].join("\n");
     expect(releaseWorkflow).toContain(sharedConcurrencyBlock);
 
-    expect(promoteWorkflow).toContain("workflow_dispatch:");
-    expect(promoteWorkflow).toContain("environment: npm-production");
-    expect(promoteWorkflow).toContain("NPM_DIST_TAG_TOKEN");
-    expect(promoteWorkflow).toContain('dist-tag add "codex-sessions-manager@${{ inputs.version }}" latest');
-    expect(promoteWorkflow).toContain("expected_sha256");
-    expect(promoteWorkflow).toContain("verification_run_id");
-    expect(promoteWorkflow).toContain("candidate_run_id");
-    expect(promoteWorkflow).toContain("expected_commit");
-    expect(promoteWorkflow).toContain("expected_latest");
-    expect(promoteWorkflow).toContain("actions: read");
-    expect(promoteWorkflow).toContain("Require independent registry verification evidence");
-    expect(promoteWorkflow).toContain("gh run download");
-    expect(promoteWorkflow).toContain("npm-registry-verification-${VERSION}-${VERIFICATION_RUN_ID}");
-    expect(promoteWorkflow).toContain('run.event !== "workflow_dispatch"');
-    expect(promoteWorkflow).toContain("run.head_sha !== process.env.GITHUB_SHA");
-    expect(promoteWorkflow).toContain("run.head_branch !== process.env.GITHUB_REF_NAME");
-    expect(promoteWorkflow).toContain("run.workflow_id !== workflow.id");
-    expect(promoteWorkflow).toContain("Require live release tag identity");
-    expect(promoteWorkflow).toContain('git/ref/tags/${TAG}');
-    expect(promoteWorkflow).toContain('git/tags/${OBJECT_SHA}');
-    expect(promoteWorkflow).toContain('test "${OBJECT_SHA}" = "${EXPECTED_COMMIT}"');
-    expect(promoteWorkflow).toContain("workflowCommit");
-    expect(promoteWorkflow).toContain('candidate.runConclusion === "failure"');
-    expect(promoteWorkflow).toContain('candidate.compareFailureReason !== "ETARGET"');
-    expect(promoteWorkflow).toContain("candidate.compareFailureVersion !== expected.version");
-    expect(promoteWorkflow).toContain("candidate.candidateJobLogSha256");
-    expect(promoteWorkflow).toContain('candidate.runConclusion === "success"');
-    expect(promoteWorkflow).toContain("report.latestBefore !== expectedLatest");
-    expect(promoteWorkflow).toContain("report.latestAfter !== expectedLatest");
-    expect(promoteWorkflow).toContain("Require current latest has not changed");
-    expect(promoteWorkflow).toContain('test "${CURRENT_LATEST}" = "${EXPECTED_LATEST}"');
-    expect(promoteWorkflow).toContain("Wait for dist-tag replication");
-    expect(promoteWorkflow).toContain("--prefer-online");
-    expect(promoteWorkflow).toContain("for ATTEMPT in {1..12}");
-    expect(promoteWorkflow).toContain(sharedConcurrencyBlock);
-    const candidatePrecheckIndex = promoteWorkflow.indexOf("Require security-verify candidate identity");
-    const verificationEvidenceIndex = promoteWorkflow.indexOf("Require independent registry verification evidence");
-    const liveTagIdentityIndex = promoteWorkflow.indexOf("Require live release tag identity");
-    const liveLatestIndex = promoteWorkflow.indexOf("Require current latest has not changed");
-    const moveLatestIndex = promoteWorkflow.indexOf("Move latest only after exact-version verification");
-    const replicationIndex = promoteWorkflow.indexOf("Wait for dist-tag replication");
-    expect(candidatePrecheckIndex).toBeGreaterThan(-1);
-    expect(verificationEvidenceIndex).toBeGreaterThan(-1);
-    expect(verificationEvidenceIndex).toBeLessThan(moveLatestIndex);
-    expect(liveTagIdentityIndex).toBeGreaterThan(verificationEvidenceIndex);
-    expect(liveTagIdentityIndex).toBeLessThan(moveLatestIndex);
-    expect(liveLatestIndex).toBeGreaterThan(liveTagIdentityIndex);
-    expect(liveLatestIndex).toBeLessThan(moveLatestIndex);
-    expect(candidatePrecheckIndex).toBeLessThan(moveLatestIndex);
-    expect(moveLatestIndex).toBeLessThan(replicationIndex);
-    const replicationBlock = promoteWorkflow.slice(replicationIndex);
-    expect(replicationBlock).toContain("LATEST=\"$(npm view codex-sessions-manager@latest version");
-    expect(replicationBlock).toContain("CANDIDATE=\"$(npm view codex-sessions-manager@security-verify version");
-    expect(replicationBlock).toContain(
-      'if [ "${LATEST}" = "${VERSION}" ] && [ "${CANDIDATE}" = "${VERSION}" ]; then',
+    await expect(access(path.join(repositoryRoot, ".github/workflows/promote-npm.yml"))).rejects.toThrow();
+    expect(releaseGuide).toContain("npm dist-tag add codex-sessions-manager@<version> latest");
+    expect(releaseGuide).toContain("browser or Touch ID");
+    expect(releaseGuide).toContain("npm view codex-sessions-manager dist-tags --json");
+    expect(releaseGuide).toContain("revoke");
+    expect(releaseGuide).not.toContain("NPM_DIST_TAG_TOKEN");
+    expect(localPromotion).toContain("--expected-latest");
+    expect(localPromotion).toContain("--expected-sha256");
+    expect(localPromotion).toContain("--expected-commit");
+    expect(localPromotion).toContain("--expected-verification-commit");
+    expect(localPromotion).toContain("--candidate-run-id");
+    expect(localPromotion).toContain("--verification-run-id");
+    expect(localPromotion).toContain("verification.json");
+    expect(localPromotion).toContain("registryTarball");
+    expect(localPromotion).toContain("liveTagCommit");
+    expect(localPromotion).toContain('verificationRun.head_branch !== "main"');
+    expect(localPromotion).toContain("verificationRun.workflow_id !== verificationWorkflow.id");
+    expect(localPromotion).toContain('const packageName = "codex-sessions-manager"');
+    expect(localPromotion).toContain("@security-verify");
+    expect(localPromotion).toContain('["dist-tag", "add"');
+    expect(localPromotion).toContain("Promotion status was ambiguous");
+    expect(localPromotion).toContain("latest and security-verify both identify");
+    const downgradeAttempt = spawnSync(
+      process.execPath,
+      ["scripts/promote-npm.mjs", "--version", "0.7.1", "--expected-latest", "0.7.1"],
+      { cwd: repositoryRoot, encoding: "utf8", env: subprocessEnvironment() },
     );
+    expect(downgradeAttempt.status).toBe(1);
+    expect(downgradeAttempt.stderr).toContain("must be newer than current latest");
 
     expect(verifyRegistryWorkflow).toContain("workflow_dispatch:");
     for (const input of [

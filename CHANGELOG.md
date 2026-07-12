@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.0 (Unreleased)
+
+- Added `monthly-review`, a bounded read-only periodic report combining root residue audit and delete preview; warnings default to five samples and expand only with `--details`.
+- Permanent session deletion now removes only dedicated `logs.thread_id` rows matching the exact selected UUID. Trash retains those rows, restore leaves them unchanged, and final purge removes them unless the same ID is live again.
+- Added rollback and crash-recovery coverage for dedicated logs deletion; unknown log schemas fail before any mutation.
+- Dedicated-log deletion now requires a stable primary key, fixes an exact row-key set before mutation, rejects concurrent changes as stale, validates recovery payload ownership, and applies bounded recovery-data limits.
+- Added explicit `storage-conflict` reporting when the same ID has both active and archived rollout files.
+- Expanded read-only memory association with source-update and Phase 2 selection evidence. Post-delete verification confirms only the observable retained association and never returns raw memory.
+- Replaced cloud npm dist-tag promotion with a checked local interactive promotion command because npm browser or Touch ID confirmation cannot complete on a GitHub runner. Candidate publishing and independent registry verification remain automated; the local command revalidates their artifact, runs, tag, commit, registry tarball SHA-256, provenance, and smoke evidence before invoking npm.
+- Reduced duplicate Dependabot CI runs while preserving pull-request, main, manual, cross-platform, package, coverage, and dependency checks.
+
 ## 0.7.1
 
 - Added a split, maintained implementation record for the v0.6.1–v0.7.0 security, compatibility, preview, architecture, memory, release, and governance program.

@@ -445,6 +445,10 @@ function emptyMemoryLink(enabled: boolean | "unknown", schemaStatus: MemorySchem
     stage1Present: false,
     rolloutSummaryPresent: false,
     phase2Influence: "unknown",
+    sourceUpdatedAt: null,
+    selectedForPhase2: "unknown",
+    selectedForPhase2SourceUpdatedAt: null,
+    selectionMatchesCurrentSource: "unknown",
     retainedAfterSessionDelete: true,
     schemaStatus,
     warnings: [
@@ -502,6 +506,10 @@ export function inspectSessionMemoryLink(
       stage1Present: true,
       rolloutSummaryPresent: Number(row.rollout_summary_present ?? 0) === 1,
       phase2Influence: "unknown",
+      sourceUpdatedAt,
+      selectedForPhase2: selected,
+      selectedForPhase2SourceUpdatedAt: selectedSourceUpdatedAt,
+      selectionMatchesCurrentSource: selected ? selectionMatchesCurrentSource : false,
       retainedAfterSessionDelete: true,
       schemaStatus,
       warnings: [phase2Warning],
@@ -863,6 +871,208 @@ export function deleteStateRows(sqlitePath: string | null, sessionIds: string[])
 
     transaction(sessionIds);
   });
+}
+
+export interface DedicatedLogKey {
+  id: string | number;
+  threadId: string;
+}
+
+export const MAX_DEDICATED_LOG_RECOVERY_ROWS = 10_000;
+export const MAX_DEDICATED_LOG_RECOVERY_BYTES = 32 * 1024 * 1024;
+export const MAX_DEDICATED_LOG_ENCODED_BYTES = MAX_DEDICATED_LOG_RECOVERY_BYTES * 2;
+export const MAX_DEDICATED_LOG_PURGE_KEYS = 100_000;
+
+function assertDedicatedLogsSchema(db: Database.Database): void {
+  const columns = db.prepare("pragma table_info(logs)").all() as Array<{ name?: string; pk?: number }>;
+  const idColumn = columns.find((column) => column.name === "id");
+  const primaryKeyColumns = columns.filter((column) => Number(column.pk ?? 0) > 0);
+  if (
+    !tableExists(db, "logs")
+    || !columns.some((column) => column.name === "thread_id")
+    || !idColumn
+    || Number(idColumn.pk ?? 0) <= 0
+    || primaryKeyColumns.length !== 1
+  ) {
+    throw new MutationSafetyError(
+      "UNSAFE_PATH",
+      "dedicated logs SQLite schema is not recognized (required logs.thread_id and primary key logs.id are missing)",
+    );
+  }
+}
+
+export function assertDedicatedLogRecoveryPayloadBounds(rows: Record<string, unknown>[]): void {
+  if (
+    rows.length > MAX_DEDICATED_LOG_RECOVERY_ROWS
+    || Buffer.byteLength(JSON.stringify(rows), "utf8") > MAX_DEDICATED_LOG_ENCODED_BYTES
+  ) {
+    throw new MutationSafetyError("UNSAFE_PATH", "encoded dedicated logs recovery payload exceeds safe bounds");
+  }
+}
+
+export function dedicatedLogKeysFromRecords(rows: Record<string, unknown>[]): DedicatedLogKey[] {
+  return rows.map((row) => {
+    if ((typeof row.id !== "string" && typeof row.id !== "number") || typeof row.thread_id !== "string") {
+      throw new MutationSafetyError("RECOVERY_REQUIRED", "dedicated log row has no stable id/thread_id key");
+    }
+    return { id: row.id, threadId: row.thread_id };
+  });
+}
+
+function sortDedicatedLogKeys(keys: DedicatedLogKey[]): DedicatedLogKey[] {
+  return [...keys].sort((left, right) =>
+    String(left.id).localeCompare(String(right.id)) || left.threadId.localeCompare(right.threadId));
+}
+
+function assertDedicatedLogKeysEqual(actual: DedicatedLogKey[], expected: DedicatedLogKey[]): void {
+  if (JSON.stringify(sortDedicatedLogKeys(actual)) !== JSON.stringify(sortDedicatedLogKeys(expected))) {
+    throw new MutationSafetyError("STALE_PLAN", "dedicated logs changed after the operation plan was prepared");
+  }
+}
+
+function collectDedicatedLogKeysInDatabase(
+  db: Database.Database,
+  sessionIds: string[],
+  maxRows = MAX_DEDICATED_LOG_RECOVERY_ROWS,
+): DedicatedLogKey[] {
+  const { clause, params } = createInClause(sessionIds);
+  if (!clause) return [];
+  const count = countRows(db, `select count(*) as count from logs where thread_id in (${clause})`, params);
+  if (count > maxRows) {
+    throw new MutationSafetyError(
+      "UNSAFE_PATH",
+      `dedicated logs target has ${count} rows; safe recovery limit is ${maxRows}`,
+    );
+  }
+  return (db.prepare(`select id, thread_id from logs where thread_id in (${clause})`).all(...params) as Array<{
+    id: string | number;
+    thread_id: string;
+  }>).map((row) => ({ id: row.id, threadId: row.thread_id }));
+}
+
+export function collectDedicatedLogKeys(
+  logsSqlitePath: string | null,
+  sessionIds: string[],
+): DedicatedLogKey[] {
+  if (!logsSqlitePath || sessionIds.length === 0) return [];
+  return withDatabase(logsSqlitePath, true, (db) => {
+    assertDedicatedLogsSchema(db);
+    return collectDedicatedLogKeysInDatabase(db, sessionIds, MAX_DEDICATED_LOG_PURGE_KEYS);
+  });
+}
+
+export function collectDedicatedLogRecords(
+  logsSqlitePath: string | null,
+  sessionIds: string[],
+): Record<string, unknown>[] {
+  if (!logsSqlitePath || sessionIds.length === 0) return [];
+  return withDatabase(logsSqlitePath, true, (db) => {
+    assertDedicatedLogsSchema(db);
+    const keys = collectDedicatedLogKeysInDatabase(db, sessionIds);
+    const tableColumns = getTableColumns(db, "logs");
+    const { clause, params } = createInClause(sessionIds);
+    const sizeTerms = tableColumns.map((column) => `coalesce(length(${quoteIdentifier(column)}), 0)`).join(" + ");
+    const estimatedBytes = Number((db.prepare(
+      `select coalesce(sum(${sizeTerms || "0"}), 0) as bytes from logs where thread_id in (${clause})`,
+    ).get(...params) as { bytes?: unknown }).bytes ?? 0);
+    if (!Number.isSafeInteger(estimatedBytes) || estimatedBytes > MAX_DEDICATED_LOG_RECOVERY_BYTES) {
+      throw new MutationSafetyError(
+        "UNSAFE_PATH",
+        `dedicated logs recovery data is ${estimatedBytes} bytes; safe limit is ${MAX_DEDICATED_LOG_RECOVERY_BYTES}`,
+      );
+    }
+    const rows = selectRows(db, `select * from logs where thread_id in (${clause})`, params);
+    assertDedicatedLogKeysEqual(dedicatedLogKeysFromRecords(rows), keys);
+    return rows;
+  });
+}
+
+export function deleteDedicatedLogRows(
+  logsSqlitePath: string | null,
+  sessionIds: string[],
+  expectedKeys?: DedicatedLogKey[],
+  expectedRecords?: Record<string, unknown>[],
+): number {
+  if (!logsSqlitePath || sessionIds.length === 0) return 0;
+  return withDatabase(logsSqlitePath, false, (db) => {
+    assertDedicatedLogsSchema(db);
+    const transaction = db.transaction(() => {
+      const currentKeys = collectDedicatedLogKeysInDatabase(
+        db,
+        sessionIds,
+        Math.max(MAX_DEDICATED_LOG_RECOVERY_ROWS, expectedKeys?.length ?? 0),
+      );
+      const fixedKeys = expectedKeys ?? currentKeys;
+      assertDedicatedLogKeysEqual(currentKeys, fixedKeys);
+      if (expectedRecords) {
+        const { clause, params } = createInClause(sessionIds);
+        const currentRecords = selectRows(db, `select * from logs where thread_id in (${clause})`, params);
+        const normalize = (rows: Record<string, unknown>[]) => encodeSqliteRecordsForJson(rows)
+          .sort((left, right) => String(left.id).localeCompare(String(right.id)));
+        if (JSON.stringify(normalize(currentRecords)) !== JSON.stringify(normalize(expectedRecords))) {
+          throw new MutationSafetyError("STALE_PLAN", "dedicated log contents changed after the operation plan was prepared");
+        }
+      }
+      const remove = db.prepare("delete from logs where id is ? and thread_id = ?");
+      return fixedKeys.reduce((total, key) => total + remove.run(key.id, key.threadId).changes, 0);
+    });
+    return transaction();
+  });
+}
+
+export function deleteDedicatedLogRowsByKeys(
+  logsSqlitePath: string | null,
+  keys: DedicatedLogKey[],
+): number {
+  if (!logsSqlitePath || keys.length === 0) return 0;
+  return withDatabase(logsSqlitePath, false, (db) => {
+    assertDedicatedLogsSchema(db);
+    const remove = db.prepare("delete from logs where id is ? and thread_id = ?");
+    const transaction = db.transaction(() =>
+      keys.reduce((total, key) => total + remove.run(key.id, key.threadId).changes, 0));
+    return transaction();
+  });
+}
+
+export function classifyDedicatedLogKeyPresence(
+  logsSqlitePath: string | null,
+  keys: DedicatedLogKey[],
+): "present" | "absent" | "mixed" {
+  if (keys.length === 0) return "absent";
+  if (!logsSqlitePath) throw new MutationSafetyError("RECOVERY_REQUIRED", "dedicated logs path is unavailable");
+  return withDatabase(logsSqlitePath, true, (db) => {
+    assertDedicatedLogsSchema(db);
+    const exists = db.prepare("select count(*) as count from logs where id is ? and thread_id = ?");
+    const present = keys.reduce(
+      (total, key) => total + Number((exists.get(key.id, key.threadId) as { count: number }).count > 0),
+      0,
+    );
+    if (present === 0) return "absent";
+    if (present === keys.length) return "present";
+    return "mixed";
+  });
+}
+
+export function restoreDedicatedLogRecords(
+  logsSqlitePath: string | null,
+  rows: Record<string, unknown>[],
+): void {
+  if (rows.length === 0) return;
+  if (!logsSqlitePath) {
+    throw new MutationSafetyError("RECOVERY_REQUIRED", "dedicated logs SQLite path is unavailable");
+  }
+  withDatabase(logsSqlitePath, false, (db) => {
+    assertDedicatedLogsSchema(db);
+    const transaction = db.transaction(() => restoreRowsInDatabase(db, "logs", rows));
+    transaction();
+  });
+}
+
+export function reconcileDedicatedLogRecordsForRecovery(
+  logsSqlitePath: string | null,
+  rows: Record<string, unknown>[],
+): void {
+  reconcileDatabaseForRecovery(logsSqlitePath, [{ tableName: "logs", rows }]);
 }
 
 export function deleteGoalRows(sqlitePath: string | null, sessionIds: string[]): void {

@@ -10,7 +10,7 @@ import { getRecoveryStatus } from "../core/recovery.js";
 import { scanCodexRoot } from "../core/scan.js";
 import { summarizeSources } from "../core/sources.js";
 import { listTrashEntries, summarizeTrashDuplicateSessions } from "../core/trash.js";
-import type { PlanDeleteOptions, SessionFamilyMode, SourceKind } from "../core/types.js";
+import type { MonthlyResidueReview, PlanDeleteOptions, SessionFamilyMode, SourceKind } from "../core/types.js";
 
 export interface RootInput {
   root?: string;
@@ -55,6 +55,7 @@ export async function auditRootOperation(input: RootInput & {
   includeAll?: boolean;
   statuses?: string[];
   sources?: string[];
+  includeDetails?: boolean;
 }) {
   const scan = await scanCodexRoot(input.root);
   return { scan, data: buildRootResidueAudit(scan, input) };
@@ -65,9 +66,32 @@ export async function previewRootDeleteOperation(input: RootInput & {
   includeAll?: boolean;
   statuses?: string[];
   sources?: string[];
+  includeDetails?: boolean;
 }) {
   const scan = await scanCodexRoot(input.root);
   return { scan, data: buildRootDeletePreview(scan, input) };
+}
+
+export async function monthlyResidueReviewOperation(input: RootInput & {
+  limit?: number;
+  includeAll?: boolean;
+  statuses?: string[];
+  sources?: string[];
+  includeDetails?: boolean;
+}) {
+  const scan = await scanCodexRoot(input.root);
+  const audit = buildRootResidueAudit(scan, input);
+  const preview = buildRootDeletePreview(scan, input);
+  const nextSteps = audit.candidates.map((candidate) => candidate.recommendedAuditCommand);
+  const data: MonthlyResidueReview = {
+    readOnly: true,
+    officialDeleteFirst: true,
+    memoryRetained: true,
+    audit,
+    preview,
+    nextSteps,
+  };
+  return { scan, data };
 }
 
 export async function exportSessionOperation(input: RootInput & { sessionId: string }) {

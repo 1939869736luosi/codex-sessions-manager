@@ -29,14 +29,20 @@ The maintained implementation record is split under [`docs/plans/2026-07-securit
 - Correct the published positioning now that official Codex 0.144.1 provides substantial permanent thread deletion.
 - Make every compatibility review also classify capabilities that official Codex replaced, narrowed, or newly enabled.
 - Align README, architecture, release guidance, package description, and historical implementation records with actual behavior.
+- Public evidence: [v0.7.1 release](https://github.com/1939869736luosi/codex-sessions-manager/releases/tag/v0.7.1), reviewed/tag commit `844f6f9a117aad6a7972dbf6a2adeb25ff09d42c`, and npm `latest`/`security-verify` version `0.7.1`.
 
 ## Next high-value work
 
 - **Official-delete verifier:** on a temporary Codex home, create and officially delete synthetic threads, then report exactly which rollout, SQLite, logs, memory, snapshot, index, and global-state surfaces remain or cannot be confirmed.
-- **Periodic residue review:** make the monthly workflow simple: official delete first, root audit, risk-sorted residual candidates, batch preview, recoverable cleanup, final verification receipt.
-- **Warning aggregation:** keep real-root hard-link and unsafe-path warnings from flooding normal output; default to counts plus at most five samples and expand only on request.
-- **Memory provenance and delete verification:** show the available per-thread extraction and rollout-summary evidence, label uncertain final-memory provenance as `unknown`, and verify only observable reconsolidation changes after official thread deletion. Do not directly edit generated memory or its database or promise paragraph-level attribution.
 - **Small Codex behavior check:** for each pinned stable Codex version, generate its App Server schema and run create/read/archive/unarchive/delete against a temporary home. Expand to other hosts only after a real adapter failure justifies it.
+
+## v0.8.0 development completed, pending release review
+
+- Permanent delete removes only exact `logs.thread_id` rows; trash retains them, restore leaves them unchanged, and final purge removes them unless the ID is live again.
+- `monthly-review` combines bounded root audit and preview into one read-only periodic report.
+- Root and doctor warnings default to at most five samples; full warning details require an explicit request.
+- Session memory association reports source and Phase 2 selection metadata without raw memory, and post-delete validation confirms only the observable retained association.
+- Active and archived rollout files with the same session ID are reported as `storage-conflict`, not normal archive inventory.
 
 ## Conditional future ideas
 
@@ -53,7 +59,7 @@ The maintained implementation record is split under [`docs/plans/2026-07-securit
 - No MCP shell-out to CLI.
 - No unbounded whole-session MCP response.
 - No automatic delete authorization from `sourceKind`, family, audit, plan files, or preview output.
-- No ordinary cleanup of logs, memories, remote-control state, or external-agent imports.
+- No memory, remote-control, external-agent-import, unowned log, WAL, free-page, or byte-forensic cleanup.
 - No direct editing of `memories_N.sqlite`, `MEMORY.md`, `memory_summary.md`, `raw_memories.md`, or rollout summaries as the normal memory control surface.
 - No automatic public issue or code modification from compatibility-watch workflows.
 

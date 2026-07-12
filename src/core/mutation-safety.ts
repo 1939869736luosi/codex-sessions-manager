@@ -41,6 +41,7 @@ export type MutationCheckpointName =
   | "sqlite-goals"
   | "sqlite-state"
   | "sqlite"
+  | "purge-logs"
   | "purge-quarantine"
   | "purge-remove";
 
@@ -93,6 +94,7 @@ export const MUTATION_CHECKPOINT_INVENTORY = {
   purge: [
     { name: "operation-lock", statuses: COMMITTED_ONLY },
     { name: "recovery-payload", statuses: COMMITTED_ONLY },
+    { name: "purge-logs", statuses: STARTED_AND_COMMITTED },
     { name: "purge-quarantine", statuses: STARTED_AND_COMMITTED },
     { name: "purge-remove", statuses: STARTED_AND_COMMITTED },
   ],

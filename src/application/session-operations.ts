@@ -92,6 +92,10 @@ export async function getSessionOperation(
       stage1Present: false,
       rolloutSummaryPresent: false,
       phase2Influence: "unknown",
+      sourceUpdatedAt: null,
+      selectedForPhase2: "unknown",
+      selectedForPhase2SourceUpdatedAt: null,
+      selectionMatchesCurrentSource: "unknown",
       retainedAfterSessionDelete: true,
       schemaStatus: "unrecognized",
       warnings: [error instanceof Error ? error.message : String(error)],
@@ -126,7 +130,7 @@ export interface InspectRootOperationResult {
 }
 
 const DOCTOR_SAMPLE_LIMIT = 5;
-const DOCTOR_WARNING_LIMIT = 20;
+const DOCTOR_WARNING_LIMIT = 5;
 
 function buildDoctorView(report: DoctorReport, includeDetails: boolean): DoctorView {
   const sampleLimit = includeDetails ? Number.POSITIVE_INFINITY : DOCTOR_SAMPLE_LIMIT;

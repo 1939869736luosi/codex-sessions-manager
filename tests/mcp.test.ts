@@ -1476,7 +1476,7 @@ describe("mcp server", () => {
       expect(deletion.validation[0].globalStateRefsRemaining).toBe(0);
       expect(deletion.validation[0].possibleUnknownGlobalStateRefsRemaining).toBe(1);
       expect(deletion.validation[0].sqlite.threadRows).toBe(0);
-      expect(deletion.validation[0].sqlite.logRows).toBe(1);
+      expect(deletion.validation[0].sqlite.logRows).toBe(0);
       expect(deletion.validation[0].sqlite.stage1Rows).toBe(0);
       expect(deletion.validation[0].sqlite.dynamicToolRows).toBe(0);
       expect(scan.sessions.some((session) => session.id === FIXTURE_IDS.ACTIVE_ID)).toBe(false);

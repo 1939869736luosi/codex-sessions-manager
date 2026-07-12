@@ -112,6 +112,7 @@ describe("formatter branch coverage for release-gate output", () => {
       byStatus: {},
       bySource: {},
       candidates: [],
+      warningSummary: { total: 1, returned: 1, omitted: 0 },
       warnings: ["surface unavailable"],
     };
 
@@ -150,9 +151,11 @@ describe("formatter branch coverage for release-gate output", () => {
           familyMemberCount: 3,
           brokenRelationCount: 1,
         },
+        warningSummary: { total: 0, returned: 0, omitted: 0 },
         warnings: [],
         recommendedAuditCommand: `codex-sessions audit ${ID}`,
       }],
+      warningSummary: { total: 0, returned: 0, omitted: 0 },
       warnings: [],
     };
 
@@ -188,6 +191,7 @@ describe("formatter branch coverage for release-gate output", () => {
         warnings: [],
       },
       candidates: [],
+      warningSummary: { total: 0, returned: 0, omitted: 0 },
       warnings: [],
     };
     const emptyText = formatRootDeletePreview(base);

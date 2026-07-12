@@ -9,6 +9,7 @@ Status: **completed**
 | v0.6.2 | `f3d8c1d4744431af961f989e5bd1858b64df4c74` | [GitHub Release](https://github.com/1939869736luosi/codex-sessions-manager/releases/tag/v0.6.2), [Security Advisory](https://github.com/1939869736luosi/codex-sessions-manager/security/advisories/GHSA-m675-9q85-c8w2) |
 | v0.6.3 | `d4f553dc0be35e0faee20d896b1b667b13c87a42` | [GitHub Release](https://github.com/1939869736luosi/codex-sessions-manager/releases/tag/v0.6.3) |
 | v0.7.0 | `e57c1934c20d62da8d6ece0a602d569de4565082` | [GitHub Release](https://github.com/1939869736luosi/codex-sessions-manager/releases/tag/v0.7.0), [merged PR #3](https://github.com/1939869736luosi/codex-sessions-manager/pull/3) |
+| v0.7.1 | `844f6f9a117aad6a7972dbf6a2adeb25ff09d42c` | [GitHub Release](https://github.com/1939869736luosi/codex-sessions-manager/releases/tag/v0.7.1), npm `latest` and `security-verify` both `0.7.1` |
 
 The v0.7.0 reviewed and registry tarball SHA-256 is:
 
@@ -43,6 +44,14 @@ The v0.6.3 candidate publish succeeded, but the original workflow stopped after 
 
 The first short-lived token lacked effective 2FA bypass and npm rejected the dist-tag change before `latest` moved. A replacement token was verified on its npm detail page as single-package read/write, no organization access, seven-day expiry, and 2FA bypass. Promotion then succeeded. Both tokens and the GitHub environment secret were removed after use.
 
+### v0.7.1 corrective release and interactive promotion
+
+The fixed v0.7.1 commit passed main CI in [run 29181350443](https://github.com/1939869736luosi/codex-sessions-manager/actions/runs/29181350443). The immutable-tag candidate publish passed in [run 29181350450](https://github.com/1939869736luosi/codex-sessions-manager/actions/runs/29181350450), and independent registry verification passed in [run 29181462995](https://github.com/1939869736luosi/codex-sessions-manager/actions/runs/29181462995).
+
+The cloud promotion attempt [run 29181489159](https://github.com/1939869736luosi/codex-sessions-manager/actions/runs/29181489159) stopped when npm required interactive verification. It did not establish that the candidate was defective. The maintainer repeated the live checks on a trusted local machine, ran the dist-tag change, completed npm's browser/Touch ID confirmation, and verified from the registry that both `latest` and `security-verify` identify v0.7.1. The temporary single-package token was revoked, the GitHub secret was deleted, temporary npm configuration was removed, and the clipboard was cleared.
+
+The repository no longer contains a cloud dist-tag promotion workflow. Candidate publication and independent verification remain automated; changing `latest` is now an explicit local maintainer action followed by registry verification and immediate credential cleanup.
+
 ## Five-part release review
 
 ### 1. First principles
@@ -67,7 +76,7 @@ The release-time review recorded no unresolved P0/P1/P2 finding for v0.7.0. A la
 
 ## Post-release correction
 
-The corrective v0.7.1 work must:
+The corrective v0.7.1 release completed these requirements:
 
 - preserve trusted `passed`, `partial`, and `failed` journal verification states;
 - use `not_run` when no trusted verification result exists;
@@ -76,14 +85,14 @@ The corrective v0.7.1 work must:
 - preserve partial restore verification in the journal;
 - correct the official-overlap, export, rollback, doctor, Windows release, and roadmap documentation.
 
-Until the fixed v0.7.1 commit passes the release gates, the current development verdict is **NO-GO** even though the already published v0.7.0 artifact remains immutable.
+The fixed commit passed the release gates and was published as v0.7.1. The earlier NO-GO applied before that corrective release and is retained here only as historical context.
 
 ## Final verdict
 
 - Security release line: **GO**.
 - Codex 0.144.1 compatibility release: **GO**.
 - Historical v0.7.0 release identity and artifact evidence: **valid, but superseded for current approval by the post-release recovery finding**.
-- Current development state: **NO-GO until v0.7.1 verification and release gates pass**.
+- v0.7.1 corrective release: **GO**, published from the reviewed commit and verified in the registry.
 - Future projects in document 04: **not reviewed for implementation and not implicitly approved**.
 
 Private session exports, local paths, exploit transcripts, internal reports, encrypted backups, and credential material are deliberately excluded from this evidence document.

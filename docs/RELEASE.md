@@ -15,12 +15,12 @@ This checklist is intentionally stricter than a normal package publish. A releas
 ## npm publishing configuration
 
 - Configure npm Trusted Publishing for this GitHub repository and the exact `release.yml` workflow. It requires GitHub OIDC and npm CLI 11.5.1 or newer; the workflow pins npm 11.16.0.
-- Configure the protected GitHub environment `npm-production` with required reviewer approval.
-- Store a narrowly scoped npm token for dist-tag changes as the `NPM_DIST_TAG_TOKEN` secret in that environment. The publish job itself uses OIDC and does not use this token.
+- Candidate publishing uses GitHub OIDC. Do not store an npm dist-tag token in GitHub Actions: npm may require a browser or Touch ID interaction even when a granular token is allowed to bypass 2FA, so a cloud runner cannot reliably complete `latest` promotion.
+- Perform the final dist-tag change from a trusted maintainer machine. If npm requires a token, create the shortest-lived single-package read/write token possible, keep it out of the repository and shell history, and revoke it immediately after verification.
 
 ## Release window
 
-The candidate and promotion workflows share one package-level concurrency queue. Do not bypass or replace that queue with per-version groups: overlapping repository workflows must never race while changing `security-verify` or `latest`. This protects the repository's controlled workflows; npm does not provide an atomic compare-and-swap that can prevent an authorized external actor from manually changing a dist-tag between the live check and promotion.
+The candidate and registry-verification workflows share one package-level concurrency queue. Do not bypass or replace that queue with per-version groups. npm does not provide an atomic compare-and-swap for dist-tags, so the maintainer must repeat the live `latest` and `security-verify` checks immediately before the local promotion.
 
 1. Merge the reviewed commit to public `main` only after private review passes.
 2. Wait for all required Linux, macOS, Windows, coverage, package, and production-audit checks on that exact commit.
@@ -28,10 +28,12 @@ The candidate and promotion workflows share one package-level concurrency queue.
 4. The tag workflow publishes the exact reviewed tarball with the non-default `security-verify` npm tag, installs the exact registry version, smokes CLI and MCP, downloads the registry tarball, and requires its SHA-256 to match.
 5. Review the candidate workflow artifact. It may contain only the public tarball, package manifest, and SHA-256 file.
 6. Run `Verify existing npm registry candidate` with the exact version, immutable tag, tag commit, candidate run ID, reviewed SHA-256, and current `latest` value. It is a read-only workflow that rebuilds the tag, downloads the registry tarball with fresh caches, verifies identity and provenance metadata, installs those exact bytes, and uploads public evidence.
-7. Run `Promote verified npm release` with the exact version, candidate SHA-256, tag, commit, candidate run ID, successful verification run ID, and the `latest` value recorded by verification. Promotion must consume and validate the verification artifact, repeat its own exact-byte check, confirm that `security-verify` points to the same version, refuse a stale or downgrade promotion when `latest` changed, and only then move `latest`.
-8. Confirm both `latest` and `security-verify` point to the exact version.
-9. Publish the prepared GitHub Release and, for a security release, the Security Advisory.
-10. Confirm Git tag, GitHub Release, npm package, npm dist-tags, advisory patched version, and reviewed commit all identify the same release.
+7. On a trusted maintainer machine, confirm that the independent verification run succeeded, the immutable tag still identifies the reviewed commit, `security-verify` identifies the candidate, and `latest` still has the value recorded by verification. Stop if any value changed.
+8. Run `node scripts/promote-npm.mjs --version <version> --expected-latest <previous-version> --expected-sha256 <sha256> --tag v<version> --expected-commit <commit> --expected-verification-commit <main-commit> --candidate-run-id <run> --verification-run-id <run>`. The script downloads the independent verification artifact, requires the verifier to be the registered workflow on `main` at the reviewed verifier commit, and checks the candidate run, immutable tag, release commit, provenance/smoke evidence, and a fresh registry tarball hash before running `npm dist-tag add codex-sessions-manager@<version> latest`. Complete the npm browser or Touch ID confirmation when prompted. Do not run this command in GitHub Actions and do not retry blindly after an ambiguous response; the script verifies registry state even when npm exits unsuccessfully.
+9. Use a fresh online lookup to run `npm view codex-sessions-manager dist-tags --json`, then confirm both `latest` and `security-verify` identify the exact version. If the command response was ambiguous, this registry result decides whether promotion happened.
+10. Revoke any temporary npm token, delete temporary npm configuration, clear the clipboard, and confirm that no promotion secret remains in GitHub. Keep only public release evidence.
+11. Publish the prepared GitHub Release and, for a security release, the Security Advisory.
+12. Confirm Git tag, GitHub Release, npm package, npm dist-tags, advisory patched version, and reviewed commit all identify the same release.
 
 If publishing and exact-version registry smoke succeeded but the hash-comparison step stopped before downloading bytes because the exact candidate version returned `ETARGET` and `No matching version found`, keep `latest` unchanged and do not rerun the publish job. A separate read-only registry verification workflow may recover the release only when the candidate job log proves that exact failure reason, then rebuilds the immutable tag, proves source and registry hashes are identical, verifies the full manifest and package identity, confirms provenance metadata, installs and smokes the exact registry bytes, and uploads public evidence. A missing log, an unknown compare failure, or any actual hash, identity, manifest, provenance-metadata, or smoke mismatch still requires a new patch version.
 
