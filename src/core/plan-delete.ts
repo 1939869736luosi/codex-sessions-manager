@@ -276,6 +276,7 @@ export function buildPlanDelete(
     options.candidateSource
       ? "sourceKind 是筛选维度，不是删除授权；mcp/vscode/exec 等分类只保留原始来源语义，不能推导为可安全批量删除。"
       : null,
+    "普通 session 删除不会修改 memories SQLite、MEMORY.md、memory_summary.md 或 memory skills；这些 memory surfaces 会保留。",
   ].filter((value): value is string => Boolean(value)));
 
   return {

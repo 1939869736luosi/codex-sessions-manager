@@ -7,7 +7,15 @@ import Database from "better-sqlite3";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
-import { createServer, getMcpVersionText, isMcpEntrypoint, type McpProfile } from "../src/mcp/server.js";
+import {
+  boundMcpStructuredContent,
+  createServer,
+  getMcpVersionText,
+  isMcpEntrypoint,
+  MCP_GENERIC_ARRAY_ITEMS,
+  MCP_GENERIC_RESPONSE_BYTES,
+  type McpProfile,
+} from "../src/mcp/server.js";
 import { validateDeletion } from "../src/core/delete.js";
 import { buildDeletePlanFile, writeDeletePlanFile } from "../src/core/plan-file.js";
 import { buildPlanDelete } from "../src/core/plan-delete.js";
@@ -36,6 +44,91 @@ describe("mcp server", () => {
   afterEach(async () => {
     setMutationCheckpointHookForTests(null);
     await fixture.cleanup();
+  });
+
+  it("bounds every generic structured response while preserving mutation status", () => {
+    const bounded = boundMcpStructuredContent({
+      rows: Array.from({ length: 500 }, (_, index) => ({ index, value: "x".repeat(8_000) })),
+      result: {
+        operationStatus: "committed",
+        verificationStatus: "partial",
+        warnings: Array.from({ length: 300 }, (_, index) => `warning-${index}-${"y".repeat(1_000)}`),
+      },
+    });
+
+    expect(Buffer.byteLength(JSON.stringify(bounded), "utf8")).toBeLessThanOrEqual(MCP_GENERIC_RESPONSE_BYTES);
+    expect(bounded).toMatchObject({
+      responseCompleteness: "truncated_limit",
+      result: {
+        operationStatus: "committed",
+        verificationStatus: "partial",
+      },
+      responsePayloadOmitted: true,
+    });
+
+    const recoveryRequired = boundMcpStructuredContent({
+      result: {
+        operationStatus: "recovery_required",
+        verificationStatus: "not_run",
+        errorCode: "RECOVERY_REQUIRED",
+        warnings: ["w".repeat(MCP_GENERIC_RESPONSE_BYTES + 1)],
+      },
+    });
+    expect(recoveryRequired).toMatchObject({
+      result: {
+        operationStatus: "recovery_required",
+        verificationStatus: "not_run",
+        errorCode: "RECOVERY_REQUIRED",
+      },
+      responseCompleteness: "truncated_limit",
+    });
+    expect(Buffer.byteLength(JSON.stringify(recoveryRequired), "utf8")).toBeLessThanOrEqual(MCP_GENERIC_RESPONSE_BYTES);
+  });
+
+  it("keeps large sources and projects responses bounded", async () => {
+    const db = new Database(fixture.paths.sqlite);
+    const insert = db.prepare(`
+      insert into threads (
+        id, title, first_user_message, created_at, updated_at, archived, rollout_path, model,
+        model_provider, cwd, source, thread_source, agent_role, agent_nickname, agent_path
+      ) values (?, ?, '', 1, 1, 0, null, 'gpt', 'provider', ?, ?, 'cli', null, null, null)
+    `);
+    const addRows = db.transaction(() => {
+      for (let index = 0; index < 260; index += 1) {
+        const suffix = index.toString(16).padStart(12, "0");
+        const id = `10000000-0000-4000-8000-${suffix}`;
+        const longValue = `${index}-${"z".repeat(4_000)}`;
+        insert.run(id, `thread-${index}`, `/projects/${longValue}`, longValue);
+      }
+    });
+    addRows();
+    db.close();
+
+    const { client, server } = await createConnectedClient("read-only");
+    try {
+      for (const name of ["summarize_sources", "list_projects"]) {
+        const result = await client.callTool({ name, arguments: { root: fixture.rootDir } });
+        expect(Buffer.byteLength(JSON.stringify(result.structuredContent), "utf8")).toBeLessThanOrEqual(MCP_GENERIC_RESPONSE_BYTES);
+        expect(result.structuredContent).toMatchObject({ responseCompleteness: "truncated_limit" });
+      }
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("caps explicit MCP operation selections at 50 IDs", async () => {
+    const ids = Array.from({ length: 51 }, (_, index) => `10000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`);
+    const { client, server } = await createConnectedClient("admin");
+    try {
+      for (const name of ["preview_delete_sessions", "plan_delete_sessions", "verify_sessions", "delete_sessions", "cleanup_session_indexes"]) {
+        const result = await client.callTool({ name, arguments: { root: fixture.rootDir, sessionIds: ids } });
+        expect(result.isError).toBe(true);
+      }
+    } finally {
+      await client.close();
+      await server.close();
+    }
   });
 
   it("reports a real interrupted trash write as RECOVERY_REQUIRED and keeps recovery visible", async () => {
@@ -1876,8 +1969,8 @@ describe("mcp server --profile", () => {
   const ADMIN_TOOLS = ["delete_sessions", "restore_sessions", "purge_trash", "cleanup_session_indexes", "cleanup_stale_indexes", "recover_operation"];
   const READ_ONLY_TOOLS = [
     "inspect_root", "list_sessions", "summarize_sources", "list_projects",
-    "get_session", "get_session_family", "audit_session", "audit_root",
-    "preview_root_delete", "export_session_backup", "preview_delete_sessions",
+    "get_session", "get_session_events_page", "get_session_family", "audit_session", "audit_root",
+    "preview_root_delete", "preview_delete_sessions",
     "plan_delete_sessions", "preview_delete_plan", "list_trash",
     "verify_sessions", "get_recovery_status",
   ];
@@ -1893,6 +1986,8 @@ describe("mcp server --profile", () => {
       for (const name of ADMIN_TOOLS) {
         expect(toolNames).not.toContain(name);
       }
+      expect(toolNames).not.toContain("export_session_backup");
+      expect(toolNames).toHaveLength(16);
     } finally {
       await client.close();
       await server.close();
@@ -1913,7 +2008,7 @@ describe("mcp server --profile", () => {
     }
   });
 
-  it("read-only profile has 16 tools, admin has 22", async () => {
+  it("read-only profile has 16 bounded tools, admin has 22", async () => {
     const { client: roClient, server: roServer } = await createConnectedClient("read-only");
     const { client: adminClient, server: adminServer } = await createConnectedClient("admin");
     try {

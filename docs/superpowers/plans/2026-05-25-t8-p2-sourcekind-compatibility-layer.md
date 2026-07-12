@@ -1,5 +1,7 @@
 # T8-P2 SourceKind Compatibility Layer Implementation Plan
 
+> **Archived:** completed or superseded by tested current behavior. Unchecked boxes below are historical notes, not active project tasks. See `ROADMAP.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Preserve the stable coarse `sourceKind` API while exposing raw/official source evidence so future Codex source labels can be understood without changing delete semantics.

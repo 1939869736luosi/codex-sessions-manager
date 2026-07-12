@@ -48,11 +48,12 @@ The distributed Skill includes `agents/openai.yaml` inside the Skill directory.
 ## CLI Quick Reference
 
 ```bash
-codex-sessions doctor [--json]
+codex-sessions doctor [--json] [--details]
 codex-sessions list [--limit N] [--project TEXT] [--status S] [--source-kind K]
 codex-sessions sources [--json]
 codex-sessions projects
 codex-sessions show <id> [--json]
+codex-sessions events <exact-id> [--output FILE]
 codex-sessions family <id> [--children|--parents|--subagents|--impact|--full]
 codex-sessions audit <id> [--json]
 codex-sessions audit-root [--limit 50] [--status S...] [--source S...]
@@ -87,13 +88,15 @@ codex-sessions recover <exact-operation-id> --yes
 ## MCP (Optional, Advanced)
 
 ```bash
-codex-sessions-mcp                       # default: read-only profile (16 tools)
+codex-sessions-mcp                       # default: read-only profile (16 bounded tools)
 codex-sessions-mcp --profile admin       # all 22 tools including destructive ops
 ```
 
 Invalid `--profile` values exit with code 1. Default is read-only for safety.
 
 `get_session` defaults to `detail=compact` (20 items / 64 KiB / 1 MiB source read). `detail=full` is still bounded (200 items / 256 KiB / 8 MiB source read). Session metadata is bounded too. Both return explicit completeness metadata; `sourceCompleteness` preserves parse/unsupported status when the MCP envelope is also `truncated_limit`, and `itemsKnown=null` means the reader stopped before EOF. `list_sessions` defaults to 50 concise records, accepts at most 200, and caps the response at 256 KiB. Use CLI JSON for complete local results and `export` for byte-exact raw content.
+
+All other MCP structured responses also have a final 256 KiB / 200-items-per-collection cap. Explicit session operations accept at most 50 IDs; `list_trash` defaults to 50 entries. Limit hits return `responseCompleteness` and `responseOmittedReason`. Exact backup export is CLI-only.
 
 ## Detailed References
 

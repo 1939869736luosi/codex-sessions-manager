@@ -37,13 +37,16 @@ These operations are intended to inspect or report information without modifying
 | `list` | `list_sessions` | List matching sessions |
 | `projects` | `list_projects` | Summarize sessions by project |
 | `show` | `get_session` | Read one session timeline |
+| `events` | `get_session_events_page` | Complete local canonical stream via CLI; bounded authenticated pages via MCP |
 | `export` | `export_session_backup` | Export a backup bundle |
 | `doctor` | `inspect_root` | Diagnose root structure and compatibility |
 | `verify` | `verify_sessions` | Report remaining files, indexes, SQLite rows, and warnings |
 | `trash-list` | `list_trash` | List trash entries |
 | `plan-delete` / `preview-plan` | `plan_delete_sessions` / `preview_delete_plan` | Build and re-preview read-only explicit-ID delete plans; sourceKind candidate mode lists `candidateIds` only; MCP never writes plan files and never executes delete-by-plan |
 
-`doctor` and `inspect_root` are read-only diagnostics. They are intended to detect Codex storage changes, missing files, SQLite table availability, SQLite home splits, memory DB presence, trash state, and global-state warnings.
+`doctor` and `inspect_root` are read-only diagnostics. They are intended to detect Codex storage changes, missing files, SQLite table availability, SQLite home splits, memory DB presence, trash state, and global-state warnings. Default output is bounded summary mode; use `--details` or `includeDetails=true` only when complete reference arrays are required.
+
+Canonical `events` output is separate from recovery `export`. CLI requires an exact UUID and can stream complete tool data or create a private `0600` file. MCP is limited by both item count and serialized bytes. It reports oversized event omission instead of returning a partial tool payload. Rollout symlinks, hard links, root escapes, duplicates, and changed sources are rejected.
 
 ## Write Operations
 
@@ -64,7 +67,7 @@ Read-only lookup may use a unique short session-ID prefix. A confirmed delete, t
 
 The MCP `read-only` profile does not register destructive tools. Use the `admin` profile only when the host policy and user confirmation allow local mutations; `confirm=true` remains mandatory.
 
-Windows security-patch releases in the 0.6 line are intentionally read-only. Every core mutation entrypoint fails closed, CLI confirmed writes are refused, and the MCP `admin` profile registers only read-only tools. This restriction remains until the real Windows junction/reparse-point, case-handling, permission, and abrupt-termination matrix proves the same safety invariants as the supported mutation platforms.
+Current Windows releases are intentionally read-only for destructive operations. Every core mutation entrypoint fails closed, CLI confirmed writes are refused, and the MCP `admin` profile registers only read-only tools. This restriction remains until the real Windows junction/reparse-point, case-handling, permission, and abrupt-termination matrix proves the same safety invariants as the supported mutation platforms.
 
 ## Operation Results and Recovery
 

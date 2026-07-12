@@ -15,6 +15,7 @@ import type {
   RootResidueAudit,
   ScanResult,
   SessionEntry,
+  SessionMemoryLink,
   SessionTimelineResult,
   SessionFamily,
   SessionFamilyImpact,
@@ -171,7 +172,17 @@ function statusLabel(status: { exists: boolean; readable: boolean }, extra?: str
   return extra ?? "OK";
 }
 
-export function formatDoctor(report: DoctorReport): string {
+export function formatDoctor(report: DoctorReport & {
+  detailsIncluded?: boolean;
+  sampleLimit?: number | null;
+  counts?: {
+    globalStateKnownRefs: number;
+    globalStateExactKeyRefs: number;
+    globalStatePossibleUnknownRefs: number;
+    recoveryTargetIds: number;
+    warnings: number;
+  };
+}): string {
   const pathRows = [
     ["项目", "状态", "路径"],
     ["sessions", statusLabel(report.paths.sessionsDir), report.paths.sessionsDir.path],
@@ -229,13 +240,15 @@ export function formatDoctor(report: DoctorReport): string {
     `logs SQLite: ${report.sqlite.activeLogsPath ?? "missing"}`,
     `goals SQLite: ${report.sqlite.activeGoalsPath ?? "missing"}`,
     `memories SQLite: ${report.sqlite.activeMemoriesPath ?? "missing"}`,
+    `memory: enabled=${report.memory.enabled}, schema=${report.memory.schemaStatus}, stage1=${report.memory.stage1.total}, selected_phase2=${report.memory.stage1.selectedForPhase2}, jobs=${report.memory.jobs.total}`,
     "",
     printTable(tableRows),
     "",
     `sessions: ${report.scan.sessionCount ?? "unknown"}`,
-    `known global state refs: ${report.globalState.knownRefs.length}`,
-    `exact-key global state refs: ${report.globalState.exactKeyRefs.length}`,
-    `possible unknown global state refs: ${report.globalState.possibleUnknownRefs.length}`,
+    `doctor details: ${report.detailsIncluded ? "full" : `summary (最多 ${report.sampleLimit ?? 5} 个样本；使用 --details 展开)`}`,
+    `known global state refs: ${report.counts?.globalStateKnownRefs ?? report.globalState.knownRefs.length}`,
+    `exact-key global state refs: ${report.counts?.globalStateExactKeyRefs ?? report.globalState.exactKeyRefs.length}`,
+    `possible unknown global state refs: ${report.counts?.globalStatePossibleUnknownRefs ?? report.globalState.possibleUnknownRefs.length}`,
     `recovery pending: ${report.recovery.pending ? "是" : "否"}`,
     ...(report.recovery.pending
       ? [`recovery operation: ${report.recovery.operationId} (${report.recovery.kind}, ${report.recovery.stage})`]
@@ -290,7 +303,7 @@ export function formatProjects(projects: ProjectSummary[]): string {
 export function formatShow(
   session: SessionEntry,
   timeline: TimelineItem[],
-  timelineMetadata?: Omit<SessionTimelineResult, "items">,
+  timelineMetadata?: Omit<SessionTimelineResult, "items"> & { memoryLink?: SessionMemoryLink },
 ): string {
   const previewCount = Math.min(timeline.length, TIMELINE_PREVIEW_LIMIT);
   const knownCount = timelineMetadata?.itemsKnown === null
@@ -327,6 +340,7 @@ export function formatShow(
     `时间线返回: ${previewCount}/${knownCount}`,
     `工具输出截断: ${timelineMetadata?.toolOutputTruncatedCount ?? timeline.filter((item) => item.truncated).length}`,
     `精确原始导出: ${timelineMetadata?.exactExportAvailable ?? session.fileTargets.length > 0 ? "可用" : "不可用"}`,
+    `memory: ${timelineMetadata?.memoryLink?.enabled === "unknown" ? "unknown" : timelineMetadata?.memoryLink?.enabled ? "enabled" : "disabled"}; stage1=${timelineMetadata?.memoryLink?.stage1Present ? "yes" : "no"}; phase2=${timelineMetadata?.memoryLink?.phase2Influence ?? "unknown"}; session delete retains memory=yes`,
     ...(timelineMetadata?.omittedReason ? [`省略原因: ${timelineMetadata.omittedReason}`] : []),
     "",
     "时间线预览:",

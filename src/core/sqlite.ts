@@ -4,6 +4,9 @@ import { lstatSync } from "node:fs";
 import { MutationSafetyError } from "./mutation-safety.js";
 import { deriveSourceInfo } from "./sources.js";
 import type {
+  MemoryDoctorStats,
+  MemorySchemaStatus,
+  SessionMemoryLink,
   SqliteDeletionCounts,
   SqliteTableInspection,
   ThreadHistoryMode,
@@ -352,6 +355,7 @@ function mapThreadRow(row: Record<string, unknown>): ThreadRow {
     recencyAt: numberOrNull(row.recency_at),
     recencyAtMs: numberOrNull(row.recency_at_ms),
     historyMode: historyModeOrUnknown(row.history_mode),
+    memoryMode: stringOrNull(row.memory_mode),
     archived: Number(row.archived ?? 0) === 1,
     rolloutPath: row.rollout_path ? String(row.rollout_path) : null,
     model: row.model ? String(row.model) : null,
@@ -395,6 +399,7 @@ export function scanThreads(sqlitePath: string | null): Map<string, ThreadRow> {
            ${selectOptionalColumn(columns, "recency_at")},
            ${selectOptionalColumn(columns, "recency_at_ms")},
            ${selectOptionalColumn(columns, "history_mode")},
+           ${selectOptionalColumn(columns, "memory_mode")},
            archived, rollout_path, model,
            ${selectOptionalColumn(columns, "model_provider")},
            cwd,
@@ -409,6 +414,159 @@ export function scanThreads(sqlitePath: string | null): Map<string, ThreadRow> {
       .all() as Record<string, unknown>[];
 
     return new Map(rows.map((row) => [String(row.id), mapThreadRow(row)]));
+  });
+}
+
+const MEMORY_STAGE1_COLUMNS = [
+  "thread_id",
+  "source_updated_at",
+  "rollout_summary",
+  "selected_for_phase2",
+  "selected_for_phase2_source_updated_at",
+] as const;
+
+const MEMORY_JOB_COLUMNS = ["kind", "job_key", "status", "last_success_watermark"] as const;
+
+function memorySchemaStatus(db: Database.Database): MemorySchemaStatus {
+  if (!tableExists(db, "stage1_outputs") || !tableExists(db, "jobs")) {
+    return "unrecognized";
+  }
+  const stage1Columns = new Set(getTableColumns(db, "stage1_outputs"));
+  const jobColumns = new Set(getTableColumns(db, "jobs"));
+  return MEMORY_STAGE1_COLUMNS.every((column) => stage1Columns.has(column))
+    && MEMORY_JOB_COLUMNS.every((column) => jobColumns.has(column))
+    ? "recognized"
+    : "unrecognized";
+}
+
+function emptyMemoryLink(enabled: boolean | "unknown", schemaStatus: MemorySchemaStatus, warnings: string[]): SessionMemoryLink {
+  return {
+    enabled,
+    stage1Present: false,
+    rolloutSummaryPresent: false,
+    phase2Influence: "unknown",
+    retainedAfterSessionDelete: true,
+    schemaStatus,
+    warnings: [
+      ...warnings,
+      "historical Phase 2 provenance cannot be confirmed without a current stage1 association",
+    ],
+  };
+}
+
+export function inspectSessionMemoryLink(
+  memoriesPath: string | null,
+  sessionId: string,
+  enabled: boolean | "unknown",
+): SessionMemoryLink {
+  if (!memoriesPath) {
+    return emptyMemoryLink(enabled, "absent", []);
+  }
+
+  return withDatabase(memoriesPath, true, (db) => {
+    const schemaStatus = memorySchemaStatus(db);
+    if (schemaStatus !== "recognized") {
+      return emptyMemoryLink(enabled, schemaStatus, ["memories SQLite schema is not recognized; association is unknown"]);
+    }
+
+    const row = db.prepare(`
+      select source_updated_at,
+             case when length(trim(rollout_summary)) > 0 then 1 else 0 end as rollout_summary_present,
+             selected_for_phase2,
+             selected_for_phase2_source_updated_at
+      from stage1_outputs
+      where thread_id = ?
+    `).get(sessionId) as {
+      source_updated_at?: unknown;
+      rollout_summary_present?: unknown;
+      selected_for_phase2?: unknown;
+      selected_for_phase2_source_updated_at?: unknown;
+    } | undefined;
+    if (!row) {
+      return emptyMemoryLink(enabled, schemaStatus, []);
+    }
+
+    const sourceUpdatedAt = numberOrNull(row.source_updated_at);
+    const selectedSourceUpdatedAt = numberOrNull(row.selected_for_phase2_source_updated_at);
+    const selected = Number(row.selected_for_phase2 ?? 0) === 1;
+    const selectionMatchesCurrentSource = selected
+      && sourceUpdatedAt !== null
+      && selectedSourceUpdatedAt === sourceUpdatedAt;
+    const phase2Warning = selectionMatchesCurrentSource
+      ? "session is selected for Phase 2, but final Phase 2 provenance cannot be confirmed"
+      : selected
+        ? "session has ambiguous Phase 2 selection metadata; final provenance cannot be confirmed"
+        : "session is not currently selected for Phase 2; historical Phase 2 provenance cannot be confirmed";
+    return {
+      enabled,
+      stage1Present: true,
+      rolloutSummaryPresent: Number(row.rollout_summary_present ?? 0) === 1,
+      phase2Influence: "unknown",
+      retainedAfterSessionDelete: true,
+      schemaStatus,
+      warnings: [phase2Warning],
+    };
+  });
+}
+
+function emptyMemoryDoctorStats(
+  databaseExists: boolean,
+  schemaStatus: MemorySchemaStatus,
+  warnings: string[],
+): MemoryDoctorStats {
+  return {
+    enabled: "unknown",
+    databaseExists,
+    schemaStatus,
+    stage1: { total: 0, withRolloutSummary: 0, selectedForPhase2: 0 },
+    jobs: { total: 0, byStatus: {} },
+    warnings: [
+      ...warnings,
+      "memory enablement cannot be inferred from database presence alone",
+    ],
+  };
+}
+
+export function inspectMemoryDoctorStats(memoriesPath: string | null): MemoryDoctorStats {
+  if (!memoriesPath) {
+    return emptyMemoryDoctorStats(false, "absent", []);
+  }
+
+  return withDatabase(memoriesPath, true, (db) => {
+    const schemaStatus = memorySchemaStatus(db);
+    if (schemaStatus !== "recognized") {
+      return emptyMemoryDoctorStats(true, schemaStatus, ["memories SQLite schema is not recognized; statistics are unavailable"]);
+    }
+    const stage1 = db.prepare(`
+      select
+        count(*) as total,
+        sum(case when length(trim(rollout_summary)) > 0 then 1 else 0 end) as with_rollout_summary,
+        sum(case when selected_for_phase2 = 1 then 1 else 0 end) as selected_for_phase2
+      from stage1_outputs
+    `).get() as { total?: unknown; with_rollout_summary?: unknown; selected_for_phase2?: unknown };
+    const statuses = db.prepare("select status, count(*) as count from jobs group by status order by status").all() as Array<{
+      status?: unknown;
+      count?: unknown;
+    }>;
+    const byStatus = Object.fromEntries(statuses.flatMap((row) => {
+      const status = stringOrNull(row.status);
+      return status ? [[status, Number(row.count ?? 0)]] : [];
+    }));
+    return {
+      enabled: "unknown",
+      databaseExists: true,
+      schemaStatus,
+      stage1: {
+        total: Number(stage1.total ?? 0),
+        withRolloutSummary: Number(stage1.with_rollout_summary ?? 0),
+        selectedForPhase2: Number(stage1.selected_for_phase2 ?? 0),
+      },
+      jobs: {
+        total: Object.values(byStatus).reduce((sum, count) => sum + count, 0),
+        byStatus,
+      },
+      warnings: ["memory enablement cannot be inferred from database presence alone"],
+    };
   });
 }
 

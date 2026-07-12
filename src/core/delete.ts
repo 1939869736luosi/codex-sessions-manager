@@ -223,6 +223,8 @@ export function buildDeletePreview(scan: ScanResult, sessions: SessionEntry[]): 
   }));
 
   return {
+    memoryRetained: true,
+    retainedSurfaces: ["memories SQLite", "MEMORY.md", "memory_summary.md", "memory skills"],
     items,
     familyWarnings: buildDeleteFamilyWarnings(scan, sessions),
     totals: {

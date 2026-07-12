@@ -6,7 +6,7 @@
       "inspect_root", "list_sessions", "summarize_sources",
       "list_projects", "get_session", "get_session_family",
       "audit_session", "audit_root", "preview_root_delete",
-      "export_session_backup", "preview_delete_sessions",
+      "preview_delete_sessions",
       "plan_delete_sessions", "preview_delete_plan",
       "verify_sessions", "list_trash"
     ]

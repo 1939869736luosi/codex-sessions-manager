@@ -310,7 +310,11 @@ describe("release configuration", () => {
     expect(verifyRegistryWorkflow).toContain("provenanceMetadataPresent: true");
     expect(verifyRegistryWorkflow).not.toContain("provenance: true");
     expect(verifyRegistryWorkflow).not.toContain("compareFailureOnlyRecovery: true");
-    expect(verifyRegistryWorkflow).toContain("files.length !== 110");
+    expect(verifyRegistryWorkflow).not.toContain("files.length !== 110");
+    expect(verifyRegistryWorkflow).toContain("SOURCE_FILE_COUNT");
+    expect(verifyRegistryWorkflow).toContain("files.length !== Number(process.argv[3])");
+    expect(verifyRegistryWorkflow).toContain("entries.length !== Number(process.argv[2])");
+    expect(verifyRegistryWorkflow).toContain("dist.fileCount !== Number(process.argv[4])");
     expect(verifyRegistryWorkflow).toContain('tags["security-verify"]');
     expect(verifyRegistryWorkflow).toContain("tags.latest");
     expect(verifyRegistryWorkflow).toContain("npm-registry-verification-${{ inputs.version }}-${{ github.run_id }}");

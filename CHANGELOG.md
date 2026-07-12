@@ -1,7 +1,17 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
 
+- Added the 0.7.0 shared application layer: CLI and MCP now reuse the same list, session-detail, doctor, audit, planning, export, verification, recovery, delete, trash, restore, purge, and index-cleanup operations while keeping adapter-specific presentation and response bounds.
+- Added adapter-boundary and parity tests so CLI/MCP cannot bypass the shared mutation policy, shell out to one another, or silently reintroduce separate confirmation and ID rules.
+- Removed the unbounded MCP `export_session_backup` tool because it could return complete rollout and exact-key values in one response. Exact backups remain available through the CLI `export` command; MCP keeps bounded session and canonical-event reads.
+- Added a final 256 KiB / 200-items-per-collection boundary to every MCP structured response, capped explicit session operations at 50 IDs, and made trash listing default to 50 entries. Truncated responses keep existing wrappers and report the omitted route explicitly.
+- Made memory provenance reporting conservative: database presence no longer implies enablement, unknown `memory_mode` values remain unknown, and Stage 1 selection metadata no longer claims known or absent final Phase 2 influence.
+- Made registry verification derive the expected package file count from the immutable tag's source manifest instead of retaining the v0.6.3 package count, so later releases still compare source, registry tarball, and npm metadata exactly.
+- Added read-only session `memoryLink` metadata and bounded doctor memory statistics without returning raw memory text. Ordinary session delete previews and plans now state that memory is retained.
+- Changed doctor JSON/MCP output to summary mode by default, with at most five reference samples and bounded warnings; use `--details` or `includeDetails=true` for complete diagnostic arrays.
+- Added `events <exact-session-id>` canonical JSONL streaming for complete local reads and private `0600` file output. MCP exposes only authenticated, item-and-byte-bounded event pages and reports oversized event omission.
+- Canonical event reads reject prefixes, symlinks, root escapes, duplicate/compressed-only sources, and hard-linked rollout files; canonical ItemCompleted user/assistant messages are supported.
 - Added an independent read-only npm registry verification workflow and made promotion consume its run-bound evidence before moving `latest`.
 - Added fresh-cache, `--prefer-online`, bounded registry tarball retries to candidate comparison and promotion, distinguishing registry propagation lag from an actual artifact mismatch.
 - Bound promotion to the independent verifier's workflow revision, immutable tag commit, candidate publish steps, and unchanged prior `latest` value so stale evidence cannot cause an accidental downgrade.

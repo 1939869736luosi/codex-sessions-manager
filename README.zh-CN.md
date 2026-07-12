@@ -13,6 +13,8 @@
 
 欢迎报告安全问题。支持边界和报告方式见 [SECURITY.md](./SECURITY.md)。
 
+项目资料：[架构](./ARCHITECTURE.md) · [路线图](./ROADMAP.md) · [贡献指南](./CONTRIBUTING.md) · [发布检查表](./docs/RELEASE.md)
+
 ## 为什么选这个？
 
 普通归档聊天优先用 Codex Desktop 官方删除入口。这个工具面向更难的本机场景：官方删完后验残留、清理孤儿记录、按精确 session ID 处理，以及让 AI Agent 安全管理本地历史。
@@ -45,6 +47,10 @@ codex-sessions list --limit 10
 
 # 汇总会话来源（安全，不做任何修改）
 codex-sessions sources
+
+# 把一条精确 session 流式转换为 canonical JSONL（安全，只读）
+codex-sessions events <完整-session-id>
+codex-sessions events <完整-session-id> --output ./session-events.jsonl
 
 # 查看父子关系（安全，不做任何修改）
 codex-sessions family <session-id>
@@ -182,7 +188,7 @@ MCP `get_session` 有固定上限：`compact` 最多 20 items / 64 KiB，并且�
 
 MCP `list_sessions` 只返回精简记录，默认最多 50 个 session，参数上限为 200，整个结构化结果最多 256 KiB。`totalMatches`、`sessionsReturned`、`hasMore`、`byteLimited` 和 `omittedReason` 会明确说明省略情况。需要完整结果集或完整 session metadata 时用 `codex-sessions list --json`。
 
-**Windows 上的 0.6 系列安全补丁仅支持只读。** 删除、移入回收站、恢复、永久清除、索引清理和中断恢复都会直接拒绝。待真实 Windows 环境完成 junction/reparse point、大小写和异常退出测试后，才会重新开放写操作。Windows 上即使请求 MCP `admin` profile，也只注册只读工具。
+**当前版本在 Windows 上仍只允许只读操作。** 删除、移入回收站、恢复、永久清除、索引清理和中断恢复都会直接拒绝。待真实 Windows 环境完成 junction/reparse point、大小写和异常退出测试后，才会重新开放写操作。Windows 上即使请求 MCP `admin` profile，也只注册只读工具。
 
 ### 4. 生态适配器
 
@@ -198,7 +204,11 @@ MCP `list_sessions` 只返回精简记录，默认最多 50 个 session，参数
 
 ### 升级说明（v0.5.x → v0.6.0）
 
-v0.6.0 把 MCP 默认 profile 从 20 个工具缩减为 15 个。v0.6.1 增加只读恢复状态检查和 admin-only 确认恢复工具，两个 profile 现在分别是 16 和 22 个工具。需要写操作时添加 `--profile admin`，但仍然必须明确确认。
+v0.6.0 把 MCP 默认 profile 从 20 个工具缩减为 15 个。恢复支持把两个 profile 增至 16 和 22 个工具。0.7.0 用有界 canonical event reader 替换无界的 `export_session_backup`，因此两个 profile 仍是 16 和 22 个工具；精确导出只走 CLI。需要写操作时添加 `--profile admin`，但仍然必须明确确认。
+
+所有 MCP structured response 最后都经过统一的 256 KiB 和“每个集合最多 200 项”限制。触及限制时会返回 `responseCompleteness=truncated_limit` 与 `responseOmittedReason`；已经提交的写操作状态仍保留在原来的 `result` 内。显式 session 操作最多接收 50 个 ID；`list_trash` 默认返回 50 项，最大 200 项。完整本地结果请使用 CLI JSON 或文件输出。
+
+仅凭 `memories_N.sqlite` 存在不能证明 memory 已启用，因此 `doctor` 在没有可靠官方信号时返回 `enabled=unknown`。session 的 `memory_mode` 只有精确的 `enabled`/`disabled` 才映射为布尔值；缺失值和未来新值保留为 `unknown`。当前 Stage 1 的选中标记也不能证明最终 Phase 2 provenance；无法确认时只返回 `unknown`，不猜成 `known` 或 `none`。普通 session 删除仍会保留全部 memory surface。
 
 ## CLI 命令
 
@@ -211,8 +221,9 @@ codex-sessions list --source mcp --thread-source mcp
 codex-sessions list --agent-role subagent --agent-nickname helper
 codex-sessions sources [--json]
 codex-sessions projects
-codex-sessions doctor [--json]
+codex-sessions doctor [--json] [--details]
 codex-sessions show <session-id> [--json]
+codex-sessions events <完整-session-id> [--output ./session-events.jsonl]
 codex-sessions family <session-id> [--json] [--children|--parents|--subagents|--impact] [--full] [--source-kind KIND]
 codex-sessions audit <session-id> [--json]
 codex-sessions audit-root [--json] [--limit 50] [--status STATUS...] [--source SOURCE...] [--all]

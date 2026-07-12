@@ -1,5 +1,7 @@
 # CSM CLI-First Universal Architecture Refactor v0.6.0
 
+> **Archived:** implementation completed. This document is historical evidence, not the current roadmap. See `ROADMAP.md` for active work.
+
 > **Oracle Review Status**: Reviewed. All feedback integrated (rev4, 2026-06-27).
 > rev2 → rev3 (2026-05-27): 从"不做任何生态特有适配"改为"核心不站队 + 各生态薄适配文档/配置"。
 > rev3 → rev4 (2026-06-27): 更新 base version 为 0.5.2，同步项目定位变化，新增前置依赖和进度追踪。
