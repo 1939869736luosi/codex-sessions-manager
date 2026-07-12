@@ -293,6 +293,7 @@ export function buildSessionResidueAudit(scan: ScanResult, sessionId: string): S
   const childIds = uniqueSorted(threadSpawnEdges.filter((edge) => edge.parentThreadId === session.id).map((edge) => edge.childThreadId));
   const familyMemberIds = uniqueSorted([session.id, ...family.familyMembers.map((node) => node.sessionId)]);
   const rawSessionFiles = item.filePaths.length;
+  const hasArchivedRollout = session.fileTargets.some((target) => target.bucket === "archived_sessions");
   const hasAnyResidue =
     rawSessionFiles +
       item.shellSnapshotFiles.length +
@@ -327,10 +328,12 @@ export function buildSessionResidueAudit(scan: ScanResult, sessionId: string): S
       ? [`SQLite logs 有 ${item.sqlite.logRows} 行关联记录；当前默认保留，不纳入删除建议。`]
       : []),
   ]);
-  const recommendedNextCommand = hasAnyResidue
+  const recommendedNextCommand = hasAnyResidue && !hasArchivedRollout
     ? `codex-sessions delete ${quoteShellArg(session.id)} --root ${quoteShellArg(scan.root.rootPath)}`
     : null;
-  const recommendedNextCommandNote = recommendedNextCommand
+  const recommendedNextCommandNote = hasArchivedRollout
+    ? "这是归档会话的本地存储清单；归档内容保留是正常行为，不是残留，不建议因此清理。"
+    : recommendedNextCommand
     ? "这是预览命令，不会删除；只有用户加 --yes 才会真的删除。"
     : knownLocally
       ? "不需要处理，当前没有发现本地残留。"

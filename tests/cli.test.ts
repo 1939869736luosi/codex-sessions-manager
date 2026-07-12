@@ -85,6 +85,7 @@ describe("cli", () => {
     expect(mutationExitCode({ verificationStatus: "passed" })).toBe(0);
     expect(mutationExitCode({ verificationStatus: "partial" })).toBe(2);
     expect(mutationExitCode({ verificationStatus: "failed" })).toBe(2);
+    expect(mutationExitCode({ verificationStatus: "not_run" })).toBe(2);
   });
 
   it("previews and confirms durable recovery only with the exact operation id", async () => {
@@ -119,6 +120,30 @@ describe("cli", () => {
       recoveredBy: "rollforward",
     });
     await expect(readFile(fixture.paths.sessionIndex, "utf8")).resolves.toBe(after);
+  });
+
+  it("preserves a committed journal's failed verification status during stale-lock recovery", async () => {
+    const context = await createTrustedRootContext(fixture.rootDir);
+    const lock = await acquireMutationLock(context, "cleanup-index", [FIXTURE_IDS.ACTIVE_ID]);
+    await lock.release("recovery_required", { injected: "after committed verification" });
+    const journalPath = path.join(fixture.rootDir, lock.journalRelativePath);
+    const journal = JSON.parse(await readFile(journalPath, "utf8")) as Record<string, unknown>;
+    journal.stage = "committed";
+    journal.details = { verificationStatus: "failed" };
+    await writeFile(journalPath, `${JSON.stringify(journal, null, 2)}\n`, "utf8");
+
+    const recoverIo = createIo();
+    expect(
+      await runCli(
+        ["recover", lock.operationId, "--root", fixture.rootDir, "--yes", "--json"],
+        recoverIo.io,
+      ),
+    ).toBe(2);
+    expect(JSON.parse(recoverIo.stdout.join("\n"))).toMatchObject({
+      operationStatus: "committed",
+      verificationStatus: "failed",
+      recoveredBy: "finalize-committed",
+    });
   });
 
   it("prints the package version without scanning the Codex root", async () => {

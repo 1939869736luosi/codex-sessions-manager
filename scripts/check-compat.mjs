@@ -30,6 +30,7 @@ async function listFiles(directory) {
 }
 
 const baseline = JSON.parse(await readText("compat/upstream-baseline.json"));
+const capabilityBaseline = JSON.parse(await readText("compat/upstream-capabilities.json"));
 assert(baseline.schemaVersion === 1, "baseline schemaVersion must be 1");
 assert(baseline.product === "openai/codex", "baseline product must be openai/codex");
 assert(/^\d+\.\d+\.\d+$/u.test(baseline.stableVersion), "stableVersion must be X.Y.Z");
@@ -47,6 +48,62 @@ assert(
   baseline.commit.url === `https://github.com/openai/codex/commit/${baseline.commit.sha}`,
   "commit URL must pin the recorded SHA",
 );
+assert(capabilityBaseline.schemaVersion === 1, "capability baseline schemaVersion must be 1");
+assert(capabilityBaseline.product === baseline.product, "capability baseline product must match storage baseline");
+assert(
+  capabilityBaseline.stableVersion === baseline.stableVersion,
+  "capability baseline version must match storage baseline",
+);
+assert(capabilityBaseline.checkedAt === baseline.checkedAt || capabilityBaseline.checkedAt > baseline.checkedAt,
+  "capability baseline must be checked on or after the storage baseline");
+assert(Array.isArray(capabilityBaseline.capabilities), "capability baseline must contain capabilities");
+const officialStatuses = new Set(["available", "experimental", "not-available", "unknown"]);
+const projectOverlaps = new Set(["full", "partial", "none", "complementary"]);
+const projectDispositions = new Set([
+  "official-first",
+  "stop-expanding",
+  "verify-and-recover",
+  "retain",
+  "observe",
+  "verify-only",
+  "defer",
+  "removed",
+]);
+const capabilityIds = new Set();
+for (const capability of capabilityBaseline.capabilities) {
+  assert(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(capability.id ?? ""), "capability ids must use kebab-case");
+  assert(!capabilityIds.has(capability.id), `duplicate capability id ${capability.id}`);
+  capabilityIds.add(capability.id);
+  assert(officialStatuses.has(capability.officialStatus), `${capability.id} has invalid officialStatus`);
+  assert(projectOverlaps.has(capability.projectOverlap), `${capability.id} has invalid projectOverlap`);
+  assert(projectDispositions.has(capability.projectDisposition), `${capability.id} has invalid projectDisposition`);
+  if (capability.projectDisposition === "removed") {
+    assert(
+      typeof capability.removalReason === "string" && capability.removalReason.length > 20,
+      `${capability.id} removed capabilities need a removalReason`,
+    );
+    assert(
+      typeof capability.migrationNotes === "string" && capability.migrationNotes.length > 20,
+      `${capability.id} removed capabilities need migrationNotes`,
+    );
+  }
+  assert(typeof capability.summary === "string" && capability.summary.length > 20, `${capability.id} needs a summary`);
+  assert(Array.isArray(capability.evidence) && capability.evidence.length > 0, `${capability.id} needs evidence`);
+  for (const evidenceUrl of capability.evidence) {
+    const officialDocs = typeof evidenceUrl === "string" && evidenceUrl.startsWith("https://learn.chatgpt.com/docs/");
+    const pinnedSource = typeof evidenceUrl === "string"
+      && evidenceUrl.startsWith(`https://github.com/openai/codex/blob/rust-v${baseline.stableVersion}/`);
+    assert(officialDocs || pinnedSource, `${capability.id} evidence must be official docs or pinned release source`);
+  }
+}
+for (const requiredCapability of [
+  "thread-delete",
+  "post-delete-residue-verification",
+  "memory-entry-management",
+  "thread-memory-delete-reconsolidation",
+]) {
+  assert(capabilityIds.has(requiredCapability), `capability baseline is missing ${requiredCapability}`);
+}
 
 for (const documentationUrl of Object.values(baseline.documentation ?? {})) {
   assert(
@@ -71,6 +128,13 @@ if (releaseMode) {
   const ageDays = (Date.now() - checkedAt) / 86_400_000;
   assert(ageDays >= -1, "baseline checkedAt is unexpectedly in the future");
   assert(ageDays <= 7, `release baseline is ${ageDays.toFixed(1)} days old; maximum is 7 days`);
+  const capabilityCheckedAt = new Date(`${capabilityBaseline.checkedAt}T23:59:59.999Z`).getTime();
+  const capabilityAgeDays = (Date.now() - capabilityCheckedAt) / 86_400_000;
+  assert(capabilityAgeDays >= -1, "capability baseline checkedAt is unexpectedly in the future");
+  assert(
+    capabilityAgeDays <= 7,
+    `release capability baseline is ${capabilityAgeDays.toFixed(1)} days old; maximum is 7 days`,
+  );
 }
 
 const adapter = await readText("adapters/codex/README.md");

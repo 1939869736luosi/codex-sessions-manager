@@ -10,7 +10,7 @@ metadata:
 
 ## Overview
 
-CLI-first local Codex session audit and cleanup tool. Inspect what remains under `~/.codex`, audit leftovers after the official UI delete/archive flow, clean hidden local residues by exact session ID, and verify the local surfaces this release understands.
+CLI-first local Codex history audit and recovery tool. Use official Codex for normal task management and permanent deletion. Use this tool to verify what remains under `~/.codex`, inspect legacy or damaged state, and perform previewable recoverable cleanup for confirmed residual IDs.
 
 This is not a UI product, TUI, detail page, incremental scanner, or automatic cleanup service.
 
@@ -35,7 +35,7 @@ The distributed Skill includes `agents/openai.yaml` inside the Skill directory.
 - List/filter/search sessions (by project, time, status, source)
 - Show session detail or timeline
 - Inspect session family (parent/child/subagent/side/fork)
-- Audit what remains locally after official UI delete
+- Audit and verify what remains locally after official deletion
 - Scan root for likely residue candidates
 - Preview batch delete scope without executing
 - Build explicit-ID delete plans
@@ -79,7 +79,7 @@ codex-sessions recover <exact-operation-id> --yes
 - Always run a separate preview before any destructive action, then require explicit user confirmation.
 - `preview`, `plan-delete`, `family`, `impact`, `audit-root`, `preview-root` are read-only. They are never deletion authorization.
 - Delete never recursively adds parent, child, or family sessions. List every intended ID explicitly.
-- P11 exact-key global-state refs are removable only through explicit-ID confirmed delete.
+- Allowlisted exact-key global-state refs are removable only through explicit-ID confirmed delete.
 - Unknown global-state refs are warnings only; do not delete them automatically.
 - Confirmed session mutations require full canonical UUIDs. Active-session deletion also requires `--allow-active` / `allowActive=true`.
 - An interrupted write keeps an exclusive lock and durable recovery record. Inspect it before running the exact confirmed recovery operation.
@@ -94,7 +94,7 @@ codex-sessions-mcp --profile admin       # all 22 tools including destructive op
 
 Invalid `--profile` values exit with code 1. Default is read-only for safety.
 
-`get_session` defaults to `detail=compact` (20 items / 64 KiB / 1 MiB source read). `detail=full` is still bounded (200 items / 256 KiB / 8 MiB source read). Session metadata is bounded too. Both return explicit completeness metadata; `sourceCompleteness` preserves parse/unsupported status when the MCP envelope is also `truncated_limit`, and `itemsKnown=null` means the reader stopped before EOF. `list_sessions` defaults to 50 concise records, accepts at most 200, and caps the response at 256 KiB. Use CLI JSON for complete local results and `export` for byte-exact raw content.
+`get_session` defaults to `detail=compact` (20 items / 64 KiB / 1 MiB source read). `detail=full` is still bounded (200 items / 256 KiB / 8 MiB source read). Session metadata is bounded too. Both return explicit completeness metadata; `sourceCompleteness` preserves parse/unsupported status when the MCP envelope is also `truncated_limit`, and `itemsKnown=null` means the reader stopped before EOF. `list_sessions` defaults to 50 concise records, accepts at most 200, and caps the response at 256 KiB. Use CLI JSON for complete local result sets and `export` for a JSON recovery bundle whose embedded text or base64 data can reconstruct source-file bytes.
 
 All other MCP structured responses also have a final 256 KiB / 200-items-per-collection cap. Explicit session operations accept at most 50 IDs; `list_trash` defaults to 50 entries. Limit hits return `responseCompleteness` and `responseOmittedReason`. Exact backup export is CLI-only.
 

@@ -191,6 +191,33 @@ describe("confirmed mutation adapter parity", () => {
     expect(mutationContract(cli)).toEqual(mutationContract(mcp));
   });
 
+  it.each(["failed", "partial", undefined] as const)(
+    "keeps stale recovery verification state %s equivalent",
+    async (recordedStatus) => {
+      const [cliFixture, mcpFixture] = await pair();
+      const prepare = async (fixture: Fixture) => {
+        const context = await createTrustedRootContext(fixture.rootDir);
+        const lock = await acquireMutationLock(context, "cleanup-index", [FIXTURE_IDS.ACTIVE_ID]);
+        await lock.setStage(
+          "committed",
+          recordedStatus === undefined ? {} : { verificationStatus: recordedStatus },
+        );
+        return lock.operationId;
+      };
+      const cliOperationId = await prepare(cliFixture);
+      const mcpOperationId = await prepare(mcpFixture);
+      const cliCapture = createIo();
+      await runCli(["recover", cliOperationId, "--root", cliFixture.rootDir, "--yes", "--json"], cliCapture.io);
+      const cli = JSON.parse(cliCapture.stdout.join("\n")) as Record<string, unknown>;
+      const mcp = await runMcpResult(mcpFixture, "recover_operation", {
+        operationId: mcpOperationId,
+        confirm: true,
+      });
+
+      expect(mutationContract(cli)).toEqual(mutationContract(mcp));
+    },
+  );
+
   it.each([
     {
       label: "active session refusal",

@@ -1584,11 +1584,16 @@ export async function restoreTrashEntry(rootArg: string | undefined, idOrSession
       entry.manifestHash,
       "trash manifest",
     );
+    const verificationStatus = sqliteRestore.skipped.total > 0 ? "partial" : "passed";
     await lock.release("committed", {
       trashId: bundle.manifest.trashId,
       restoredSessionFiles,
       restoredShellSnapshots,
       restoredSqliteRows: sqliteRestore.restored.total,
+      skippedSqliteRows: sqliteRestore.skipped,
+      skippedSqliteTables: sqliteRestore.skippedTables,
+      retainedLogRows,
+      verificationStatus,
     });
 
     return {
@@ -1603,7 +1608,7 @@ export async function restoreTrashEntry(rootArg: string | undefined, idOrSession
       skippedSqliteRows: sqliteRestore.skipped,
       skippedSqliteTables: sqliteRestore.skippedTables,
       operationStatus: "committed",
-      verificationStatus: sqliteRestore.skipped.total > 0 ? "partial" : "passed",
+      verificationStatus,
       verificationScope: {
         sessionFiles: true,
         shellSnapshots: true,
@@ -1810,7 +1815,10 @@ export async function purgeTrashEntry(rootArg: string | undefined, idOrSessionId
         ["永久清除已经完成，但提交后验证发现回收站路径仍然存在；请检查 verificationScope。"],
       );
     }
-    await lock.release("committed", { trashId: entry.bundle.manifest.trashId });
+    await lock.release("committed", {
+      trashId: entry.bundle.manifest.trashId,
+      verificationStatus: "passed",
+    });
     return result("passed", []);
   } catch (error) {
     if (phase === "committed") {

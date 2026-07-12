@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 1,
+  "product": "openai/codex",
+  "stableVersion": "0.144.1",
+  "checkedAt": "2026-07-12",
+  "purpose": "Track both storage compatibility and official capabilities that replace, narrow, or unblock this project.",
+  "capabilities": [
+    {
+      "id": "thread-list-read-search",
+      "officialStatus": "available",
+      "projectOverlap": "full",
+      "projectDisposition": "official-first",
+      "summary": "Official Codex lists, searches, and reads normal threads with runtime state and pagination. Local commands remain for offline, legacy, and damaged-state inspection.",
+      "evidence": [
+        "https://learn.chatgpt.com/docs/app-server#api-overview"
+      ]
+    },
+    {
+      "id": "thread-control",
+      "officialStatus": "available",
+      "projectOverlap": "full",
+      "projectDisposition": "stop-expanding",
+      "summary": "Rename, archive, unarchive, resume, fork, send, steer, interrupt, goals, and normal task control belong to official Codex.",
+      "evidence": [
+        "https://learn.chatgpt.com/docs/app-server#api-overview",
+        "https://learn.chatgpt.com/docs/developer-commands#built-in-slash-commands"
+      ]
+    },
+    {
+      "id": "thread-delete",
+      "officialStatus": "available",
+      "projectOverlap": "partial",
+      "projectDisposition": "verify-and-recover",
+      "summary": "Official Codex hard-deletes persisted threads, spawned descendants, rollout files, and associated state. This project retains independent verification, recoverable trash, legacy cleanup, and failure recovery.",
+      "evidence": [
+        "https://learn.chatgpt.com/docs/app-server#api-overview",
+        "https://github.com/openai/codex/blob/rust-v0.144.1/codex-rs/app-server/src/request_processors/thread_delete.rs",
+        "https://github.com/openai/codex/blob/rust-v0.144.1/codex-rs/state/src/runtime/threads.rs",
+        "https://github.com/openai/codex/blob/rust-v0.144.1/codex-rs/thread-store/src/local/delete_thread.rs"
+      ]
+    },
+    {
+      "id": "recoverable-trash-restore",
+      "officialStatus": "not-available",
+      "projectOverlap": "none",
+      "projectDisposition": "retain",
+      "summary": "No public official contract was found for previewable recoverable trash, restore conflict checks, or operation-journal recovery.",
+      "evidence": [
+        "https://learn.chatgpt.com/docs/app-server#api-overview"
+      ]
+    },
+    {
+      "id": "post-delete-residue-verification",
+      "officialStatus": "not-available",
+      "projectOverlap": "none",
+      "projectDisposition": "retain",
+      "summary": "Official delete does not publish an independent retained-surface receipt covering legacy indexes, snapshots, global state, and failed or delayed derived-state cleanup.",
+      "evidence": [
+        "https://learn.chatgpt.com/docs/app-server#api-overview"
+      ]
+    },
+    {
+      "id": "memory-task-controls",
+      "officialStatus": "available",
+      "projectOverlap": "partial",
+      "projectDisposition": "official-first",
+      "summary": "Official controls can enable or disable memory use and generation per task, and can reset all local memories.",
+      "evidence": [
+        "https://learn.chatgpt.com/docs/customization/memories",
+        "https://github.com/openai/codex/blob/rust-v0.144.1/codex-rs/tui/src/bottom_pane/memories_settings_view.rs"
+      ]
+    },
+    {
+      "id": "memory-entry-management",
+      "officialStatus": "not-available",
+      "projectOverlap": "none",
+      "projectDisposition": "observe",
+      "summary": "No supported per-entry or per-session view/edit/delete contract exists for final consolidated memory. Generated memory files are inspectable but are not the primary control surface.",
+      "evidence": [
+        "https://learn.chatgpt.com/docs/customization/memories",
+        "https://github.com/openai/codex/blob/rust-v0.144.1/codex-rs/memories/README.md"
+      ]
+    },
+    {
+      "id": "thread-memory-delete-reconsolidation",
+      "officialStatus": "available",
+      "projectOverlap": "partial",
+      "projectDisposition": "verify-only",
+      "summary": "Official thread delete removes thread-linked Stage 1 memory state and schedules reconsolidation, but final derived text may remain until that background work succeeds or may remain when supported by other threads.",
+      "evidence": [
+        "https://github.com/openai/codex/blob/rust-v0.144.1/codex-rs/state/src/runtime/memories.rs"
+      ]
+    },
+    {
+      "id": "thread-item-pagination",
+      "officialStatus": "experimental",
+      "projectOverlap": "partial",
+      "projectDisposition": "defer",
+      "summary": "Official App Server has experimental turn and item pagination. This project keeps its existing process-local bounded event-page bookmark but does not expand it into a cross-host handoff or resource protocol without evidence.",
+      "evidence": [
+        "https://learn.chatgpt.com/docs/app-server#api-overview"
+      ]
+    },
+    {
+      "id": "external-agent-import",
+      "officialStatus": "available",
+      "projectOverlap": "partial",
+      "projectDisposition": "defer",
+      "summary": "Official Codex can import supported external-agent sessions and configuration, reducing the value of a broad Amp exploration project.",
+      "evidence": [
+        "https://learn.chatgpt.com/docs/app-server#api-overview"
+      ]
+    },
+    {
+      "id": "version-bound-schema-generation",
+      "officialStatus": "available",
+      "projectOverlap": "complementary",
+      "projectDisposition": "retain",
+      "summary": "Official version-bound App Server schemas make a small isolated compatibility and delete-behavior harness practical.",
+      "evidence": [
+        "https://learn.chatgpt.com/docs/app-server#message-schema"
+      ]
+    }
+  ]
+}

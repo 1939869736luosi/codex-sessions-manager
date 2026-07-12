@@ -20,7 +20,7 @@ import {
   type TrustedRootContext,
 } from "./path-safety.js";
 import { atomicWriteManagedFile, removeManagedPath } from "./mutation-safety.js";
-import type { MutationResultMetadata, VerificationScope } from "./types.js";
+import type { MutationResultMetadata, VerificationScope, VerificationStatus } from "./types.js";
 import { reconcileSqliteRecordsForRecovery, type SqliteRecordBundle } from "./sqlite.js";
 import { expandCodexPath } from "./root.js";
 import { scanCodexRoot } from "./scan.js";
@@ -420,18 +420,103 @@ export async function getRecoveryStatus(rootArg?: string): Promise<RecoveryStatu
   };
 }
 
-function recoveryVerificationScope(): VerificationScope {
+function recoveryVerificationScope(payload: OperationRecoveryPayloadV1): VerificationScope {
+  const paths = payload.files.map((file) => file.relativePath.replaceAll("\\", "/"));
   return {
-    sessionFiles: true,
-    shellSnapshots: true,
-    sessionIndex: true,
-    history: true,
-    globalState: true,
-    sqlite: true,
-    trashEntry: true,
+    sessionFiles: paths.some((relativePath) => (
+      relativePath.startsWith("sessions/") || relativePath.startsWith("archived_sessions/")
+    )),
+    shellSnapshots: paths.some((relativePath) => relativePath.startsWith("shell_snapshots/")),
+    sessionIndex: paths.includes("session_index.jsonl"),
+    history: paths.includes("history.jsonl"),
+    globalState: paths.includes(".codex-global-state.json"),
+    sqlite: payload.sqlite !== undefined,
+    trashEntry: payload.trash !== undefined,
     operationJournal: true,
     retainedSurfaces: ["logs_N.sqlite", "memory", "remote-control"],
   };
+}
+
+function staleLockFinalizationScope(): VerificationScope {
+  return {
+    sessionFiles: false,
+    shellSnapshots: false,
+    sessionIndex: false,
+    history: false,
+    globalState: false,
+    sqlite: false,
+    trashEntry: false,
+    operationJournal: true,
+    retainedSurfaces: [],
+  };
+}
+
+function recordedVerificationStatus(details: Record<string, unknown>): VerificationStatus {
+  const status = details.verificationStatus;
+  return status === "passed" || status === "partial" || status === "failed"
+    ? status
+    : "not_run";
+}
+
+function staleLockWarnings(
+  status: VerificationStatus,
+  finalStage: "committed" | "rolled_back",
+): string[] {
+  const outcome = finalStage === "committed" ? "提交" : "回滚";
+  if (status === "failed") {
+    return [
+      `操作此前已${outcome}，但 journal 记录的验证失败；本次恢复只清理 stale lock，没有重新验证数据面。`,
+    ];
+  }
+  if (status === "partial") {
+    return [
+      `操作此前已${outcome}，但 journal 记录的验证不完整；本次恢复只清理 stale lock，没有重新验证数据面。`,
+    ];
+  }
+  if (status === "not_run") {
+    return [
+      `操作此前已${outcome}，但 journal 没有可信的 verificationStatus；本次恢复只清理 stale lock，没有重新验证数据面。`,
+    ];
+  }
+  return [`操作此前已${outcome}；本次恢复只清理 stale lock，并沿用 journal 中已有的验证结果，没有重新验证数据面。`];
+}
+
+const SAFE_SKIPPED_SQLITE_TABLES = new Set([
+  "threads",
+  "logs",
+  "thread_spawn_edges",
+  "agent_job_items",
+  "thread_dynamic_tools",
+  "stage1_outputs",
+  "thread_goals",
+]);
+
+function safeRecordedCount(value: unknown): number | null {
+  return Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= 1_000_000_000
+    ? value as number
+    : null;
+}
+
+function recordedStructuredWarnings(details: Record<string, unknown>): string[] {
+  const warnings: string[] = [];
+  const skippedRows = details.skippedSqliteRows;
+  const skippedTotal = skippedRows && typeof skippedRows === "object" && !Array.isArray(skippedRows)
+    ? safeRecordedCount((skippedRows as Record<string, unknown>).total)
+    : null;
+  const skippedTables = Array.isArray(details.skippedSqliteTables)
+    ? [...new Set(details.skippedSqliteTables.filter(
+        (table): table is string => typeof table === "string" && SAFE_SKIPPED_SQLITE_TABLES.has(table),
+      ))].sort()
+    : [];
+  if (skippedTotal !== null && skippedTotal > 0) {
+    const tableSummary = skippedTables.length > 0 ? `（未恢复表：${skippedTables.join(", ")}）` : "";
+    warnings.push(`SQLite 有 ${skippedTotal} 条记录未恢复${tableSummary}。`);
+  }
+  const retainedLogRows = safeRecordedCount(details.retainedLogRows);
+  if (retainedLogRows !== null && retainedLogRows > 0) {
+    warnings.push(`manifest 中 ${retainedLogRows} 条 logs 按只读保留策略未恢复。`);
+  }
+  return warnings;
 }
 
 /**
@@ -467,16 +552,25 @@ export async function recoverInterruptedOperation(rootArg?: string): Promise<Rec
   }
   if (interrupted.journal.stage === "committed" || interrupted.journal.stage === "rolled_back") {
     const finalStage = interrupted.journal.stage;
-    await finalizeInterruptedMutation(context, interrupted, finalStage, { recoveredStaleLock: true });
+    const verificationStatus = recordedVerificationStatus(interrupted.journal.details);
+    await finalizeInterruptedMutation(context, interrupted, finalStage, {
+      ...interrupted.journal.details,
+      recoveredStaleLock: true,
+    });
     return {
       operationId: interrupted.operationId,
       kind: interrupted.kind,
       recoveredBy: finalStage === "committed" ? "finalize-committed" : "finalize-rolled-back",
       operationStatus: finalStage,
-      verificationStatus: "passed",
-      verificationScope: recoveryVerificationScope(),
-      warnings: [],
-      errorCode: null,
+      verificationStatus,
+      verificationScope: staleLockFinalizationScope(),
+      warnings: [
+        ...staleLockWarnings(verificationStatus, finalStage),
+        ...recordedStructuredWarnings(interrupted.journal.details),
+      ],
+      errorCode: finalStage === "committed" && verificationStatus === "failed"
+        ? "POST_COMMIT_VERIFY_FAILED"
+        : null,
     };
   }
   if (interrupted.journal.stage === "prepared" && interrupted.recoveryPayload === null) {
@@ -487,7 +581,7 @@ export async function recoverInterruptedOperation(rootArg?: string): Promise<Rec
       recoveredBy: "rollback",
       operationStatus: "rolled_back",
       verificationStatus: "passed",
-      verificationScope: recoveryVerificationScope(),
+      verificationScope: staleLockFinalizationScope(),
       warnings: ["操作在任何 mutation 前中断；已清除 stale lock。"],
       errorCode: null,
     };
@@ -507,7 +601,7 @@ export async function recoverInterruptedOperation(rootArg?: string): Promise<Rec
     recoveredBy: payload.strategy,
     operationStatus: finalStage,
     verificationStatus: "passed",
-    verificationScope: recoveryVerificationScope(),
+    verificationScope: recoveryVerificationScope(payload),
     warnings: [],
     errorCode: null,
   };
