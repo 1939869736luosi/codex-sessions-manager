@@ -447,14 +447,7 @@ function staleLockFinalizationScope(): VerificationScope {
     sqlite: false,
     trashEntry: false,
     operationJournal: true,
-    retainedSurfaces: [
-      "session files",
-      "shell snapshots",
-      "session indexes",
-      "global state",
-      "SQLite",
-      "trash entries",
-    ],
+    retainedSurfaces: [],
   };
 }
 

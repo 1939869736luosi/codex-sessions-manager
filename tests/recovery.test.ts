@@ -460,6 +460,7 @@ describe("durable mutation recovery", () => {
         sqlite: false,
         trashEntry: false,
         operationJournal: true,
+        retainedSurfaces: [],
       });
       expect(result.warnings.join("\n")).toMatch(/stale lock|验证/iu);
       const finalizedJournal = JSON.parse(

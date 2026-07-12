@@ -6,6 +6,7 @@
 - Marked the v0.7.0 roadmap work as completed and separated post-v0.7 projects from completed release commitments.
 - Fixed stale-lock recovery so a committed journal's `passed`, `partial`, or `failed` verification status is preserved; missing or invalid evidence now reports `not_run` instead of being upgraded to `passed`.
 - Limited stale-lock finalization scope to the operation journal, preserved prior journal details, returned `POST_COMMIT_VERIFY_FAILED` for recorded failures, and kept CLI exit status 2 for incomplete or failed recovery verification.
+- Kept stale-lock `retainedSurfaces` empty instead of misclassifying data surfaces that were merely not re-verified as policy-retained.
 - Derived recovery verification scope from the actual recovery payload instead of claiming that every storage surface was checked; a prepared operation with no mutation now reports only journal verification.
 - Persisted successful and partial restore verification plus structured skipped-SQLite counts, allowlisted table names, and retained-log counts before releasing the mutation lock. Stale-lock recovery regenerates bounded warnings from those fields instead of replaying free-form journal text; successful purge verification is persisted too.
 - Distinguished committed and rolled-back stale journals: a failed rollback verification remains `failed` without the inaccurate `POST_COMMIT_VERIFY_FAILED` code, and recovery warnings name the actual final state.
