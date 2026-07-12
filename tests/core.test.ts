@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { appendFile, chmod, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import Database from "better-sqlite3";
@@ -1025,6 +1025,34 @@ describe("core integration", () => {
     await expect(readFile(fixture.paths.activeSessionFile, "utf8")).resolves.toContain("active user input");
   });
 
+  it("treats an archived session as inventory instead of a cleanup recommendation", async () => {
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const audit = buildSessionResidueAudit(scan, FIXTURE_IDS.ARCHIVED_ID);
+
+    expect(audit.currentState.archived).toBe(true);
+    expect(audit.currentState.hasOriginalRollout).toBe(true);
+    expect(audit.recommendedNextCommand).toBeNull();
+    expect(audit.recommendedNextCommandNote).toContain("归档");
+    expect(audit.recommendedNextCommandNote).toContain("不是残留");
+  });
+
+  it("treats archived SQLite and index rows without an archived rollout as deletion residue", async () => {
+    await rm(fixture.paths.archivedSessionFile);
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const audit = buildSessionResidueAudit(scan, FIXTURE_IDS.ARCHIVED_ID);
+
+    expect(audit.currentState.archived).toBe(true);
+    expect(audit.currentState.hasOriginalRollout).toBe(false);
+    expect(audit.surfaces.rolloutFiles.present).toBe(false);
+    expect(audit.surfaces.sessionIndex.present).toBe(true);
+    expect(audit.surfaces.sqlite.rows).toBeGreaterThan(0);
+    expect(audit.recommendedNextCommand).toBe(
+      `codex-sessions delete ${FIXTURE_IDS.ARCHIVED_ID} --root ${fixture.rootDir}`,
+    );
+    expect(audit.recommendedNextCommandNote).not.toContain("没有发现本地残留");
+  });
+
   it("audits a db-only session when only SQLite remains", async () => {
     const db = new Database(fixture.paths.sqlite);
     db.prepare(
@@ -1957,6 +1985,21 @@ describe("core integration", () => {
 
     expect(cleanup.removedSessionIndexRows).toBe(1);
     expect(cleanup.removedHistoryRows).toBe(1);
+    const operationDir = path.join(fixture.rootDir, ".codex-sessions-trash", ".operations");
+    const cleanupJournals = await Promise.all(
+      (await readdir(operationDir))
+        .filter((name) => name.endsWith(".json") && !name.endsWith(".recovery.json"))
+        .map(async (name) => JSON.parse(await readFile(path.join(operationDir, name), "utf8")) as {
+          kind?: string;
+          stage?: string;
+          details?: { verificationStatus?: string; warnings?: string[] };
+        }),
+    );
+    expect(cleanupJournals).toContainEqual(expect.objectContaining({
+      kind: "cleanup-index",
+      stage: "committed",
+      details: expect.objectContaining({ verificationStatus: "passed", warnings: [] }),
+    }));
     expect(verification[0].filePathsRemaining).toHaveLength(1);
     expect(verification[0].sqlite.threadRows).toBe(1);
   });
@@ -2349,6 +2392,34 @@ describe("core integration", () => {
       expect(restore.skippedSqliteRows.dedicatedLogs).toBe(0);
       expect(restore.skippedSqliteTables).toEqual(["thread_goals"]);
       expect(restore.warnings[0]).toContain("SQLite 有 1 条记录未恢复");
+      const operationDir = path.join(partialFixture.rootDir, ".codex-sessions-trash", ".operations");
+      const restoreJournals = await Promise.all(
+        (await readdir(operationDir))
+          .filter((name) => name.endsWith(".json") && !name.endsWith(".recovery.json"))
+          .map(async (name) => JSON.parse(await readFile(path.join(operationDir, name), "utf8")) as {
+            kind?: string;
+            stage?: string;
+            details?: {
+              verificationStatus?: string;
+              skippedSqliteRows?: { total?: number; threadGoals?: number };
+              skippedSqliteTables?: string[];
+              retainedLogRows?: number;
+              warnings?: unknown;
+            };
+          }),
+      );
+      expect(restoreJournals).toContainEqual(expect.objectContaining({
+        kind: "restore",
+        stage: "committed",
+        details: expect.objectContaining({
+          verificationStatus: "partial",
+          skippedSqliteRows: expect.objectContaining({ total: 1, threadGoals: 1 }),
+          skippedSqliteTables: ["thread_goals"],
+          retainedLogRows: 0,
+        }),
+      }));
+      const restoreJournal = restoreJournals.find((journal) => journal.kind === "restore");
+      expect(restoreJournal?.details?.warnings).toBeUndefined();
       expect(validation[0].sqlite.threadRows).toBe(1);
       expect(validation[0].sqlite.logRows).toBe(0);
       expect(validation[0].sqlite.threadGoalRows).toBe(0);

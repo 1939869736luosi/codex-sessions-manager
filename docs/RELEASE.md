@@ -6,7 +6,8 @@ This checklist is intentionally stricter than a normal package publish. A releas
 
 - Confirm the working tree contains no session exports, local security reports, advisory drafts, encrypted archives, real session IDs, real home paths, or raw Codex data.
 - Confirm package version, `src/version.ts`, changelog heading, and intended `v<version>` tag match.
-- Run `npm ci`, `npm run typecheck`, `npm test`, `npm run test:coverage`, `npm run build`, `npm run pack:check`, and `npm audit --omit=dev --audit-level=high`.
+- Run `npm ci`, `npm run typecheck`, the supported-platform test suites, `npm run test:coverage`, `npm run build`, `npm run pack:check`, and `npm audit --omit=dev --audit-level=high`. Linux and macOS run the complete `npm test` suite. Windows runs the documented read-only/fail-closed release subset until destructive Windows support is enabled.
+- Review both `compat/upstream-baseline.json` and `compat/upstream-capabilities.json`. The release is blocked if storage compatibility or official capability replacement was not checked within the release window.
 - Create the tarball from the reviewed commit, record its file manifest and SHA-256, install that local tarball in an empty directory, and smoke both `--version` entrypoints.
 - Complete the release-level first-principles, dependency-order, critical, adversarial, and independent review. Any unresolved High/P1 finding is a stop condition.
 - For a security release, finish the private advisory text and affected-version evidence before making the tag public.
@@ -19,7 +20,7 @@ This checklist is intentionally stricter than a normal package publish. A releas
 
 ## Release window
 
-The candidate and promotion workflows share one package-level concurrency queue. Do not bypass or replace that queue with per-version groups: overlapping versions must never race while changing `security-verify` or `latest`.
+The candidate and promotion workflows share one package-level concurrency queue. Do not bypass or replace that queue with per-version groups: overlapping repository workflows must never race while changing `security-verify` or `latest`. This protects the repository's controlled workflows; npm does not provide an atomic compare-and-swap that can prevent an authorized external actor from manually changing a dist-tag between the live check and promotion.
 
 1. Merge the reviewed commit to public `main` only after private review passes.
 2. Wait for all required Linux, macOS, Windows, coverage, package, and production-audit checks on that exact commit.

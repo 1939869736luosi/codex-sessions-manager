@@ -476,7 +476,7 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
     {
       capabilities: { logging: {} },
       instructions:
-        "Prefer the codex-sessions CLI for large or complete JSON output and byte-exact exports. Use MCP for bounded structured reads and explicitly approved management actions. get_session responses always report completeness and limits.",
+        "Prefer the codex-sessions CLI for large or complete JSON output and reconstructable recovery bundles. Use MCP for bounded structured reads and explicitly approved management actions. get_session responses always report completeness and limits.",
     },
   );
 
@@ -622,7 +622,7 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
   server.registerTool(
     "get_session",
     {
-      description: "Get one Codex session with a bounded timeline and explicit completeness metadata. Use CLI show --json or export for complete/local byte-exact content.",
+      description: "Get one Codex session with a bounded timeline and explicit completeness metadata. Use CLI show --json for all locally parseable semantic items, or export for a reconstructable recovery bundle.",
       outputSchema: TOOL_OUTPUT_SCHEMA,
       inputSchema: z.object({
         sessionId: z.string().describe("Exact session id or unique prefix."),
@@ -706,7 +706,7 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
     "audit_session",
     {
       description:
-        "Audit local Codex residue for one session after official UI archive/delete actions, without modifying anything. Reports known, P11 exact-key, and unknown global-state refs separately.",
+        "Audit local Codex residue after official deletion, without modifying anything. For an archived session this is inventory only and does not recommend cleanup. Reports known, P11 exact-key, and unknown global-state refs separately.",
       outputSchema: TOOL_OUTPUT_SCHEMA,
       inputSchema: z.object({
         sessionId: z.string().describe("Exact session id or unique prefix."),
@@ -1000,7 +1000,11 @@ export function createServer(profile: McpProfile = "read-only"): McpServer {
           });
         }
         const result = operation.result;
-        return textResult(`Recovered operation ${operationId} by ${result.recoveredBy}.`, { result });
+        const warning = result.warnings[0] ? ` ${result.warnings[0]}` : "";
+        return textResult(
+          `Recovered operation ${operationId} by ${result.recoveredBy}; verification=${result.verificationStatus}.${warning}`,
+          { result },
+        );
       },
     );
     server.registerTool(

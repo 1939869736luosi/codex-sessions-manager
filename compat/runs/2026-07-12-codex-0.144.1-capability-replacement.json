@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "runId": "2026-07-12-codex-0.144.1-capability-replacement",
+  "immutable": true,
+  "baselineVersion": "0.144.1",
+  "checkedAt": "2026-07-12",
+  "findings": [
+    "Official thread/delete now hard-deletes active or archived rollouts, spawned descendants, and associated state including thread-linked logs and memory extraction state.",
+    "Official list, read, search, rename, archive, unarchive, resume, fork, turn control, and experimental item pagination overlap normal session-management features.",
+    "Official memory controls support per-task use/generation choices and full reset, but no supported per-entry view/edit/delete contract was found for consolidated memory."
+  ],
+  "fixes": [
+    "Repositioned the project around independent delete verification, recoverable cleanup, legacy or damaged-state audit, and recovery.",
+    "Added a tracked official-capability replacement baseline to the compatibility release gate.",
+    "Deferred new normal thread-management tools, custom MCP cursor handoff, direct memory mutation, and broad Amp exploration."
+  ],
+  "postFixVerification": [
+    "The compatibility validator requires capability records to match the pinned stable Codex version and review date.",
+    "README and roadmap distinguish official-first workflows from retained project responsibilities.",
+    "Memory guidance uses official controls and does not recommend direct database or generated-file mutation."
+  ],
+  "privacy": {
+    "syntheticOnly": true,
+    "containsLocalPaths": false,
+    "containsSessionText": false,
+    "containsMachineCounts": false
+  }
+}

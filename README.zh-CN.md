@@ -5,11 +5,11 @@
 
 [English](./README.md)
 
-> Codex Desktop 现在已经有归档聊天删除入口。实测中，它会删除主会话文件和部分 thread 记录，但仍可能留下索引、执行日志和桌面状态引用。
+> 普通 task 管理和永久删除优先使用官方 Codex。从 Codex 0.144.1 开始，官方 `thread/delete` 会删除持久化 thread、spawned descendants、rollout 文件和关联状态。本项目负责独立检查实际还剩什么，并处理可恢复清理、旧版本遗留、损坏状态和孤儿记录。
 
-**codex-sessions-manager** 是 CLI-first 的本地 Codex 会话审计和清理工具。它的 **Skill**、**CLI** 和有限返回的 **MCP Server** 共享同一套核心逻辑。它用来检查 `~/.codex` 里还剩什么、审计官方 UI 删除/归档后留下的本地残留、按精确 session ID 处理隐藏记录，并验证当前版本已覆盖的本机 surface 是否仍有残留。
+**codex-sessions-manager** 是 CLI-first 的本地 Codex 历史审计和恢复工具。它的 **Skill**、**CLI** 和有限返回的 **MCP Server** 共享同一套核心逻辑。它用来核验官方删除、发现旧版或损坏的本地残留、执行可预览且可恢复的清理，并只对当前版本实际检查过的存储位置作出结论。
 
-它面向安全敏感的本地历史管理：prompt/history 隐私、精确会话删除、失败回滚、恢复冲突检查、SQLite/global-state 一致性，以及删除后的残留验证。
+它面向安全敏感的本地历史管理：prompt/history 隐私、精确会话删除、能够安全证明时回滚、否则显式恢复、恢复冲突检查、SQLite/global-state 一致性，以及删除后的残留验证。
 
 欢迎报告安全问题。支持边界和报告方式见 [SECURITY.md](./SECURITY.md)。
 
@@ -17,16 +17,58 @@
 
 ## 为什么选这个？
 
-普通归档聊天优先用 Codex Desktop 官方删除入口。这个工具面向更难的本机场景：官方删完后验残留、清理孤儿记录、按精确 session ID 处理，以及让 AI Agent 安全管理本地历史。
+普通 task 的读取、搜索、改名、归档、继续、fork、发送消息和永久删除优先使用官方 Codex。这个工具处理另一类问题：证明官方删完后还剩什么、从清理故障中恢复、处理旧版或损坏的存储，以及定期批量清理已经确认的残留。
 
-| | codex-sessions-manager | 其他工具 |
-|--|:---:|:---:|
-| 清理已覆盖的 session 层（文件 + JSONL + 已知 SQLite + 已知全局状态） | ✅ | ❌ 只清部分 |
-| 持久 journal、失败回滚和明确的崩溃恢复 | ✅ | ❌ |
-| 可恢复的回收站 + 冲突检测 | ✅ | ❌ 或简单备份 |
-| 删完验证有没有残留 | ✅ | ❌ |
-| AI Agent 可直接调用（MCP） | ✅ | ❌ |
-| 识别 `/side` 和 `/fork` 父子关系 | ✅ | ❌ |
+这个项目把以下能力放进同一个本地工具：
+
+- 清理当前版本已理解的 session 层：文件、JSONL 索引、已知 SQLite 行和白名单 global-state key；
+- 持久 mutation journal；记录状态足以证明安全时回滚，否则要求显式恢复；
+- 可恢复的回收站和冲突检测；
+- 按声明的清理范围做删除后验证；
+- 供 AI Agent 使用的有限 MCP 接口；
+- 只读识别 `/side` 和 `/fork` 父子关系。
+
+## 官方重叠与项目保留价值
+
+每次 Codex 基线变化和每次发版前都要复查这张表。详细证据保存在[官方能力基线](https://github.com/1939869736luosi/codex-sessions-manager/blob/main/compat/upstream-capabilities.json)。
+
+| 能力 | 官方 Codex 状态 | 本项目决定 |
+|---|---|---|
+| 普通 list、search、read、rename、archive、resume、fork、send、steer、goal | 已提供 | 官方优先，不再增加平行控制工具 |
+| 普通永久删除 | 0.144.1 已提供 | 官方优先；本项目保留独立核验和异常清理 |
+| 可恢复回收站、恢复冲突检查、写操作中断恢复 | 未找到同等公开接口 | 保留 |
+| 旧版、损坏、部分完成和孤儿状态审计 | 未找到同等公开接口 | 保留 |
+| 按 task 控制 memory 使用/生成、全部重置 memory | 已提供 | 使用官方控制 |
+| 按条或按 session 精确编辑/删除最终 memory | 未找到受支持接口 | 只观察，不直接修改 |
+| App Server turn/item 分段读取 | 实验中 | 保留现有的进程内分段书签；没有跨宿主实证前，不扩建成跨应用 handoff/resource 协议 |
+
+兼容巡检以后同时回答两个问题：
+
+1. 本项目还能不能正确读取并安全处理当前 Codex 存储格式？
+2. 官方 Codex 有没有取代、缩小或新开放某项能力？
+
+官方能力变化后，项目能力可以改为官方优先、保留、只核验、延期或删除。发现变化只会生成审查结论，不会自动删代码或发布版本。
+
+### 目前怎样管理 memory
+
+官方目前没有提供“逐条查看、逐条修改、逐条删除最终 memory”的受支持接口，也不能保证最终 memory 中一段话只来自一个 session。当前建议使用官方控制：
+
+- 用 `/memories` 决定当前 task 是否使用已有 memory、是否参与未来 memory 生成；
+- 需要记住、忘记或纠正某件事时，直接明确告诉 Codex，让官方的追加式更正输入在后续整理中处理；
+- 确实要清空全部本地 memory 时，才使用 **Reset all memories**；
+- 需要删除某个 session 作为 memory 来源时，先使用官方 thread 删除并等待后台重新整理。本项目目前只能报告有限的 thread-linked Stage 1 关联，也可能返回 `unknown`；不能证明最终 memory 中某段文字已经消失。
+
+精确的 memory 来源追踪和删除后重新整理核验仍是 roadmap 项目。兼容巡检若发现官方提供了可用接口或足够可靠的证据，再讨论开发。
+
+不要直接修改 `memories_N.sqlite`，也不要把手工删改 `MEMORY.md`、`memory_summary.md`、`raw_memories.md` 或 `rollout_summaries/` 当成可靠删除办法。这些都是自动生成状态，可能再次重建。参见[官方 Memories 文档](https://learn.chatgpt.com/docs/customization/memories)。
+
+## 建议的定期使用方式
+
+1. 正常永久删除先用官方 Codex。
+2. 每月一次，或者发现存储异常时，运行 `audit-root` 查找旧版、损坏和孤儿候选。
+3. 对候选运行 `audit <id>`，区分“确认有残留”和“从未发现过这个 ID”。
+4. 只对确认残留的完整 IDs 做批量预览；仍需本地处理时优先使用 `delete --trash --yes`。
+5. 最后运行 `verify`，把结构化结果当作本地删除记录。
 
 当前兼容边界：Codex 可能通过 `sqlite_home` 或 `CODEX_SQLITE_HOME` 把 SQLite 放在 Codex root 外。本工具会按 `config.toml sqlite_home`、`CODEX_SQLITE_HOME`、Codex root 的顺序解析，并在 root 顶层和 SQLite home 同时存在 DB 时报警。旧式 `event_msg` / `response_item` timeline 和 paginated `item_completed` timeline 都会解析，并明确报告完整性。会话排序按 `recency_at_ms`、`recency_at`、`updated_at` 依次回退，结构化结果会显示 `historyMode`。压缩 rollout 文件 `.jsonl.zst` 已进入扫描、删除、回收站和恢复路径，并按二进制保存；如果某个 session 只剩 `.jsonl.zst`，`show` 不会解压正文，而会报告 `compressed_unread`，精确压缩字节通过 `export` 获取。`logs_N.sqlite` 执行日志、`memories_N.sqlite` memory 数据和 remote-control 状态当前都不作为普通 session cleanup surface。
 
@@ -59,7 +101,7 @@ codex-sessions family <session-id> --parents
 codex-sessions family <session-id> --subagents
 codex-sessions family <session-id> --impact
 
-# 审计官方 UI 删除/归档后本机还剩什么（安全，不做任何修改）
+# 审计官方删除后本机还剩什么（安全，不做任何修改）
 codex-sessions audit <session-id>
 
 # 扫描整个 root 里的疑似残留 ID（安全，不做任何修改）
@@ -73,7 +115,7 @@ codex-sessions preview-root --source global-state-unknown --limit 20
 # 预览删除（安全，不做任何修改）
 codex-sessions delete <session-id>
 
-# 预览 P11 exact-key global-state 清理（安全，不做任何修改）
+# 预览白名单 exact-key global-state 清理（安全，不做任何修改）
 codex-sessions delete <session-id> --root <path-to-codex-root>
 
 # 预览确认后，使用标准完整 UUID 删除到回收站（推荐）
@@ -88,20 +130,17 @@ codex-sessions verify <session-id>
 
 ## 删除到底做了什么
 
-其他工具：删一个文件或一行数据库记录 → 完事 → 到处是孤儿文件。
-
-这个工具：
+处理旧版、孤儿或明确选择的可恢复清理时，这个工具会：
 
 ```
-1. 快照所有文件（万一要回滚）
-2. 改写 session_index.jsonl（移除匹配行）
-3. 改写 history.jsonl（移除匹配行）
-4. 只清理已知 `.codex-global-state.json` 引用和两个 P11 exact-key 候选
-5. 删除原始 session 文件
-6. 删除 shell snapshot 文件
-7. 删除已知 SQLite session 记录（threads、spawn edges、agent jobs、dynamic tools、legacy state-owned `stage1_outputs`、thread goals；新版 Codex 可能把 goals 放在 `goals_N.sqlite`）。`logs_N.sqlite` 执行日志默认保留。
+1. 提交前重新扫描并核验可信 root、目标和 active-session 状态
+2. 获取独占锁，写入 operation journal，并预先生成受影响文件的替换内容
+3. 原子替换 `session_index.jsonl`、`history.jsonl` 和允许清理的 global-state exact-key
+4. 删除原始 session 文件和 shell snapshot 文件
+5. 在数据库事务内删除已知 SQLite session 记录（threads、spawn edges、agent jobs、dynamic tools、legacy state-owned `stage1_outputs`、thread goals；新版 Codex 可能把 goals 放在 `goals_N.sqlite`）。`logs_N.sqlite` 执行日志默认保留
+6. 按实际覆盖范围验证结果，并记录 committed、rolled_back 或 recovery_required
 
-如果任何一步失败 → 全部回滚到原始状态。
+提交前失败不会修改数据。提交途中失败时，只在能够证明恢复安全的情况下回滚；状态无法确认时返回 `recovery_required` 并阻止后续写操作。已经提交但验证不完整或失败时，结果仍明确标为 committed，CLI 返回状态 2，不会误报成“没有执行”。
 ```
 
 删完之后跑 `verify`，确认当前版本覆盖的 surface 没有残留。`verify` 可能显示 `retained_sqlite=logs=N`，这是预期结果。`.jsonl.zst` 已按 session 文件处理；`memories_N.sqlite` 仍是只读 memory surface，必须另做 memory 删除安全设计后，才能声称完整 memory cleanup。
@@ -113,7 +152,7 @@ codex-sessions verify <session-id>
 | **列出 & 筛选** | 按项目、状态、时间范围、来源信息、model provider 和 model 筛选；按项目分组 |
 | **来源汇总** | 只读汇总 `sourceKind`，同时保留 raw `source`、`thread_source`、`model_provider`、`model` 和 `agent_role` |
 | **标题来源拆分** | 列表默认显示 Codex UI 可搜标题；详情显示 `session_index`、SQLite 和首条请求的标题差异 |
-| **导出** | 删之前先备份为 JSON |
+| **导出** | 删之前生成 JSON 恢复包；UTF-8 文件以文本保存，压缩或二进制文件以 base64 保存，并附带相关索引、global-state、snapshot 和 SQLite 行 |
 | **删除** | 永久删除或放入回收站，你选 |
 | **残留审计** | 只读报告原始 rollout 文件、shell snapshot、session_index、history、SQLite、global-state、thread edges、family 状态和断裂 parent/child 关系 |
 | **Root 残留扫描** | 不需要先知道 session ID，直接只读扫描整个 root 的疑似残留 |
@@ -122,8 +161,8 @@ codex-sessions verify <session-id>
 | **回收站 & 恢复** | 完整快照保存；`.jsonl.zst` 会话文件按二进制安全保存；恢复时检查 SQLite 主键冲突 |
 | **验证** | 报告当前版本支持的文件、索引行和数据库记录是否仍有残留 |
 | **清理索引** | 移除失效索引条目，不动原始数据 |
-| **健康检查** | `doctor` 命令做完整诊断 |
-| **MCP 服务** | AI Agent（Claude Code、Codex、Kiro）直接管理会话 |
+| **健康检查** | `doctor` 默认返回有限的 root 健康摘要；`--details` 才展开完整引用数组 |
+| **MCP 服务** | AI Agent 获取有限的审计、验证、恢复和显式批准的清理操作 |
 | **会话家族** | 只读查看 parent、child、ancestor、descendant、sibling、subagent、`/fork`、`/side` 和 impact；人类输出默认使用短 `source` 标签，`--full` 显示更完整 |
 | **子对话感知** | 父会话和子会话仍是独立 session；删除、导出、验证都不会自动递归 |
 
@@ -184,7 +223,7 @@ codex mcp add codex-sessions -- codex-sessions-mcp --profile read-only
 
 默认 **read-only** profile（16 个工具）。需要破坏性操作时使用 `--profile admin`（22 个工具）。
 
-MCP `get_session` 有固定上限：`compact` 最多 20 items / 64 KiB，并且最多读取 1 MiB rollout 源文件；`full` 最多 200 items / 256 KiB，并且最多读取 8 MiB。session metadata 同样受限。两种模式都会返回 `completeness`、底层 `sourceCompleteness`、已返回/已知数量、metadata 截断、省略原因和是否可精确导出。读取上限先于文件结尾触发时，`itemsKnown` 会返回 `null`，不会给出伪完整总数；工具输出截断也会标成 `truncated_limit`。需要全部本地可解析 semantic items 时用 `codex-sessions show <id> --json`；需要 byte-exact 原始内容时用 `export`。
+MCP `get_session` 有固定上限：`compact` 最多 20 items / 64 KiB，并且最多读取 1 MiB rollout 源文件；`full` 最多 200 items / 256 KiB，并且最多读取 8 MiB。session metadata 同样受限。两种模式都会返回 `completeness`、底层 `sourceCompleteness`、已返回/已知数量、metadata 截断、省略原因和是否可精确导出。读取上限先于文件结尾触发时，`itemsKnown` 会返回 `null`，不会给出伪完整总数；工具输出截断也会标成 `truncated_limit`。需要全部本地可解析 semantic items 时用 `codex-sessions show <id> --json`；需要可恢复的完整源文件表示时用 `export`，其中 UTF-8 内容直接进入 JSON，压缩或二进制内容使用 base64。
 
 MCP `list_sessions` 只返回精简记录，默认最多 50 个 session，参数上限为 200，整个结构化结果最多 256 KiB。`totalMatches`、`sessionsReturned`、`hasMore`、`byteLimited` 和 `omittedReason` 会明确说明省略情况。需要完整结果集或完整 session metadata 时用 `codex-sessions list --json`。
 
@@ -251,7 +290,9 @@ codex-sessions verify <session-id...> [--json]
 
 兼容检查以 [compat baseline](https://github.com/1939869736luosi/codex-sessions-manager/tree/main/compat) 为准：旧式和 paginated timeline 都有合成 fixture；`.jsonl.zst` 只剩压缩文件时明确报告 `compressed_unread`；`logs_N.sqlite`、`memories_N.sqlite`、external agent imports 和 remote-control 继续只做观察，不进入普通 session cleanup。
 
-官方 Codex UI 删除或归档后，如果想知道本机还剩什么，先用 `audit`。它只读，不会改文件。它会报告原始 rollout 文件、shell snapshot、`session_index`、`history`、SQLite 记录、已知 global-state 引用、P11 exact-key global-state 引用、未知 global-state 引用、`thread_spawn_edges` 是否还在，也会报告 family 归属和断裂 parent/child 关系。如果仍有残留，建议命令只会给不带 `--yes` 的删除预览；只有你自己加 `--yes` 才会真的删除。
+官方 Codex 删除后，如果想知道本机还剩什么，先用 `audit`。它只读，不会改文件。它会报告原始 rollout 文件、shell snapshot、`session_index`、`history`、SQLite 记录、已知 global-state 引用、白名单 exact-key global-state 引用、未知 global-state 引用、`thread_spawn_edges` 是否还在，也会报告 family 归属和断裂 parent/child 关系。如果仍有残留，建议命令只会给不带 `--yes` 的删除预览；只有你自己加 `--yes` 才会真的删除。
+
+官方归档后，同一命令只用于查看本机保存了什么。归档的 rollout 和索引本来就应该保留，不能仅因为它们存在就当成残留或清理候选。
 
 如果你还不知道 session ID，用 `audit-root`。它会扫描整个 Codex root，按风险列出疑似残留：断裂 parent/child 边、没有 rollout 文件但还有未知 global-state 引用、SQLite-only 记录、shell snapshot、index-only 记录，以及其他不完整残留。它只读，默认 `--limit 50`，不会打印聊天正文，每条只建议继续跑对应的单 session `audit` 命令。只有明确想把正常完整会话也列出来时，才加 `--all`。
 
@@ -287,11 +328,11 @@ codex-sessions verify <session-id...> [--json]
 - `source=mcp` 表示这个 thread 的来源是 mcp，不是每一次 MCP 工具调用日志。
 - `model_provider` 这里只做显示和筛选，不修复 provider 身份，也不改写历史。
 
-如果想对 `audit-root` 选出的候选做批量删除预览，用 `preview-root`。它复用同一套 `status/source` 筛选和保守默认 `--limit 50`，汇总展示只读预览会碰到哪些位置：rollout 文件、压缩 `.jsonl.zst` rollout 文件、shell snapshots、`session_index`、`history`、SQLite（包含存在时的 `goals_N.sqlite.thread_goals`）、已知 global-state 引用、P11 exact-key global-state 引用、未知 global-state 引用和 `thread_spawn_edges`。`logs_N.sqlite` 和 `memories_N.sqlite` 不是默认删除面。它只读，不删除，不改写 JSONL、SQLite、shell snapshot 或 global-state，不接受 `--yes`，也不会自动递归加入 parent、child 或 family session。`preview-root` 的结果不等于“这些都该删”，也不会建议删除任何 session；它只说明如果之后你明确运行 delete，会碰到什么。真正删除应先跑单独的明确 ID `delete` 预览供检查，再单独运行显式确认的 `delete ... --yes`。
+如果想对 `audit-root` 选出的候选做批量删除预览，用 `preview-root`。它复用同一套 `status/source` 筛选和保守默认 `--limit 50`，汇总展示只读预览会碰到哪些位置：rollout 文件、压缩 `.jsonl.zst` rollout 文件、shell snapshots、`session_index`、`history`、SQLite（包含存在时的 `goals_N.sqlite.thread_goals`）、已知 global-state 引用、白名单 exact-key global-state 引用、未知 global-state 引用和 `thread_spawn_edges`。`logs_N.sqlite` 和 `memories_N.sqlite` 不是默认删除面。它只读，不删除，不改写 JSONL、SQLite、shell snapshot 或 global-state，不接受 `--yes`，也不会自动递归加入 parent、child 或 family session。`preview-root` 的结果不等于“这些都该删”，也不会建议删除任何 session；它只说明如果之后你明确运行 delete，会碰到什么。真正删除应先跑单独的明确 ID `delete` 预览供检查，再单独运行显式确认的 `delete ... --yes`。
 
 如果已经有明确 session ID，并且想在任何删除预览或写操作前先做更安全的关系感知计划，用 `plan-delete`。它只读，JSON 里会标明 `readOnly: true` 和 `executionSupported: false`，也可通过只读 MCP `plan_delete_sessions` 调用。默认只选择 seed IDs。相关 parent、child、subagent、descendant、family member，以及 `/side`/`/fork` 这类 ambiguous session，会出现在 `availableIncludes` 或 warning 里。`--include-children`、`--include-subagents`、`--include-descendants` 和 `--include-family` 只改变 `selectedIds`，不会执行删除；其中 `--include-family` 风险最高，会给出强提醒。exact-key global-state 只显示 path、rule、shape 和 byteEstimate 元数据；unknown global-state 仍然只是 warning-only。
 
-T7-P3 新增一个保守的 root-level source 候选形式：`plan-delete --source-kind subagent --limit 20 [--status archived] [--json]`。`--source-kind` 可重复，OR 语义；`--status` 也可重复，OR 语义。`--limit` 必填，最大 50。root-level `sourceKind=unknown` 会被拒绝；unknown 会话必须用 explicit session ID 人工复核。这个模式只写 `candidateIds`，绝不写 `selectedIds`，active/current 命中会留在 `rejectedIds`。它只是候选列表：`sourceKind` 是筛选维度，不是删除授权。`mcp` 只表示 thread source，不代表每次 MCP tool call；`vscode` 是 Codex 原始标签，不等同 VS Code IDE；`exec` 不代表执行日志可安全批量删除。本版本故意不支持 sourceKind candidate plan 的 `--write-plan`。
+root-level source 候选使用保守形式：`plan-delete --source-kind subagent --limit 20 [--status archived] [--json]`。`--source-kind` 可重复，OR 语义；`--status` 也可重复，OR 语义。`--limit` 必填，最大 50。root-level `sourceKind=unknown` 会被拒绝；unknown 会话必须用 explicit session ID 人工复核。这个模式只写 `candidateIds`，绝不写 `selectedIds`，active/current 命中会留在 `rejectedIds`。它只是候选列表：`sourceKind` 是筛选维度，不是删除授权。`mcp` 只表示 thread source，不代表每次 MCP tool call；`vscode` 是 Codex 原始标签，不等同 VS Code IDE；`exec` 不代表执行日志可安全批量删除。本版本故意不支持 sourceKind candidate plan 的 `--write-plan`。
 
 MCP `plan_delete_sessions` 支持同样的 sourceKind candidate 语义：传 `sourceKind`、必填 `limit` 和可选 `status`；`selectedIds` 保持为空，命中只进入 `candidateIds`；root-level `unknown` 拒绝，active/current 命中进入 `rejectedIds`。MCP 不支持 `writePlan`，不会生成 preview token，也不能执行删除。
 
@@ -303,7 +344,7 @@ MCP `preview_delete_plan` 接收 `planFile` 或 inline `plan` object，并复用
 
 当前设计上不支持 delete-by-plan、preview token、`--force`、sourceKind-based delete execution，或高级 family/sourceKind 自动删除编排。真正删除仍然必须回到单独的明确 ID delete preview，并在人工确认后显式执行。
 
-### P11 exact-key global-state 清理
+### 白名单 exact-key global-state 清理
 
 只有两个原本属于 unknown 的 `.codex-global-state.json` 路径可以在确认删除时一起清理：
 
@@ -338,7 +379,7 @@ MCP 规则相同：先调用 `preview_delete_sessions` 检查 exact path，再�
 
 可以给 family 视图加 `--source-kind subagent|mcp|vscode|cli|exec|unknown`，只看匹配成员。默认人类输出会保持紧凑，长文本可能缩短；需要完整原始字段时，用 `--full`、`family --json` 或 MCP `get_session_family`。真正删除仍然必须单独跑明确 ID 预览，并显式确认。
 
-T8-P2/T9 增加 source metadata compatibility layer。稳定的 `sourceKind` 字段仍然保持粗粒度兼容分类（`subagent`、`mcp`、`vscode`、`cli`、`exec`、`unknown`）。JSON 输出还可能包含 `sourceInfo`，记录 raw `source`、raw `thread_source`、可可靠派生时的官方 Codex v2 source-kind metadata、thread-source analytics metadata 和简明 evidence。这只用于观测：不改变 filters、delete preview、plan-delete selection、MCP planning 或删除授权。尤其是内部 raw `mcp`、raw `appServer` 或 raw `app-server` 会报告为稳定 `sourceKind=mcp` 和官方 metadata `appServer`；它不是 individual MCP tool-call 的证明。
+source metadata compatibility layer 补充了稳定的 `sourceKind` 粗粒度兼容分类（`subagent`、`mcp`、`vscode`、`cli`、`exec`、`unknown`）。JSON 输出还可能包含 `sourceInfo`，记录 raw `source`、raw `thread_source`、可可靠派生时的官方 Codex v2 source-kind metadata、thread-source analytics metadata 和简明 evidence。这只用于观测：不改变 filters、delete preview、plan-delete selection、MCP planning 或删除授权。尤其是内部 raw `mcp`、raw `appServer` 或 raw `app-server` 会报告为稳定 `sourceKind=mcp` 和官方 metadata `appServer`；它不是 individual MCP tool-call 的证明。
 
 ## 标题怎么看
 
@@ -352,11 +393,11 @@ Codex 本地会话可能同时有多个标题：
 - `titleMismatch`：这些来源是否出现不一致。
 - `titleCandidates`：所有候选标题。
 
-`list` 和搜索结果默认显示 `displayTitle`。人类可读的 `show` 会用短摘要列出 `sqliteTitle`、`firstUserMessage`、所有候选标题和时间线预览，方便确认标题分裂问题，同时避免刷出大段正文。需要完整值和完整时间线时用 `show --json`。
+`list` 和搜索结果默认显示 `displayTitle`。人类可读的 `show` 会用短摘要列出 `sqliteTitle`、`firstUserMessage`、所有候选标题和时间线预览，方便确认标题分裂问题，同时避免刷出大段正文。需要本机能够解析的全部 semantic items 时用 `show --json`；未知类型、parse error、压缩源不可读和单项工具输出截断仍会通过 completeness 字段如实标记。
 
 ## Codex 存了什么（我们清理什么）
 
-Codex Desktop 删除归档聊天时，可能已经清掉其中一部分。`audit-root` 可以先找出疑似残留 ID，`preview-root` 可以批量预览这些 ID 的删除影响，`audit` 再对单个 ID 给只读报告。真正清理之后，再用 `verify` 复查。确认要清理时，才用 `delete --yes` 或 `cleanup-index --yes` 处理残留。
+Codex 0.144.1 的官方删除会处理持久化 thread、spawned descendants、rollout 文件和大量关联状态。本项目不会在没有检查的情况下断言旧版、损坏、延迟整理或未知位置已经干净。`audit-root` 先找疑似残留 ID，`preview-root` 批量预览候选，`audit` 检查单个 ID，`verify` 记录当前版本支持的复查范围。只有确认还存在需要本地处理的残留时，才使用 `delete --trash --yes` 或 `cleanup-index --yes`。
 
 ```
 ~/.codex/

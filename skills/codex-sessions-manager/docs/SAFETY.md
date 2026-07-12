@@ -2,7 +2,7 @@
 
 `codex-sessions` is a local Codex session management toolkit. It provides a CLI and a stdio MCP server for inspecting, listing, exporting, verifying, deleting, moving to trash, restoring, purging, and diagnosing local Codex sessions.
 
-Codex Desktop has its own delete action for archived chats. Use that for ordinary UI-driven deletion. Use this toolkit when you need to verify local leftovers, clean exact session IDs, inspect hidden storage, or perform recoverable/batch cleanup.
+Official Codex 0.144.1 provides substantial permanent thread deletion, including persisted rollouts, spawned descendants, and associated state. Use the official path for normal deletion. Use this toolkit to verify the result, inspect legacy or damaged storage, and perform previewable recoverable or batch cleanup only for confirmed residual state.
 
 It is not a UI product and does not include a TUI, detail page, incremental project scanner, automatic stale cleanup, or automatic trash purge.
 
@@ -96,7 +96,7 @@ Permanent delete remains the default delete mode for compatibility. However, `de
 
 `sourceKind` is only a filter dimension. `mcp` means thread source, not a record of each MCP tool call; `vscode` is the raw Codex thread source label, not proof of the VS Code IDE; `exec` does not imply execution logs are safe to batch-delete. Root-level sourceKind candidate plans must not inherit candidates from `audit-root` or `preview-root` as deletion recommendations.
 
-T8-P2/T9 adds a source metadata compatibility layer. The stable `sourceKind` field remains the coarse compatibility category (`subagent`, `mcp`, `vscode`, `cli`, `exec`, `unknown`). JSON output may also include `sourceInfo` with raw `source`, raw `thread_source`, official Codex v2 source-kind metadata when reliably derived, thread-source analytics metadata, and compact evidence. This is observability only: it does not change filters, delete previews, plan-delete selection, MCP planning, or delete authorization. In particular, internal raw `mcp`, raw `appServer`, and raw `app-server` are reported as stable `sourceKind=mcp` with official metadata `appServer`; they are not proof of individual MCP tool calls.
+A source metadata compatibility layer supplements the stable `sourceKind` compatibility category (`subagent`, `mcp`, `vscode`, `cli`, `exec`, `unknown`). JSON output may also include `sourceInfo` with raw `source`, raw `thread_source`, official Codex v2 source-kind metadata when reliably derived, thread-source analytics metadata, and compact evidence. This is observability only: it does not change filters, delete previews, plan-delete selection, MCP planning, or delete authorization. In particular, internal raw `mcp`, raw `appServer`, and raw `app-server` are reported as stable `sourceKind=mcp` with official metadata `appServer`; they are not proof of individual MCP tool calls.
 
 `plan-delete --write-plan FILE` may write a stable `codex-sessions-delete-plan.v1` audit file. That file is not authorization, not a preview token, not a delete confirmation, and not accepted by any delete execution command. It must contain only metadata: selected IDs, included/rejected IDs, available includes, warnings, broken relations, missing surfaces, surface counts, root fingerprint, plan hash, scan timestamp, and exact-key global-state path/rule/shape/byteEstimate. It must not contain transcript bodies, prompt text, or full global-state values.
 
@@ -144,7 +144,7 @@ Use this narrow workflow for residue that has all of these properties:
 - no `session_index.jsonl` row
 - no shell snapshots
 - no SQLite cleanup rows, ignoring retained `logs_N.sqlite` execution logs
-- no known, P11 exact-key, or unknown global-state references
+- no known, allowlisted exact-key, or unknown global-state references
 - no parent, child, subagent, side/fork, or broken family relation warnings
 
 Preview first:
@@ -208,12 +208,12 @@ node dist/cli/index.js cleanup-stale --yes
 
 Known global-state cleanup is limited to structured keys that the tool understands.
 
-P11 exact-key cleanup is limited to these promoted paths:
+Allowlisted exact-key cleanup is limited to these promoted paths:
 
 - `$.electron-persisted-atom-state.prompt-history.<session-id>`
 - `$.electron-persisted-atom-state.heartbeat-thread-permissions-by-id.<session-id>`
 
-They are allowed only when the session id is the complete object key and the value shape matches the P11 rule. Preview must show the exact path, rule id, value shape, byte estimate, affected surfaces, family warnings, and that confirmation is required. It must not print prompt contents or full global-state values.
+They are allowed only when the session id is the complete object key and the value shape matches the allowlisted rule. Preview must show the exact path, rule id, value shape, byte estimate, affected surfaces, family warnings, and that confirmation is required. It must not print prompt contents or full global-state values.
 
 Use the normal explicit-session delete preview. There is no separate broad cleanup command:
 

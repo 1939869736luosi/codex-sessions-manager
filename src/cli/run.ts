@@ -163,7 +163,7 @@ Notes:
   - 真正删除前应先单独预览供检查，再显式加 --yes；当前没有 preview token；family / impact 不能替代 delete preview
   - family 只读查看 parent / child / side / fork / subagent 关系，不会自动递归处理
   - family --impact 只读查看关系影响，不执行删除，不是删除建议，也不生成 --yes
-  - audit 只读检查官方 UI 删除或归档后本地还剩哪些记录
+  - audit 只读检查官方删除后的本地残留；对归档会话只做存储清单，不建议清理
   - audit-root 只读扫描整个 root 的疑似残留，默认 limit=50
   - audit-root 多个 --status 或 --source 为 OR；同时使用 status 和 source 时为 AND
   - preview-root 只读批量预览 audit-root 筛出的候选，不删除、不递归处理 family

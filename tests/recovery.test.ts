@@ -194,10 +194,42 @@ describe("durable mutation recovery", () => {
       operationStatus: "committed",
       verificationStatus: "passed",
       recoveredBy: "rollforward",
+      verificationScope: {
+        sessionFiles: false,
+        shellSnapshots: false,
+        sessionIndex: true,
+        history: false,
+        globalState: false,
+        sqlite: false,
+        trashEntry: false,
+        operationJournal: true,
+      },
     });
     await expect(readFile(indexPath, "utf8")).resolves.toBe(after);
     expect(await getRecoveryStatus(rootDir)).toMatchObject({ pending: false });
     await expect(access(path.join(rootDir, lock.recoveryRelativePath))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("reports only journal verification when recovering a prepared operation with no mutation payload", async () => {
+    const context = await createTrustedRootContext(rootDir);
+    await acquireMutationLock(context, "cleanup-index", [FIXTURE_IDS.ACTIVE_ID]);
+
+    const result = await recoverInterruptedOperation(rootDir);
+
+    expect(result).toMatchObject({
+      operationStatus: "rolled_back",
+      verificationStatus: "passed",
+      verificationScope: {
+        sessionFiles: false,
+        shellSnapshots: false,
+        sessionIndex: false,
+        history: false,
+        globalState: false,
+        sqlite: false,
+        trashEntry: false,
+        operationJournal: true,
+      },
+    });
   });
 
   it("keeps the lock and refuses to overwrite an unrecognized third file state", async () => {
@@ -397,6 +429,97 @@ describe("durable mutation recovery", () => {
 
     expect(result.recoveredBy).toBe("finalize-committed");
     expect(await getRecoveryStatus(rootDir)).toMatchObject({ pending: false });
+  });
+
+  it.each([
+    ["passed", "passed"],
+    ["partial", "partial"],
+    ["failed", "failed"],
+    ["unknown", "not_run"],
+    [undefined, "not_run"],
+  ] as const)(
+    "preserves trusted committed verification status %s and otherwise reports %s",
+    async (recordedStatus, expectedStatus) => {
+      const context = await createTrustedRootContext(rootDir);
+      const lock = await acquireMutationLock(context, "cleanup-index", [FIXTURE_IDS.ACTIVE_ID]);
+      await lock.setStage(
+        "committed",
+        recordedStatus === undefined ? {} : { verificationStatus: recordedStatus },
+      );
+
+      const result = await recoverInterruptedOperation(rootDir);
+
+      expect(result.verificationStatus).toBe(expectedStatus);
+      expect(result.errorCode).toBe(expectedStatus === "failed" ? "POST_COMMIT_VERIFY_FAILED" : null);
+      expect(result.verificationScope).toMatchObject({
+        sessionFiles: false,
+        shellSnapshots: false,
+        sessionIndex: false,
+        history: false,
+        globalState: false,
+        sqlite: false,
+        trashEntry: false,
+        operationJournal: true,
+      });
+      expect(result.warnings.join("\n")).toMatch(/stale lock|验证/iu);
+      const finalizedJournal = JSON.parse(
+        await readFile(path.join(rootDir, lock.journalRelativePath), "utf8"),
+      ) as { details?: Record<string, unknown> };
+      expect(finalizedJournal.details).toMatchObject({ recoveredStaleLock: true });
+      if (recordedStatus === "passed" || recordedStatus === "partial" || recordedStatus === "failed") {
+        expect(finalizedJournal.details?.verificationStatus).toBe(recordedStatus);
+      }
+    },
+  );
+
+  it.each([
+    ["passed", "passed"],
+    ["partial", "partial"],
+    ["failed", "failed"],
+    [undefined, "not_run"],
+  ] as const)(
+    "preserves rolled-back verification status %s as %s without a post-commit error",
+    async (recordedStatus, expectedStatus) => {
+      const context = await createTrustedRootContext(rootDir);
+      const lock = await acquireMutationLock(context, "cleanup-index", [FIXTURE_IDS.ACTIVE_ID]);
+      await lock.setStage(
+        "rolled_back",
+        recordedStatus === undefined ? {} : { verificationStatus: recordedStatus },
+      );
+
+      const result = await recoverInterruptedOperation(rootDir);
+
+      expect(result.operationStatus).toBe("rolled_back");
+      expect(result.recoveredBy).toBe("finalize-rolled-back");
+      expect(result.verificationStatus).toBe(expectedStatus);
+      expect(result.errorCode).toBeNull();
+      expect(result.warnings.join("\n")).toContain("已回滚");
+      expect(result.warnings.join("\n")).not.toContain("此前已提交");
+    },
+  );
+
+  it("regenerates safe warnings from structured journal fields without replaying free-form text", async () => {
+    const context = await createTrustedRootContext(rootDir);
+    const lock = await acquireMutationLock(context, "restore", [FIXTURE_IDS.ACTIVE_ID]);
+    await lock.setStage("committed", {
+      verificationStatus: "partial",
+      skippedSqliteRows: { total: 1, threadGoals: 1 },
+      skippedSqliteTables: ["thread_goals"],
+      retainedLogRows: 2,
+      warnings: ["/Users/private/session.jsonl\u001b[31m transcript secret"],
+    });
+
+    const result = await recoverInterruptedOperation(rootDir);
+
+    expect(result.verificationStatus).toBe("partial");
+    expect(result.warnings).toEqual(expect.arrayContaining([
+      expect.stringContaining("验证不完整"),
+      "SQLite 有 1 条记录未恢复（未恢复表：thread_goals）。",
+      "manifest 中 2 条 logs 按只读保留策略未恢复。",
+    ]));
+    expect(result.warnings.join("\n")).not.toContain("/Users/private");
+    expect(result.warnings.join("\n")).not.toContain("transcript secret");
+    expect(result.warnings.join("\n")).not.toContain("\u001b");
   });
 
   it.runIf(process.platform !== "win32")(

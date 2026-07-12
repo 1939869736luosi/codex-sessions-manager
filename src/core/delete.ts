@@ -884,7 +884,7 @@ async function rewriteSessionIndexes(
   nextHistoryText: string,
   kind: "cleanup-stale" | "cleanup-index",
   assertBeforeCommit?: () => Promise<void>,
-): Promise<void> {
+): Promise<{ verificationStatus: "passed" | "failed"; warnings: string[] }> {
   assertCanonicalSessionIds(sessionIds);
   const trustedRoot = getMutationTrustedRoot(scan);
   const [currentSessionIndexText, currentHistoryText] = await Promise.all([
@@ -953,7 +953,13 @@ async function rewriteSessionIndexes(
       historyWritten = true;
       await lock.checkpoint("history", "committed");
     }
-    await lock.release("committed");
+    await lock.setStage("verifying");
+    const verification = await verifySessionIndexesRemoved(scan, sessionIds);
+    await lock.release("committed", {
+      verificationStatus: verification.verificationStatus,
+      warnings: verification.warnings,
+    });
+    return verification;
   } catch (error) {
     try {
       if (historyWritten && scan.root.historyPath && currentHistoryText !== null) {
@@ -1035,7 +1041,7 @@ export async function cleanupStaleIndexes(scan: ScanResult): Promise<CleanupExec
     (record) => !record?.session_id || !staleSet.has(record.session_id),
   );
 
-  await rewriteSessionIndexes(
+  const verification = await rewriteSessionIndexes(
     scan,
     preview.staleSessionIds,
     sessionIndexResult.text,
@@ -1048,8 +1054,6 @@ export async function cleanupStaleIndexes(scan: ScanResult): Promise<CleanupExec
       }
     },
   );
-
-  const verification = await verifySessionIndexesRemoved(scan, preview.staleSessionIds);
 
   return {
     ...preview,
@@ -1124,7 +1128,7 @@ export async function cleanupSessionIndexes(
     throw new MutationSafetyError("STALE_PLAN", "selected session index targets or active/archive state changed after preview");
   }
 
-  await rewriteSessionIndexes(
+  const verification = await rewriteSessionIndexes(
     scan,
     preview.sessionIds,
     sessionIndexResult.text,
@@ -1145,8 +1149,6 @@ export async function cleanupSessionIndexes(
       }
     },
   );
-
-  const verification = await verifySessionIndexesRemoved(scan, preview.sessionIds);
 
   return {
     ...preview,

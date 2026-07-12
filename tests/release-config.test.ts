@@ -40,12 +40,15 @@ describe("release configuration", () => {
 
   it("uses explicit, cross-platform release scripts and a Node 20 floor", async () => {
     const packageJson = JSON.parse(await readRepositoryFile("package.json")) as {
+      description?: string;
       engines?: { node?: string };
       files?: string[];
       scripts?: Record<string, string>;
     };
 
     expect(packageJson.engines?.node).toBe(">=20");
+    expect(packageJson.description).toContain("Verify official Codex deletion");
+    expect(packageJson.description).toContain("bounded MCP tools");
     expect(packageJson.scripts).toMatchObject({
       build: "node scripts/build.mjs",
       "compat:check": "node scripts/check-compat.mjs",
@@ -99,7 +102,15 @@ describe("release configuration", () => {
       checkedAt?: string;
       commit?: { sha?: string; url?: string };
     };
+    const capabilityBaseline = JSON.parse(
+      await readRepositoryFile("compat/upstream-capabilities.json"),
+    ) as {
+      stableVersion?: string;
+      checkedAt?: string;
+      capabilities?: Array<{ id?: string; officialStatus?: string; projectDisposition?: string }>;
+    };
     const compatReadme = await readRepositoryFile("compat/README.md");
+    const compatValidator = await readRepositoryFile("scripts/check-compat.mjs");
     const maintainerPrompt = await readRepositoryFile("compat/MAINTAINER_PROMPT.md");
     const compatWorkflow = await readRepositoryFile(".github/workflows/compat-watch.yml");
 
@@ -111,12 +122,26 @@ describe("release configuration", () => {
         url: "https://github.com/openai/codex/commit/44918ea10c0f99151c6710411b4322c2f5c96bea",
       },
     });
+    expect(capabilityBaseline).toMatchObject({
+      stableVersion: baseline.stableVersion,
+      checkedAt: "2026-07-12",
+    });
+    expect(capabilityBaseline.checkedAt! >= baseline.checkedAt!).toBe(true);
+    expect(capabilityBaseline.capabilities).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "thread-delete", officialStatus: "available", projectDisposition: "verify-and-recover" }),
+      expect.objectContaining({ id: "memory-entry-management", officialStatus: "not-available", projectDisposition: "observe" }),
+    ]));
     expect(compatReadme).toContain("Storage structure");
     expect(compatReadme).toContain("Local read-only smoke");
+    expect(compatReadme).toContain("Capability replacement");
+    expect(compatValidator).toContain('"removed"');
+    expect(compatValidator).toContain("removalReason");
+    expect(compatValidator).toContain("migrationNotes");
     expect(maintainerPrompt).toContain("maintainer-only");
     expect(compatWorkflow).toContain("schedule:");
     expect(compatWorkflow).toContain("workflow_dispatch:");
     expect(compatWorkflow).toContain("scripts/check-upstream-version.mjs");
+    expect(compatWorkflow).toContain("compatibility and replacement report");
     expect(compatWorkflow).toContain("GITHUB_TOKEN: ${{ github.token }}");
     expect(compatWorkflow).not.toContain("issues: write");
     expect(compatWorkflow).not.toContain("pull-requests: write");

@@ -46,6 +46,22 @@ describe("mcp server", () => {
     await fixture.cleanup();
   });
 
+  it("describes export as a reconstructable recovery bundle instead of byte-exact source", async () => {
+    const { client, server } = await createConnectedClient("read-only");
+    try {
+      expect(client.getInstructions()).toContain("reconstructable recovery bundles");
+      expect(client.getInstructions()).not.toContain("byte-exact exports");
+
+      const { tools } = await client.listTools();
+      const getSession = tools.find((tool) => tool.name === "get_session");
+      expect(getSession?.description).toContain("reconstructable recovery bundle");
+      expect(getSession?.description).not.toContain("byte-exact content");
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("bounds every generic structured response while preserving mutation status", () => {
     const bounded = boundMcpStructuredContent({
       rows: Array.from({ length: 500 }, (_, index) => ({ index, value: "x".repeat(8_000) })),
@@ -214,6 +230,67 @@ describe("mcp server", () => {
       await expect(readFile(fixture.paths.sessionIndex, "utf8")).resolves.toBe(after);
     } finally {
       await Promise.all([readOnly.client.close(), readOnly.server.close(), admin.client.close(), admin.server.close()]);
+    }
+  });
+
+  it.each([
+    ["failed", "POST_COMMIT_VERIFY_FAILED"],
+    ["partial", null],
+    [undefined, null],
+  ] as const)("preserves stale recovery verification state %s in MCP output", async (recordedStatus, expectedErrorCode) => {
+    const context = await createTrustedRootContext(fixture.rootDir);
+    const lock = await acquireMutationLock(context, "cleanup-index", [FIXTURE_IDS.ACTIVE_ID]);
+    await lock.setStage(
+      "committed",
+      recordedStatus === undefined ? {} : { verificationStatus: recordedStatus },
+    );
+    const { client, server } = await createConnectedClient("admin");
+    try {
+      const recovered = await client.callTool({
+        name: "recover_operation",
+        arguments: { root: fixture.rootDir, operationId: lock.operationId, confirm: true },
+      });
+      const expectedStatus = recordedStatus ?? "not_run";
+      expect(recovered.isError).not.toBe(true);
+      expect(recovered.structuredContent?.result).toMatchObject({
+        verificationStatus: expectedStatus,
+        errorCode: expectedErrorCode,
+      });
+      expect(recovered.content[0]).toMatchObject({
+        type: "text",
+        text: expect.stringContaining(`verification=${expectedStatus}`),
+      });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("does not expose free-form journal warnings through MCP recovery output", async () => {
+    const context = await createTrustedRootContext(fixture.rootDir);
+    const lock = await acquireMutationLock(context, "restore", [FIXTURE_IDS.ACTIVE_ID]);
+    await lock.setStage("committed", {
+      verificationStatus: "partial",
+      skippedSqliteRows: { total: 1, threadGoals: 1 },
+      skippedSqliteTables: ["thread_goals", "/Users/private/session.jsonl"],
+      retainedLogRows: 2,
+      warnings: ["/Users/private/session.jsonl\u001b[31m transcript secret"],
+    });
+    const { client, server } = await createConnectedClient("admin");
+    try {
+      const recovered = await client.callTool({
+        name: "recover_operation",
+        arguments: { root: fixture.rootDir, operationId: lock.operationId, confirm: true },
+      });
+      const serialized = JSON.stringify(recovered);
+      expect(serialized).toContain("thread_goals");
+      expect(serialized).toContain("manifest 中 2 条 logs");
+      expect(serialized).not.toContain("/Users/private");
+      expect(serialized).not.toContain("transcript secret");
+      expect(serialized).not.toContain("\\u001b");
+    } finally {
+      await client.close();
+      await server.close();
     }
   });
 

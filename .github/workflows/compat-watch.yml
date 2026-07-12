@@ -1,4 +1,4 @@
-name: Codex compatibility watch
+name: Codex compatibility and replacement watch
 
 on:
   schedule:
@@ -30,7 +30,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/check-upstream-version.mjs "${RUNNER_TEMP}/codex-compat-watch.json"
 
-      - name: Upload the public-safe report
+      - name: Upload the public-safe compatibility and replacement report
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: codex-compat-watch-${{ github.run_id }}

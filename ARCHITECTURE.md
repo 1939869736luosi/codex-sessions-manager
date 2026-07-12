@@ -1,6 +1,16 @@
 # Architecture
 
-Codex Sessions Manager is a local audit, residue-verification, controlled-cleanup, and cross-host tooling project. Official Codex remains the normal thread-management UI. This project focuses on local storage evidence and carefully scoped operations that the official UI does not expose.
+Codex Sessions Manager is a local history audit, residue-verification, recovery, and exceptional-cleanup project. Official Codex owns normal thread management and normal permanent deletion. This project independently checks deletion outcomes, handles legacy or damaged storage, and provides previewable recoverable cleanup when official workflows are not enough.
+
+## Official-first boundary
+
+| Workflow | Owner |
+|---|---|
+| Normal list, search, read, rename, archive, resume, fork, messaging, goals, and permanent delete | Official Codex |
+| Post-delete residue verification, old-format inspection, damaged/orphaned state, recoverable trash/restore, mutation journal, and failure recovery | This project |
+| Official capability replacement and storage-format drift review | Shared compatibility process under `compat/` |
+
+The tracked decision record is `compat/upstream-capabilities.json`. A new official capability is not copied automatically. It is classified as official-first, retained, verify-only, deferred, or removed before code or documentation changes.
 
 ## Layers
 
@@ -15,7 +25,7 @@ CLI arguments / human output / JSON        MCP schemas / bounded responses / pro
 
 ### CLI
 
-The CLI is the preferred public interface for automation, pipes, complete locally parseable JSON, canonical event streams, and byte-exact exports. Human output may be compact, but JSON and file output must state their completeness.
+The CLI is the preferred public interface for automation, pipes, all locally parseable semantic JSON, canonical event streams, and JSON recovery bundles whose embedded source files preserve reconstructable text or binary bytes. Human output may be compact, but JSON and file output must state their completeness.
 
 ### MCP
 
@@ -36,12 +46,12 @@ The core understands the canonical Codex root and the separately trusted SQLite 
 | `sessions/`, `archived_sessions/`, `.jsonl.zst` | Read, export, trash, restore, or delete when explicitly selected |
 | `session_index.jsonl`, `history.jsonl` | Read and controlled atomic rewrite |
 | state/goals SQLite session rows | Read and row-scoped mutation with recovery |
-| `logs_N.sqlite` | Read-only observation; retained |
-| `memories_N.sqlite`, `MEMORY.md`, summaries, memory skills | Read-only association; retained |
+| `logs_N.sqlite` | Read-only observation in this project; official delete behavior is version-tracked separately |
+| `memories_N.sqlite`, `MEMORY.md`, summaries, memory skills | Read-only association and compatibility watch; precise final-memory deletion verification is future work; no direct mutation |
 | remote-control and external-agent imports | Observation only; retained |
 
 ## Result contract
 
 Mutations report `operationStatus`, `verificationStatus`, actual `verificationScope`, warnings, and stable error codes. A committed mutation with partial or failed verification remains reported as committed. Recovery-required state blocks later mutations.
 
-Read results report completeness. `show --json` returns all locally parseable semantic items; `export` is byte-exact; `events` is a complete canonical local stream. MCP list, session detail, doctor, and event pages are deliberately bounded and disclose omissions.
+Read results report completeness. `show --json` returns all locally parseable semantic items; `export` is a JSON recovery bundle with reconstructable embedded source bytes; `events` is a complete canonical local stream. MCP list, session detail, doctor, and event pages are deliberately bounded and disclose omissions.

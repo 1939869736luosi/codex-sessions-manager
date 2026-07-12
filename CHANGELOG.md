@@ -1,8 +1,27 @@
 # Changelog
 
+## 0.7.1
+
+- Added a split, maintained implementation record for the v0.6.1–v0.7.0 security, compatibility, preview, architecture, memory, release, and governance program.
+- Marked the v0.7.0 roadmap work as completed and separated post-v0.7 projects from completed release commitments.
+- Fixed stale-lock recovery so a committed journal's `passed`, `partial`, or `failed` verification status is preserved; missing or invalid evidence now reports `not_run` instead of being upgraded to `passed`.
+- Limited stale-lock finalization scope to the operation journal, preserved prior journal details, returned `POST_COMMIT_VERIFY_FAILED` for recorded failures, and kept CLI exit status 2 for incomplete or failed recovery verification.
+- Derived recovery verification scope from the actual recovery payload instead of claiming that every storage surface was checked; a prepared operation with no mutation now reports only journal verification.
+- Persisted successful and partial restore verification plus structured skipped-SQLite counts, allowlisted table names, and retained-log counts before releasing the mutation lock. Stale-lock recovery regenerates bounded warnings from those fields instead of replaying free-form journal text; successful purge verification is persisted too.
+- Distinguished committed and rolled-back stale journals: a failed rollback verification remains `failed` without the inaccurate `POST_COMMIT_VERIFY_FAILED` code, and recovery warnings name the actual final state.
+- Kept cleanup-index and cleanup-stale verification inside the mutation lock, persisted its result before clearing recovery state, and exposed stale-recovery verification status in both CLI and MCP results.
+- Corrected MCP guidance so `export` is described as a reconstructable JSON recovery bundle rather than byte-exact source output.
+- Repositioned normal thread management and permanent deletion as official-first for Codex 0.144.1 while retaining independent residue verification, recoverable trash/restore, legacy and damaged-state audit, and failure recovery.
+- Expanded compatibility review into a combined storage-compatibility and official-capability replacement review with a versioned capability baseline.
+- Added a retained `removed` capability state that requires both a removal reason and migration notes, so upstream replacement decisions remain auditable.
+- Documented official memory controls, full reset, thread-delete reconsolidation, and the absence of a supported per-entry consolidated-memory edit/delete contract; direct generated-file or database mutation remains unsupported.
+- Corrected the current memory boundary: read-only Stage 1 association cannot yet prove that derived final-memory text disappeared after thread deletion.
+- Stopped `audit` from recommending cleanup only when an actual `archived_sessions` rollout exists. An orphaned `threads.archived` flag without that rollout no longer hides SQLite, index, snapshot, or global-state residue.
+- Corrected release guidance for the Windows read-only/fail-closed test subset and limited stale-promotion claims to the repository's controlled workflows.
+
 ## 0.7.0
 
-- Added the 0.7.0 shared application layer: CLI and MCP now reuse the same list, session-detail, doctor, audit, planning, export, verification, recovery, delete, trash, restore, purge, and index-cleanup operations while keeping adapter-specific presentation and response bounds.
+- Added the 0.7.0 shared application layer: CLI and MCP adapters reuse the applicable list, session-detail, doctor, audit, planning, verification, recovery, delete, trash, restore, purge, and index-cleanup operations while keeping adapter-specific exposure, presentation, and response bounds. Export remains a shared-layer operation exposed only by CLI.
 - Added adapter-boundary and parity tests so CLI/MCP cannot bypass the shared mutation policy, shell out to one another, or silently reintroduce separate confirmation and ID rules.
 - Removed the unbounded MCP `export_session_backup` tool because it could return complete rollout and exact-key values in one response. Exact backups remain available through the CLI `export` command; MCP keeps bounded session and canonical-event reads.
 - Added a final 256 KiB / 200-items-per-collection boundary to every MCP structured response, capped explicit session operations at 50 IDs, and made trash listing default to 50 entries. Truncated responses keep existing wrappers and report the omitted route explicitly.
@@ -24,7 +43,7 @@
 - Added Codex 0.144.1 paginated timeline support. Canonical `item_completed` events now produce user, assistant, command, tool, and supported system items without duplicating legacy raw records.
 - Added explicit `historyMode`, `recencyAt`, and `recencyAtMs` output. Session ordering now follows `recency_at_ms`, then `recency_at`, then `updated_at`.
 - Added timeline completeness metadata: `complete`, `compressed_unread`, `unsupported_items`, `parse_error`, and `truncated_limit`, plus returned/known counts, omission reasons, exact-export availability, and per-item diagnostics.
-- Kept CLI `show --json` unbounded by total semantic item count. Human output remains compact, reports returned/known counts, and now exposes tool-output truncation. Any truncated tool output makes overall completeness `truncated_limit`. Byte-exact raw content remains exclusive to `export`.
+- Kept CLI `show --json` unbounded by total semantic item count. Human output remains compact, reports returned/known counts, and now exposes tool-output truncation. Any truncated tool output makes overall completeness `truncated_limit`. `export` remains the CLI-only JSON recovery bundle; embedded UTF-8 files retain their text and compressed or binary files retain reconstructable base64 bytes.
 - Added bounded MCP `get_session` detail modes: compact (20 items / 64 KiB / 1 MiB source read) and full (200 items / 256 KiB / 8 MiB source read). Session metadata is bounded too; source-read truncation reports an unknown total instead of implying a complete count.
 - Bounded MCP `list_sessions` to 50 sessions by default, 200 maximum, and a 256 KiB response. It now returns concise session records plus explicit count, limit, truncation, and omission metadata.
 

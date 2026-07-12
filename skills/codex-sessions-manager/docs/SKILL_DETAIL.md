@@ -27,7 +27,7 @@ Date-only filters use the local calendar day. Timezone-less datetime strings mus
 codex-sessions show <session-id> [--root PATH] [--json]
 ```
 
-Human output shows at most 20 timeline items and reports returned/known counts. Use `--json` for every locally parseable semantic item; JSON has no total item-count limit and marks unknown items, parse errors, and truncated tool output. `export` is the byte-exact raw-content path. A compressed-only `.jsonl.zst` session reports `compressed_unread` instead of presenting an index/history summary as transcript text.
+Human output shows at most 20 timeline items and reports returned/known counts. Use `--json` for every locally parseable semantic item; JSON has no total item-count limit and marks unknown items, parse errors, and truncated tool output. `export` writes a JSON recovery bundle: UTF-8 files are embedded as text, while compressed or binary files are embedded as base64. A compressed-only `.jsonl.zst` session reports `compressed_unread` instead of presenting an index/history summary as transcript text.
 
 Session JSON includes a read-only `memoryLink`. It reports only enabled/stage1/summary/Phase 2 linkage state and always says memory is retained after ordinary session deletion; it never returns raw memory or rollout-summary text. Only exact `memory_mode=enabled|disabled` values map to booleans; missing or future values stay `unknown`. Stage 1 selection does not prove final Phase 2 provenance, so uncertain influence is `unknown`. Doctor also keeps memory enablement separate from database existence and reports `enabled=unknown` when no reliable official signal exists.
 
@@ -183,7 +183,7 @@ All admin tools require `confirm=true` to execute; without it they return previe
 - Do not infer "Desktop" by exclusion; unclassified is `unknown`.
 - `model_provider` is display/filter metadata only.
 
-## P11 Exact-Key Global-State Rules
+## Allowlisted Exact-Key Global-State Rules
 
 Only two `.codex-global-state.json` paths are removable by confirmed delete:
 
