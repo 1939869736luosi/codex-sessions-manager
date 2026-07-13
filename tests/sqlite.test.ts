@@ -1,7 +1,17 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { collectSqliteDeletionCounts, deleteSessionsFromSqlite, validateSqliteDeletion } from "../src/core/sqlite.js";
+import {
+  collectDedicatedLogRecords,
+  collectDedicatedLogKeys,
+  assertDedicatedLogRecoveryPayloadBounds,
+  assertDedicatedLogKeyPayloadBounds,
+  collectSqliteDeletionCounts,
+  deleteDedicatedLogRows,
+  MAX_DEDICATED_LOG_RECOVERY_ROWS,
+  deleteSessionsFromSqlite,
+  validateSqliteDeletion,
+} from "../src/core/sqlite.js";
 import { createFixture, FIXTURE_IDS, type Fixture } from "./helpers/fixture.js";
 
 describe("sqlite core", () => {
@@ -175,5 +185,68 @@ describe("sqlite core", () => {
     expect(activeLogs.count).toBe(1);
     expect(validation.get(FIXTURE_IDS.ACTIVE_ID)?.threadRows).toBe(1);
     expect(validation.get(FIXTURE_IDS.ACTIVE_ID)?.logRows).toBe(1);
+  });
+
+  it("deletes only exact session ids from a recognized dedicated logs schema", () => {
+    expect(fixture.paths.logsSqlite).not.toBeNull();
+    deleteDedicatedLogRows(fixture.paths.logsSqlite, [FIXTURE_IDS.ACTIVE_ID]);
+
+    const db = new Database(fixture.paths.logsSqlite as string, { readonly: true });
+    try {
+      expect((db.prepare("select count(*) as count from logs where thread_id = ?").get(FIXTURE_IDS.ACTIVE_ID) as { count: number }).count).toBe(0);
+      expect((db.prepare("select count(*) as count from logs where thread_id = ?").get(FIXTURE_IDS.ARCHIVED_ID) as { count: number }).count).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("fails closed before changing a dedicated logs database with an unknown schema", async () => {
+    const unknown = await createFixture({ logsSchema: "missing-thread-id" });
+    try {
+      expect(() => deleteDedicatedLogRows(unknown.paths.logsSqlite, [FIXTURE_IDS.ACTIVE_ID])).toThrow(/schema|thread_id/iu);
+    } finally {
+      await unknown.cleanup();
+    }
+  });
+
+  it("fails closed before loading an unbounded dedicated log recovery set", () => {
+    const db = new Database(fixture.paths.logsSqlite as string);
+    const insert = db.prepare(`
+      insert into logs (ts, ts_nanos, level, target, feedback_log_body, thread_id, process_uuid, estimated_bytes)
+      values (?, 0, 'INFO', 'bulk', 'x', ?, 'bulk-process', 1)
+    `);
+    const fill = db.transaction(() => {
+      for (let index = 0; index < MAX_DEDICATED_LOG_RECOVERY_ROWS; index += 1) {
+        insert.run(10_000 + index, FIXTURE_IDS.ACTIVE_ID);
+      }
+    });
+    fill();
+    db.close();
+
+    expect(() => collectDedicatedLogRecords(fixture.paths.logsSqlite, [FIXTURE_IDS.ACTIVE_ID]))
+      .toThrow(/safe recovery limit/iu);
+  });
+
+  it("rejects an encoded recovery payload that exceeds the row bound before journaling", () => {
+    expect(() => assertDedicatedLogRecoveryPayloadBounds(
+      Array.from({ length: MAX_DEDICATED_LOG_RECOVERY_ROWS + 1 }, (_, id) => ({ id })),
+    )).toThrow(/encoded dedicated logs recovery payload/iu);
+  });
+
+  it("rejects an oversized purge key before loading it into the operation journal", () => {
+    const db = new Database(fixture.paths.logsSqlite as string);
+    db.exec("drop table logs; create table logs (id text primary key, thread_id text not null);");
+    db.prepare("insert into logs (id, thread_id) values (?, ?)")
+      .run("x".repeat(70 * 1024), FIXTURE_IDS.ACTIVE_ID);
+    db.close();
+
+    expect(() => collectDedicatedLogKeys(fixture.paths.logsSqlite, [FIXTURE_IDS.ACTIVE_ID]))
+      .toThrow(/key payload|key component|safe bound/iu);
+  });
+
+  it("rejects an encoded purge-key payload that exceeds the byte bound", () => {
+    expect(() => assertDedicatedLogKeyPayloadBounds([
+      { id: "x".repeat(17 * 1024 * 1024), threadId: FIXTURE_IDS.ACTIVE_ID },
+    ])).toThrow(/key payload|key component|safe bound/iu);
   });
 });

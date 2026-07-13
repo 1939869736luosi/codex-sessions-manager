@@ -38,11 +38,18 @@ import { scanCodexRoot } from "./scan.js";
 import {
   collectSqliteDeletionCounts,
   collectSqliteDeletionTotals,
+  collectDedicatedLogRecords,
+  assertDedicatedLogRecoveryPayloadBounds,
+  dedicatedLogKeysFromRecords,
+  deleteDedicatedLogRows,
+  encodeSqliteRecordsForJson,
   deleteGoalRows,
   deleteStateRows,
   exportSqliteRecordsForRestore,
   reconcileSqliteRecordsForRecovery,
+  restoreDedicatedLogRecords,
   validateSqliteDeletion,
+  inspectSessionMemoryLink,
 } from "./sqlite.js";
 import { DeleteSessionsError } from "./types.js";
 import type {
@@ -81,14 +88,15 @@ function structuredErrorCode(error: unknown, fallback: MutationErrorCode): Mutat
   return fallback;
 }
 
-function sumSqliteCounts(counts: SqliteDeletionCounts): number {
+function sumSqliteCounts(counts: SqliteDeletionCounts, includeDedicatedLogs = false): number {
   return (
     counts.threadRows +
     counts.spawnEdgeRows +
     counts.assignedAgentJobs +
     counts.dynamicToolRows +
     counts.stage1Rows +
-    counts.threadGoalRows
+    counts.threadGoalRows +
+    (includeDedicatedLogs ? counts.logRows : 0)
   );
 }
 
@@ -190,7 +198,12 @@ async function assertScannedFileUnchanged(
   await revalidateManagedPath(context, snapshot);
 }
 
-export function buildDeletePreview(scan: ScanResult, sessions: SessionEntry[]): DeletePreview {
+export function buildDeletePreview(
+  scan: ScanResult,
+  sessions: SessionEntry[],
+  options: { dedicatedLogsRetained?: boolean } = {},
+): DeletePreview {
+  const dedicatedLogsRetained = options.dedicatedLogsRetained ?? false;
   const sessionIds = sessions.map((session) => session.id);
   const sqliteCountsById = collectSqliteDeletionCounts(
     scan.root.sqlitePath,
@@ -205,10 +218,19 @@ export function buildDeletePreview(scan: ScanResult, sessions: SessionEntry[]): 
     scan.root.goalsSqlitePath,
   );
 
-  const items: DeletePreviewItem[] = sessions.map((session) => ({
+  const items: DeletePreviewItem[] = sessions.map((session) => {
+    const hasActiveRollout = session.fileTargets.some((target) => target.bucket === "sessions");
+    const hasArchivedRollout = session.fileTargets.some((target) => target.bucket === "archived_sessions");
+    const storageConflict = hasActiveRollout && hasArchivedRollout;
+
+    return {
     sessionId: session.id,
     title: session.title,
     archived: session.archived,
+    storageConflict,
+    warnings: storageConflict
+      ? ["同一 session ID 同时存在于 sessions 和 archived_sessions；这是异常重复状态，不会自动选择或扩展其他会话。"]
+      : [],
     filePaths: session.fileTargets.map((target) => target.relativePath),
     shellSnapshotFiles: (scan.shellSnapshots.filesById.get(session.id) ?? []).map((target) => target.relativePath),
     globalStateRefs: scan.globalState.refsById.get(session.id)?.length ?? 0,
@@ -220,11 +242,19 @@ export function buildDeletePreview(scan: ScanResult, sessions: SessionEntry[]): 
     sessionIndexRows: session.sessionIndexCount,
     historyRows: session.historyCount,
     sqlite: sqliteCountsById.get(session.id) ?? emptySqliteCounts(),
-  }));
+  };
+  });
 
   return {
     memoryRetained: true,
-    retainedSurfaces: ["memories SQLite", "MEMORY.md", "memory_summary.md", "memory skills"],
+    dedicatedLogsRetained,
+    retainedSurfaces: [
+      ...(dedicatedLogsRetained ? ["dedicated logs"] : []),
+      "memories SQLite",
+      "MEMORY.md",
+      "memory_summary.md",
+      "memory skills",
+    ],
     items,
     familyWarnings: buildDeleteFamilyWarnings(scan, sessions),
     totals: {
@@ -235,7 +265,7 @@ export function buildDeletePreview(scan: ScanResult, sessions: SessionEntry[]): 
       possibleUnknownGlobalStateRefs: items.reduce((sum, item) => sum + item.possibleUnknownGlobalStateRefs, 0),
       sessionIndexRows: items.reduce((sum, item) => sum + item.sessionIndexRows, 0),
       historyRows: items.reduce((sum, item) => sum + item.historyRows, 0),
-      sqliteRows: sumSqliteCounts(sqliteTotals),
+      sqliteRows: sumSqliteCounts(sqliteTotals, !dedicatedLogsRetained),
     },
   };
 }
@@ -402,12 +432,21 @@ export async function validateDeletion(
         sessionIndexRowsRemaining: countSessionIndexRows(sessionIndexText, session.id),
         historyRowsRemaining: countHistoryRows(historyText, session.id),
         sqlite: sqliteCounts.get(session.id) ?? emptySqliteCounts(),
+        memoryLink: inspectSessionMemoryLink(
+          scan.root.memoriesSqlitePath,
+          session.id,
+          session.thread?.memoryMode === "enabled"
+            ? true
+            : session.thread?.memoryMode === "disabled"
+              ? false
+              : "unknown",
+        ),
       };
     }),
   );
 }
 
-function verificationScope() {
+function verificationScope(dedicatedLogsRetained: boolean) {
   return {
     sessionFiles: true,
     shellSnapshots: true,
@@ -415,11 +454,19 @@ function verificationScope() {
     history: true,
     globalState: true,
     sqlite: true,
-    retainedSurfaces: ["dedicated logs", "unknown global-state references", "memory", "remote-control"],
+    retainedSurfaces: [
+      ...(dedicatedLogsRetained ? ["dedicated logs"] : []),
+      "unknown global-state references",
+      "memory",
+      "remote-control",
+    ],
   };
 }
 
-function deletionVerificationStatus(validation: DeleteValidationItem[]): "passed" | "partial" | "failed" {
+function deletionVerificationStatus(
+  validation: DeleteValidationItem[],
+  dedicatedLogsRetained: boolean,
+): "passed" | "partial" | "failed" {
   let partial = false;
   for (const item of validation) {
     const sqliteRemaining =
@@ -428,7 +475,8 @@ function deletionVerificationStatus(validation: DeleteValidationItem[]): "passed
       + item.sqlite.assignedAgentJobs
       + item.sqlite.dynamicToolRows
       + item.sqlite.stage1Rows
-      + item.sqlite.threadGoalRows;
+      + item.sqlite.threadGoalRows
+      + (dedicatedLogsRetained ? 0 : item.sqlite.logRows);
     if (
       item.filePathsRemaining.length > 0
       || item.shellSnapshotFilesRemaining.length > 0
@@ -512,6 +560,8 @@ export async function deleteSessions(
   let historyResult: ReturnType<typeof filterJsonLines<HistoryRecord>>;
   let sqliteSnapshots: Awaited<ReturnType<typeof captureSqlitePaths>>;
   let sqliteRecoveryBundle: ReturnType<typeof exportSqliteRecordsForRestore>["state"];
+  let dedicatedLogRecoveryRows: Record<string, unknown>[] = [];
+  let encodedDedicatedLogRecoveryRows: Record<string, unknown>[] = [];
   let globalStateAfterText: string | null = originalGlobalStateText;
   let lock: MutationLock | undefined = options.lock;
   const ownsLock = !lock;
@@ -581,6 +631,11 @@ export async function deleteSessions(
       stage1Outputs: sqliteBundles.flatMap((bundle) => bundle.stage1Outputs),
       threadGoals: sqliteBundles.flatMap((bundle) => bundle.threadGoals),
     };
+    if (options.recoveryKind !== "trash") {
+      dedicatedLogRecoveryRows = collectDedicatedLogRecords(scan.root.logsSqlitePath, [...targetIds]);
+      encodedDedicatedLogRecoveryRows = encodeSqliteRecordsForJson(dedicatedLogRecoveryRows);
+      assertDedicatedLogRecoveryPayloadBounds(encodedDedicatedLogRecoveryRows);
+    }
 
     sessionIndexResult = filterJsonLines<SessionIndexRecord>(
       originalSessionIndexText,
@@ -609,12 +664,13 @@ export async function deleteSessions(
   let historyWritten = false;
   let globalStateWritten = false;
   let sqliteMutationStarted = false;
+  let dedicatedLogsDeleted = false;
   const deletedFiles: Array<{ target: Pick<SessionFileTarget | ShellSnapshotFile, "relativePath">; bytes: Uint8Array }> = [];
 
   try {
     const registered = requireMutationTrustedRoots(scan);
     const sqliteContext = registered.sqliteHome;
-    if ((scan.root.sqlitePath || scan.root.goalsSqlitePath) && !sqliteContext) {
+    if ((scan.root.sqlitePath || scan.root.goalsSqlitePath || scan.root.logsSqlitePath) && !sqliteContext) {
       throw new MutationSafetyError("UNSAFE_PATH", "destructive operation requires the registered SQLite trusted root");
     }
     const recoveryFiles = [
@@ -664,7 +720,11 @@ export async function deleteSessions(
               goalsRelativePath: scan.root.goalsSqlitePath
                 ? toManagedRelativePath(sqliteContext, scan.root.goalsSqlitePath)
                 : null,
+              logsRelativePath: options.recoveryKind !== "trash" && scan.root.logsSqlitePath
+                ? toManagedRelativePath(sqliteContext, scan.root.logsSqlitePath)
+                : null,
               records: sqliteRecoveryBundle as unknown as Record<string, unknown>,
+              dedicatedLogRecords: encodedDedicatedLogRecoveryRows,
             },
           }
         : {}),
@@ -752,7 +812,7 @@ export async function deleteSessions(
       }
     }
 
-    if (scan.root.sqlitePath || scan.root.goalsSqlitePath) {
+    if (scan.root.sqlitePath || scan.root.goalsSqlitePath || scan.root.logsSqlitePath) {
       for (const entry of sqliteSnapshots) {
         await revalidateManagedPath(entry.context, entry.snapshot);
       }
@@ -764,11 +824,23 @@ export async function deleteSessions(
       }
       await lock!.checkpoint("sqlite-state", "started");
       deleteStateRows(scan.root.sqlitePath, [...targetIds]);
+      if (options.recoveryKind !== "trash" && scan.root.logsSqlitePath) {
+        deleteDedicatedLogRows(
+          scan.root.logsSqlitePath,
+          [...targetIds],
+          dedicatedLogKeysFromRecords(dedicatedLogRecoveryRows),
+          dedicatedLogRecoveryRows,
+        );
+        dedicatedLogsDeleted = true;
+      }
       await lock!.checkpoint("sqlite-state", "committed");
     }
   } catch (error) {
     try {
       if (sqliteMutationStarted) {
+        if (dedicatedLogsDeleted) {
+          restoreDedicatedLogRecords(scan.root.logsSqlitePath, dedicatedLogRecoveryRows);
+        }
         reconcileSqliteRecordsForRecovery(
           scan.root.sqlitePath,
           scan.root.goalsSqlitePath,
@@ -827,7 +899,7 @@ export async function deleteSessions(
   await lock!.setStage("verifying");
   try {
     const validation = await validateDeletion(scan, sessions);
-    const verificationStatus = deletionVerificationStatus(validation);
+    const verificationStatus = deletionVerificationStatus(validation, options.recoveryKind === "trash");
     const warnings = verificationStatus === "passed"
       ? []
       : ["操作已完成，但验证未覆盖或未清除所有报告项；请查看 verificationScope 与 validation。"];
@@ -838,7 +910,7 @@ export async function deleteSessions(
       confirmed: true,
       operationStatus: "committed",
       verificationStatus,
-      verificationScope: verificationScope(),
+      verificationScope: verificationScope(options.recoveryKind === "trash"),
       warnings,
       errorCode: verificationStatus === "failed" ? "POST_COMMIT_VERIFY_FAILED" : null,
     };
@@ -850,7 +922,7 @@ export async function deleteSessions(
       confirmed: true,
       operationStatus: "committed",
       verificationStatus: "failed",
-      verificationScope: verificationScope(),
+      verificationScope: verificationScope(options.recoveryKind === "trash"),
       warnings: [`操作已完成，但验证失败：${formatDeleteError(error)}`],
       errorCode: "POST_COMMIT_VERIFY_FAILED",
     };

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import { readdir } from "node:fs/promises";
 
 import { assertDestructivePlatformSupported } from "./destructive-policy.js";
 import {
@@ -21,7 +22,19 @@ import {
 } from "./path-safety.js";
 import { atomicWriteManagedFile, removeManagedPath } from "./mutation-safety.js";
 import type { MutationResultMetadata, VerificationScope, VerificationStatus } from "./types.js";
-import { reconcileSqliteRecordsForRecovery, type SqliteRecordBundle } from "./sqlite.js";
+import {
+  type DedicatedLogKey,
+  MAX_DEDICATED_LOG_ENCODED_BYTES,
+  MAX_DEDICATED_LOG_PURGE_KEYS,
+  assertDedicatedLogKeyPayloadBounds,
+  MAX_DEDICATED_LOG_RECOVERY_ROWS,
+  deleteDedicatedLogRowsByKeys,
+  classifyDedicatedLogKeyPresence,
+  decodeSqliteRecordsFromJson,
+  reconcileDedicatedLogRecordsForRecovery,
+  reconcileSqliteRecordsForRecovery,
+  type SqliteRecordBundle,
+} from "./sqlite.js";
 import { expandCodexPath } from "./root.js";
 import { scanCodexRoot } from "./scan.js";
 
@@ -60,7 +73,11 @@ export interface OperationRecoveryPayloadV1 {
     sqliteHomeIdentity: { dev: number; ino: number };
     stateRelativePath: string | null;
     goalsRelativePath: string | null;
+    logsRelativePath?: string | null;
     records: Record<string, unknown>;
+    dedicatedLogRecords?: Record<string, unknown>[];
+    dedicatedLogTargetIds?: string[];
+    dedicatedLogKeys?: DedicatedLogKey[];
   };
   trash?: {
     entryRelativePath?: string;
@@ -181,6 +198,58 @@ export function parseOperationRecoveryPayload(
         "SQLite recovery root identity does not match the identity fixed in the operation lock and journal",
       );
     }
+    if (
+      payload.sqlite.dedicatedLogTargetIds !== undefined
+      && (
+        !Array.isArray(payload.sqlite.dedicatedLogTargetIds)
+        || payload.sqlite.dedicatedLogTargetIds.some((id) => (
+          typeof id !== "string" || !interrupted.targetIds.includes(id)
+        ))
+      )
+    ) {
+      throw new MutationSafetyError("RECOVERY_REQUIRED", "dedicated logs recovery targets exceed the locked target ids");
+    }
+    const dedicatedLogRecords = payload.sqlite.dedicatedLogRecords ?? [];
+    const dedicatedLogKeys = payload.sqlite.dedicatedLogKeys ?? [];
+    if (
+      payload.sqlite.logsRelativePath
+      && payload.strategy === "rollforward"
+      && payload.sqlite.dedicatedLogKeys === undefined
+    ) {
+      throw new MutationSafetyError("RECOVERY_REQUIRED", "rollforward logs recovery is missing fixed row keys");
+    }
+    if (
+      !Array.isArray(dedicatedLogRecords)
+      || !Array.isArray(dedicatedLogKeys)
+      || dedicatedLogRecords.length > MAX_DEDICATED_LOG_RECOVERY_ROWS
+      || dedicatedLogKeys.length > MAX_DEDICATED_LOG_PURGE_KEYS
+      || Buffer.byteLength(JSON.stringify(dedicatedLogRecords), "utf8") > MAX_DEDICATED_LOG_ENCODED_BYTES
+    ) {
+      throw new MutationSafetyError("RECOVERY_REQUIRED", "dedicated logs recovery payload exceeds safe bounds");
+    }
+    const seenLogIds = new Set<string>();
+    for (const record of dedicatedLogRecords) {
+      if (!record || typeof record !== "object" || Array.isArray(record)) {
+        throw new MutationSafetyError("RECOVERY_REQUIRED", "dedicated logs recovery record is invalid");
+      }
+      const row = record as Record<string, unknown>;
+      const key = typeof row.id === "string" || typeof row.id === "number" ? String(row.id) : "";
+      if (!key || typeof row.thread_id !== "string" || !interrupted.targetIds.includes(row.thread_id) || seenLogIds.has(key)) {
+        throw new MutationSafetyError("RECOVERY_REQUIRED", "dedicated logs recovery record does not match locked targets");
+      }
+      seenLogIds.add(key);
+    }
+    const seenKeyIds = new Set<string>();
+    assertDedicatedLogKeyPayloadBounds(dedicatedLogKeys as DedicatedLogKey[], "RECOVERY_REQUIRED");
+    for (const key of dedicatedLogKeys) {
+      const rawKeyId = key && typeof key === "object" ? (key as DedicatedLogKey).id : null;
+      const keyId = typeof rawKeyId === "string" || typeof rawKeyId === "number" ? String(rawKeyId) : "";
+      const threadId = key && typeof key === "object" ? (key as DedicatedLogKey).threadId : null;
+      if (!keyId || typeof threadId !== "string" || !interrupted.targetIds.includes(threadId) || seenKeyIds.has(keyId)) {
+        throw new MutationSafetyError("RECOVERY_REQUIRED", "dedicated logs recovery key does not match locked targets");
+      }
+      seenKeyIds.add(keyId);
+    }
   }
   return payload as OperationRecoveryPayloadV1;
 }
@@ -275,8 +344,18 @@ function parseSqliteRecordBundle(value: unknown): SqliteRecordBundle {
   return decodeSqliteJsonValue(record) as SqliteRecordBundle;
 }
 
-async function reconcileRecoverySqlite(payload: OperationRecoveryPayloadV1): Promise<void> {
-  if (!payload.sqlite) return;
+async function reconcileRecoverySqlite(
+  payload: OperationRecoveryPayloadV1,
+  protectedPurgeLogTargetIds: Set<string>,
+): Promise<{
+  retainedDedicatedLogTargetIds: string[];
+  protectedButAlreadyDeletedLogTargetIds: string[];
+}> {
+  if (!payload.sqlite) {
+    return { retainedDedicatedLogTargetIds: [], protectedButAlreadyDeletedLogTargetIds: [] };
+  }
+  const retainedDedicatedLogTargetIds: string[] = [];
+  const protectedButAlreadyDeletedLogTargetIds: string[] = [];
   const sqliteContext = await createTrustedRootContext(payload.sqlite.sqliteHomeRealPath);
   if (
     sqliteContext.realPath !== payload.sqlite.sqliteHomeRealPath
@@ -291,11 +370,88 @@ async function reconcileRecoverySqlite(payload: OperationRecoveryPayloadV1): Pro
   const goalsPath = payload.sqlite.goalsRelativePath
     ? reconstructManagedPath(sqliteContext, payload.sqlite.goalsRelativePath).absolutePath
     : null;
-  for (const relativePath of [payload.sqlite.stateRelativePath, payload.sqlite.goalsRelativePath]) {
+  const logsPath = payload.sqlite.logsRelativePath
+    ? reconstructManagedPath(sqliteContext, payload.sqlite.logsRelativePath).absolutePath
+    : null;
+  for (const relativePath of [payload.sqlite.stateRelativePath, payload.sqlite.goalsRelativePath, payload.sqlite.logsRelativePath]) {
     if (!relativePath) continue;
     await captureManagedPath(sqliteContext, relativePath, { expectedKind: "file", allowMissing: false });
   }
   reconcileSqliteRecordsForRecovery(statePath, goalsPath, parseSqliteRecordBundle(payload.sqlite.records));
+  const dedicatedLogRecords = payload.sqlite.dedicatedLogRecords ?? [];
+  if (payload.strategy === "rollback") {
+    reconcileDedicatedLogRecordsForRecovery(logsPath, decodeSqliteRecordsFromJson(dedicatedLogRecords));
+  } else if (logsPath) {
+    const keys = payload.sqlite.dedicatedLogKeys ?? [];
+    const unprotectedKeys = keys.filter((key) => !protectedPurgeLogTargetIds.has(key.threadId));
+    deleteDedicatedLogRowsByKeys(logsPath, unprotectedKeys);
+    if (classifyDedicatedLogKeyPresence(logsPath, unprotectedKeys) !== "absent") {
+      throw new MutationSafetyError("RECOVERY_REQUIRED", "purge log rows remained after idempotent recovery");
+    }
+    const protectedKeysByTarget = new Map<string, DedicatedLogKey[]>();
+    for (const key of keys) {
+      if (!protectedPurgeLogTargetIds.has(key.threadId)) continue;
+      const targetKeys = protectedKeysByTarget.get(key.threadId) ?? [];
+      targetKeys.push(key);
+      protectedKeysByTarget.set(key.threadId, targetKeys);
+    }
+    for (const [sessionId, protectedKeys] of [...protectedKeysByTarget.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+      const protectedPresence = classifyDedicatedLogKeyPresence(logsPath, protectedKeys);
+      if (protectedPresence !== "absent") retainedDedicatedLogTargetIds.push(sessionId);
+      if (protectedPresence !== "present") protectedButAlreadyDeletedLogTargetIds.push(sessionId);
+    }
+  }
+  return {
+    retainedDedicatedLogTargetIds,
+    protectedButAlreadyDeletedLogTargetIds,
+  };
+}
+
+async function protectedPurgeLogTargets(
+  context: TrustedRootContext,
+  payload: OperationRecoveryPayloadV1,
+  currentScan: Awaited<ReturnType<typeof scanCodexRoot>>,
+): Promise<Set<string>> {
+  const targetIds = new Set(payload.sqlite?.dedicatedLogTargetIds ?? []);
+  const protectedIds = new Set<string>();
+  if (payload.kind !== "purge" || targetIds.size === 0) return protectedIds;
+  for (const session of currentScan.sessions) {
+    if (
+      targetIds.has(session.id)
+      && (session.fileTargets.length > 0 || session.hasThread || session.hasSessionIndex || session.hasHistory)
+    ) {
+      protectedIds.add(session.id);
+    }
+  }
+
+  const trashRelativePath = ".codex-sessions-trash";
+  const trashSnapshot = await captureManagedPath(context, trashRelativePath, {
+    expectedKind: "directory",
+    allowMissing: true,
+  });
+  if (!trashSnapshot.exists) return protectedIds;
+  const currentEntry = payload.trash?.entryRelativePath ? path.basename(payload.trash.entryRelativePath) : null;
+  const quarantineEntry = payload.trash?.quarantineRelativePath ? path.basename(payload.trash.quarantineRelativePath) : null;
+  const entries = await readdir(trashSnapshot.absolutePath, { withFileTypes: true });
+  await revalidateManagedPath(context, trashSnapshot);
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith(".") || entry.name === currentEntry || entry.name === quarantineEntry) continue;
+    const manifestRelativePath = `${trashRelativePath}/${entry.name}/manifest.json`;
+    try {
+      const bytes = await readManagedFile(context, manifestRelativePath);
+      const parsed = JSON.parse(Buffer.from(bytes).toString("utf8")) as {
+        manifest?: { trashId?: unknown; sessionIds?: unknown };
+      };
+      if (parsed.manifest?.trashId !== entry.name || !Array.isArray(parsed.manifest.sessionIds)) continue;
+      for (const sessionId of parsed.manifest.sessionIds) {
+        if (typeof sessionId === "string" && targetIds.has(sessionId)) protectedIds.add(sessionId);
+      }
+    } catch {
+      // Invalid trash entries cannot authorize deletion. Retaining logs is the safe fallback.
+      continue;
+    }
+  }
+  return protectedIds;
 }
 
 async function reconcileRecoveryTrash(
@@ -420,7 +576,10 @@ export async function getRecoveryStatus(rootArg?: string): Promise<RecoveryStatu
   };
 }
 
-function recoveryVerificationScope(payload: OperationRecoveryPayloadV1): VerificationScope {
+function recoveryVerificationScope(
+  payload: OperationRecoveryPayloadV1,
+  retainedDedicatedLogTargetIds: string[] = [],
+): VerificationScope {
   const paths = payload.files.map((file) => file.relativePath.replaceAll("\\", "/"));
   return {
     sessionFiles: paths.some((relativePath) => (
@@ -433,7 +592,11 @@ function recoveryVerificationScope(payload: OperationRecoveryPayloadV1): Verific
     sqlite: payload.sqlite !== undefined,
     trashEntry: payload.trash !== undefined,
     operationJournal: true,
-    retainedSurfaces: ["logs_N.sqlite", "memory", "remote-control"],
+    retainedSurfaces: [
+      ...(payload.sqlite?.logsRelativePath && retainedDedicatedLogTargetIds.length === 0 ? [] : ["logs_N.sqlite"]),
+      "memory",
+      "remote-control",
+    ],
   };
 }
 
@@ -590,19 +753,28 @@ export async function recoverInterruptedOperation(rootArg?: string): Promise<Rec
   if (payload.rootRealPath !== context.realPath) {
     throw new MutationSafetyError("RECOVERY_REQUIRED", "recovery payload belongs to a different trusted root");
   }
+  const protectedLogTargetIds = await protectedPurgeLogTargets(context, payload, currentScan);
   await reconcileRecoveryFiles(context, payload);
-  await reconcileRecoverySqlite(payload);
+  const sqliteRecovery = await reconcileRecoverySqlite(payload, protectedLogTargetIds);
   await reconcileRecoveryTrash(context, payload);
   const finalStage = payload.strategy === "rollback" ? "rolled_back" : "committed";
   await finalizeInterruptedMutation(context, interrupted, finalStage, { recovered: true });
+  const logsAlreadyDeleted = sqliteRecovery.protectedButAlreadyDeletedLogTargetIds;
   return {
     operationId: interrupted.operationId,
     kind: interrupted.kind,
     recoveredBy: payload.strategy,
     operationStatus: finalStage,
-    verificationStatus: "passed",
-    verificationScope: recoveryVerificationScope(payload),
-    warnings: [],
+    verificationStatus: logsAlreadyDeleted.length > 0 ? "partial" : "passed",
+    verificationScope: recoveryVerificationScope(payload, sqliteRecovery.retainedDedicatedLogTargetIds),
+    warnings: [
+      ...(sqliteRecovery.retainedDedicatedLogTargetIds.length > 0
+        ? [`恢复时检测到 live 或其他可恢复副本，已保留这些 session 的日志：${sqliteRecovery.retainedDedicatedLogTargetIds.join(", ")}`]
+        : []),
+      ...(logsAlreadyDeleted.length > 0
+        ? [`恢复前日志已经删除，无法声称为后来出现的 live 或其他可恢复副本保留：${logsAlreadyDeleted.join(", ")}`]
+        : []),
+    ],
     errorCode: null,
   };
 }

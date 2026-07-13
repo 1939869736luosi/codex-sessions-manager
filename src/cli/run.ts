@@ -18,6 +18,7 @@ import {
   getSessionFamilyOperation,
   listProjectsOperation,
   listTrashOperation,
+  monthlyResidueReviewOperation,
   planDeleteOperation,
   previewDeletePlanOperation,
   previewRootDeleteOperation,
@@ -48,6 +49,7 @@ import {
   formatFamilyQuery,
   formatGroupedList,
   formatList,
+  formatMonthlyResidueReview,
   formatPlanDelete,
   formatPreviewPlan,
   formatPreview,
@@ -75,6 +77,7 @@ type CommandName =
   | "audit"
   | "audit-root"
   | "preview-root"
+  | "monthly-review"
   | "export"
   | "events"
   | "plan-delete"
@@ -136,6 +139,7 @@ Usage:
   codex-sessions audit <session-id> [--root PATH] [--json]
   codex-sessions audit-root [--root PATH] [--json] [--limit N] [--status STATUS...] [--source SOURCE...] [--all]
   codex-sessions preview-root [--root PATH] [--json] [--limit N] [--status STATUS...] [--source SOURCE...] [--all]
+  codex-sessions monthly-review [--root PATH] [--json] [--details] [--limit N] [--status STATUS...] [--source SOURCE...] [--all]
   codex-sessions export <session-id> [--root PATH] [--output FILE] [--json]
   codex-sessions events <exact-session-id> [--root PATH] [--output FILE]
   codex-sessions plan-delete <session-id...> [--root PATH] [--json] [--write-plan FILE]
@@ -167,6 +171,7 @@ Notes:
   - audit-root 只读扫描整个 root 的疑似残留，默认 limit=50
   - audit-root 多个 --status 或 --source 为 OR；同时使用 status 和 source 时为 AND
   - preview-root 只读批量预览 audit-root 筛出的候选，不删除、不递归处理 family
+  - monthly-review 合并生成每月残留审计与删除预览；默认仅返回 5 条警告样本，--details 才展开
   - plan-delete 是只读删除计划：explicit session IDs 会进入 selectedIds；sourceKind root-level 模式只输出 candidateIds，不是授权
   - plan-delete --source-kind 必须显式 --limit（最大 50），拒绝 unknown；可重复 --source-kind/--status 使用 OR
   - plan-delete --source-kind 暂不支持 --write-plan；candidateIds 需人工复核后再显式 ID 预览
@@ -176,7 +181,7 @@ Notes:
   - global-state exact-key 只支持 P11 两个路径；delete 预览只显示 path/rule/shape/bytes，不打印 prompt 或完整 value
   - 删除 exact-key 应先看 delete 预览，再加 --yes；audit-root / preview-root 不能当作删除确认
   - 其它 unknown global-state 只报警，不会因为路径相似、全文命中或 root 扫描候选而删除
-  - audit-root/preview-root --status 可选: absent | clean | present | partial | broken-family | risky-global-state | db-only | index-only | partial-residue | global-state-exact-key | global-state-unknown | shell-snapshot-residue | index-residue | sqlite-residue | missing-parent-edge | missing-child-edge
+  - audit-root/preview-root --status 可选: absent | clean | present | partial | broken-family | risky-global-state | storage-conflict | db-only | index-only | partial-residue | global-state-exact-key | global-state-unknown | shell-snapshot-residue | index-residue | sqlite-residue | missing-parent-edge | missing-child-edge
   - audit-root/preview-root --source 可选: rollout-files | shell-snapshots | session-index | history | sqlite | global-state-known | global-state-exact-key | global-state-unknown | thread-spawn-edges
   - delete --trash --yes 会先写入回收站，再清理 live session
   - delete / cleanup-index 确认执行只接受完整 UUID；active session 还必须显式加 --allow-active
@@ -412,7 +417,7 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
     return 0;
   }
 
-  if (command === "audit-root" || command === "preview-root") {
+  if (command === "audit-root" || command === "preview-root" || command === "monthly-review") {
     if (rest.length !== 0) throw new Error(`${command} 不接收 session-id。`);
     if (values.yes) throw new Error(`${command} 不支持 --yes；它始终只读，不执行删除。`);
     if (values.trash) throw new Error(`${command} 不支持 --trash；它始终只读，不执行删除。`);
@@ -422,13 +427,17 @@ export async function runCli(argv: string[], io: CliIo = defaultIo()): Promise<n
       includeAll: values.all,
       statuses: statusValues,
       sources: sourceValues,
+      includeDetails: values.details,
     };
     if (command === "audit-root") {
       const result = await auditRootOperation(input);
       io.stdout(asJson ? JSON.stringify(result.data, null, 2) : formatRootResidueAudit(result.data));
-    } else {
+    } else if (command === "preview-root") {
       const result = await previewRootDeleteOperation(input);
       io.stdout(asJson ? JSON.stringify(result.data, null, 2) : formatRootDeletePreview(result.data));
+    } else {
+      const result = await monthlyResidueReviewOperation(input);
+      io.stdout(asJson ? JSON.stringify(result.data, null, 2) : formatMonthlyResidueReview(result.data));
     }
     return 0;
   }

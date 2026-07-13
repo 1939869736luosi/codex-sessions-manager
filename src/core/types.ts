@@ -132,6 +132,10 @@ export interface SessionMemoryLink {
   stage1Present: boolean;
   rolloutSummaryPresent: boolean;
   phase2Influence: MemoryPhase2Influence;
+  sourceUpdatedAt: number | null;
+  selectedForPhase2: boolean | "unknown";
+  selectedForPhase2SourceUpdatedAt: number | null;
+  selectionMatchesCurrentSource: boolean | "unknown";
   retainedAfterSessionDelete: true;
   schemaStatus: MemorySchemaStatus;
   warnings: string[];
@@ -527,6 +531,7 @@ export type SessionResidueAuditStatus =
   | "partial"
   | "broken-family"
   | "risky-global-state"
+  | "storage-conflict"
   | "db-only"
   | "index-only";
 
@@ -636,6 +641,7 @@ export interface RootResidueSurfaceSummary {
   sessionIndexRows: number;
   historyRows: number;
   sqliteRows: number;
+  dedicatedLogRows: number;
   knownGlobalStateRefs: number;
   exactKeyGlobalStateRefs: number;
   possibleUnknownGlobalStateRefs: number;
@@ -658,6 +664,7 @@ export interface RootResidueCandidate {
   sources: RootResidueCandidateSource[];
   surfaces: RootResidueSurfaceSummary;
   family: RootResidueFamilySummary;
+  warningSummary: WarningSummary;
   warnings: string[];
   recommendedAuditCommand: string;
 }
@@ -666,6 +673,12 @@ export interface RootResidueFilters {
   statuses: RootResidueCandidateStatus[];
   sources: RootResidueCandidateSource[];
   includeAll: boolean;
+}
+
+export interface WarningSummary {
+  total: number;
+  returned: number;
+  omitted: number;
 }
 
 export interface RootResidueAudit {
@@ -680,6 +693,7 @@ export interface RootResidueAudit {
   byStatus: Record<string, number>;
   bySource: Record<string, number>;
   candidates: RootResidueCandidate[];
+  warningSummary: WarningSummary;
   warnings: string[];
 }
 
@@ -689,6 +703,7 @@ export interface RootDeletePreviewCounts {
   sessionIndexRows: number;
   historyRows: number;
   sqliteRows: number;
+  dedicatedLogRows: number;
   knownGlobalStateRefs: number;
   exactKeyGlobalStateRefs: number;
   possibleUnknownGlobalStateRefs: number;
@@ -716,6 +731,8 @@ export interface RootDeletePreviewCandidate {
   recommendedAuditCommand: string;
   previewOnlyCommand: string;
   recommendedPreviewCommand: string;
+  deleteSupported: boolean;
+  deleteUnsupportedReason: string | null;
 }
 
 export interface RootDeletePreview {
@@ -730,13 +747,25 @@ export interface RootDeletePreview {
   aggregatePreview: RootDeletePreviewCounts;
   familyWarningSummary: RootDeletePreviewFamilyWarningSummary;
   candidates: RootDeletePreviewCandidate[];
+  warningSummary: WarningSummary;
   warnings: string[];
+}
+
+export interface MonthlyResidueReview {
+  readOnly: true;
+  officialDeleteFirst: true;
+  memoryRetained: true;
+  audit: RootResidueAudit;
+  preview: RootDeletePreview;
+  nextSteps: string[];
 }
 
 export interface DeletePreviewItem {
   sessionId: string;
   title: string;
   archived: boolean;
+  storageConflict: boolean;
+  warnings: string[];
   filePaths: string[];
   shellSnapshotFiles: string[];
   globalStateRefs: number;
@@ -752,6 +781,7 @@ export interface DeletePreviewItem {
 
 export interface DeletePreview {
   memoryRetained: true;
+  dedicatedLogsRetained: boolean;
   retainedSurfaces: string[];
   items: DeletePreviewItem[];
   familyWarnings: DeleteFamilyWarning[];
@@ -927,6 +957,7 @@ export interface DeleteValidationItem {
   sessionIndexRowsRemaining: number;
   historyRowsRemaining: number;
   sqlite: SqliteDeletionCounts;
+  memoryLink: SessionMemoryLink;
 }
 
 export type OperationStatus = "not_started" | "committed" | "rolled_back" | "recovery_required";

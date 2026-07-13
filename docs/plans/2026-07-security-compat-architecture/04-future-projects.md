@@ -27,7 +27,7 @@ Plain meaning: explain why a task wasted time or tokens by finding repeated fail
 
 Potential scope: read-only analysis of `logs_N.sqlite` for execution patterns and debugging.
 
-Boundary: logs are retained observation data, not ordinary cleanup residue. No delete support should be inferred from the analysis project.
+Historical boundary: before v0.8.0, logs were retained observation data and no delete support could be inferred from this analysis project. **Superseded for exact thread-linked lifecycle cleanup in v0.8.0:** confirmed permanent deletion now removes only exact full-UUID `logs.thread_id` rows; trash and restore retain them; final purge deletes them only when no live or other recoverable copy protects the same ID. Logs-only inventory remains read-only, memory remains read-only, and no physical-byte erasure is promised. The Loop Lens project itself is still analysis-only and grants no broader deletion authority.
 
 ## Amp Explorer
 

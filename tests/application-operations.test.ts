@@ -112,7 +112,7 @@ describe("shared application operations", () => {
     expect(result.report.globalState.knownRefs.length).toBeLessThanOrEqual(5);
     expect(result.report.globalState.exactKeyRefs.length).toBeLessThanOrEqual(5);
     expect(result.report.globalState.possibleUnknownRefs.length).toBeLessThanOrEqual(5);
-    expect(result.report.warnings.length).toBeLessThanOrEqual(20);
+    expect(result.report.warnings.length).toBeLessThanOrEqual(5);
   });
 
   it("returns complete doctor references only when details are explicit", async () => {

@@ -213,6 +213,7 @@ describe("mutation safety", () => {
     expect(names("purge")).toEqual([
       "operation-lock",
       "recovery-payload",
+      "purge-logs",
       "purge-quarantine",
       "purge-remove",
     ]);

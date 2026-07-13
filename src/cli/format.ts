@@ -13,6 +13,7 @@ import type {
   RootDeletePreviewCandidate,
   RootDeletePreviewCounts,
   RootResidueAudit,
+  MonthlyResidueReview,
   ScanResult,
   SessionEntry,
   SessionMemoryLink,
@@ -707,6 +708,7 @@ export function formatPreview(preview: DeletePreview): string {
       `${item.title}`,
       `  id: ${item.sessionId}`,
       `  archived: ${item.archived ? "yes" : "no"}`,
+      `  storage_conflict: ${item.storageConflict ? "yes" : "no"}`,
       `  files: ${item.filePaths.length}`,
       `  shell_snapshots: ${item.shellSnapshotFiles.length}`,
       `  global_state_refs: ${item.globalStateRefs}`,
@@ -719,7 +721,10 @@ export function formatPreview(preview: DeletePreview): string {
       `  session_index: ${item.sessionIndexRows}`,
       `  history: ${item.historyRows}`,
       `  sqlite: ${sumSqlite(item.sqlite)}`,
-      `  sqlite_retained: logs=${item.sqlite.logRows}`,
+      preview.dedicatedLogsRetained
+        ? `  sqlite_retained: logs=${item.sqlite.logRows}`
+        : `  sqlite_delete: logs=${item.sqlite.logRows}`,
+      ...item.warnings.map((warning) => `  warning: ${warning}`),
     ]),
     ...formatFamilyWarnings(preview.familyWarnings),
   ];
@@ -987,6 +992,7 @@ function formatRootResidueCounts(candidate: RootResidueAudit["candidates"][numbe
     `index=${candidate.surfaces.sessionIndexRows}`,
     `history=${candidate.surfaces.historyRows}`,
     `sqlite=${candidate.surfaces.sqliteRows}`,
+    `logs=${candidate.surfaces.dedicatedLogRows}`,
     `global_known=${candidate.surfaces.knownGlobalStateRefs}`,
     `global_exact_key=${candidate.surfaces.exactKeyGlobalStateRefs}`,
     `global_unknown=${candidate.surfaces.possibleUnknownGlobalStateRefs}`,
@@ -1001,6 +1007,7 @@ function formatRootPreviewCounts(counts: RootDeletePreviewCounts): string {
     `index=${counts.sessionIndexRows}`,
     `history=${counts.historyRows}`,
     `sqlite=${counts.sqliteRows}`,
+    `logs=${counts.dedicatedLogRows}`,
     `global_known=${counts.knownGlobalStateRefs}`,
     `global_exact_key=${counts.exactKeyGlobalStateRefs}`,
     `global_unknown=${counts.possibleUnknownGlobalStateRefs}`,
@@ -1083,6 +1090,7 @@ function formatRootResidueSummary(audit: RootResidueAudit): string[] {
     `疑似残留: ${audit.returnedCandidates}/${audit.totalCandidatesAfterFilter}，limit=${audit.limit}`,
     `筛选前候选: ${audit.totalCandidatesBeforeFilter}`,
     `筛选: ${formatRootResidueFilters(audit)}`,
+    `警告样本: ${audit.warningSummary.returned}/${audit.warningSummary.total}`,
     "",
     "按状态（筛选后，limit 前）:",
     ...formatCountLines(audit.byStatus),
@@ -1175,6 +1183,7 @@ export function formatRootDeletePreview(preview: RootDeletePreview): string {
     `本次预览 ID 数: ${preview.previewedCandidates}`,
     `省略 ID 数: ${preview.omittedCandidates}`,
     `limit: ${preview.limit}`,
+    `警告样本: ${preview.warningSummary.returned}/${preview.warningSummary.total}`,
     "",
     "总计",
     `- rollout files: ${preview.aggregatePreview.rolloutFiles}`,
@@ -1190,6 +1199,21 @@ export function formatRootDeletePreview(preview: RootDeletePreview): string {
     ...formatFamilyWarningSummary(preview),
     ...candidateRows,
     ...warningLines,
+  ].join("\n");
+}
+
+export function formatMonthlyResidueReview(review: MonthlyResidueReview): string {
+  return [
+    "每月残留检查（只读）",
+    "建议先用 Codex 官方功能删除，本工具用于检查未清理的本机残留。",
+    "Memory 始终保留，本检查不会修改它。",
+    "",
+    formatRootResidueAudit(review.audit),
+    "",
+    formatRootDeletePreview(review.preview),
+    "",
+    "下一步（仍为只读）:",
+    ...(review.nextSteps.length ? review.nextSteps.map((step) => `- ${step}`) : ["- 无"]),
   ].join("\n");
 }
 

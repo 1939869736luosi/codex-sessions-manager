@@ -59,7 +59,7 @@ export async function deleteSessionsOperation(input: MutationRootInput & {
       executed: false as const,
       action: input.trash ? "trash" as const : "delete" as const,
       data: {
-        preview: buildDeletePreview(scan, sessions),
+        preview: buildDeletePreview(scan, sessions, { dedicatedLogsRetained: Boolean(input.trash) }),
         warnings: scan.warnings,
         action: input.trash ? "trash" as const : "delete" as const,
         requiresConfirmation: true,

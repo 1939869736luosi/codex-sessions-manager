@@ -38,6 +38,8 @@ import { createRecoveryFileTransition, type OperationRecoveryPayloadV1 } from ".
 import { scanCodexRoot } from "./scan.js";
 import {
   collectSqliteDeletionCounts,
+  collectDedicatedLogKeys,
+  deleteDedicatedLogRows,
   assertNoSqliteRestoreKeyConflicts,
   decodeSqliteRecordBundleFromJson,
   decodeSqliteRecordsFromJson,
@@ -948,7 +950,7 @@ async function readScannedManagedFile(
 
 async function buildTrashBundle(scan: ScanResult, sessions: SessionEntry[], trashId: string): Promise<TrashBundle> {
   const trustedRoot = requireMutationTrustedRoots(scan).root;
-  const preview = buildDeletePreview(scan, sessions);
+  const preview = buildDeletePreview(scan, sessions, { dedicatedLogsRetained: true });
   const sessionIds = sessions.map((session) => session.id);
   const sqliteSnapshots = await captureRestoreSqlitePaths(scan);
   for (const entry of sqliteSnapshots) {
@@ -1729,15 +1731,39 @@ export async function purgeTrashEntry(rootArg: string | undefined, idOrSessionId
     throw new Error(`找不到回收站记录：${idOrSessionId}`);
   }
   await secureTrashDirectories(trustedRoot);
-  const entry = resolveTrashEntry(await readTrashEntries(scan.root.rootPath), idOrSessionId);
+  const allTrashEntries = await readTrashEntries(scan.root.rootPath);
+  const entry = resolveTrashEntry(allTrashEntries, idOrSessionId);
   if (entry.bundle.manifest.trashId !== idOrSessionId) {
     throw new MutationSafetyError("MALFORMED_ID", `purge 写操作必须使用精确 trashId：${entry.bundle.manifest.trashId}`);
   }
+  const sqliteContext = requireMutationTrustedRoots(scan).sqliteHome;
+  const sessionIdsInOtherTrashEntries = new Set(
+    allTrashEntries
+      .filter((candidate) => candidate.bundle && candidate.bundle.manifest.trashId !== entry.bundle.manifest.trashId)
+      .flatMap((candidate) => candidate.bundle?.manifest.sessionIds ?? []),
+  );
+  const dedicatedLogTargetIds = entry.bundle.manifest.sessionIds.filter((sessionId) => {
+    const live = scan.sessions.find((session) => session.id === sessionId);
+    return !sessionIdsInOtherTrashEntries.has(sessionId) && (!live || (
+      live.fileTargets.length === 0
+      && !live.hasThread
+      && !live.hasSessionIndex
+      && !live.hasHistory
+    ));
+  });
+  const dedicatedLogKeys = collectDedicatedLogKeys(scan.root.logsSqlitePath, dedicatedLogTargetIds);
+  const logsSnapshot = scan.root.logsSqlitePath && sqliteContext
+    ? await captureManagedPath(
+        sqliteContext,
+        toManagedRelativePath(sqliteContext, scan.root.logsSqlitePath),
+        { expectedKind: "file", allowMissing: false },
+      )
+    : null;
   const lock = await acquireMutationLock(
     trustedRoot,
     "purge",
     entry.bundle.manifest.sessionIds,
-    requireMutationTrustedRoots(scan).sqliteHome,
+    sqliteContext,
   );
   let phase: "pre_commit" | "commit_in_progress" | "committed" = "pre_commit";
   const quarantineRelativePath = trashRelativePath(".operations", `${lock.operationId}.purge`);
@@ -1755,10 +1781,13 @@ export async function purgeTrashEntry(rootArg: string | undefined, idOrSessionId
       sessionIndex: false,
       history: false,
       globalState: false,
-      sqlite: false,
+      sqlite: Boolean(scan.root.logsSqlitePath),
       trashEntry: true,
       operationJournal: true,
-      retainedSurfaces: [],
+      retainedSurfaces: [
+        ...(dedicatedLogTargetIds.length < entry.bundle.manifest.sessionIds.length ? ["dedicated logs for restored live sessions"] : []),
+        "memory",
+      ],
     },
     warnings,
     errorCode: verificationStatus === "failed" ? "POST_COMMIT_VERIFY_FAILED" : null,
@@ -1786,9 +1815,59 @@ export async function purgeTrashEntry(rootArg: string | undefined, idOrSessionId
         quarantineRelativePath,
         manifestSha256: entry.manifestHash,
       },
+      ...(sqliteContext
+        ? {
+            sqlite: {
+              sqliteHomeRealPath: sqliteContext.realPath,
+              sqliteHomeIdentity: { dev: sqliteContext.identity.dev, ino: sqliteContext.identity.ino },
+              stateRelativePath: null,
+              goalsRelativePath: null,
+              logsRelativePath: scan.root.logsSqlitePath
+                ? toManagedRelativePath(sqliteContext, scan.root.logsSqlitePath)
+                : null,
+              records: {
+                threads: [], logs: [], threadSpawnEdges: [], agentJobItems: [],
+                threadDynamicTools: [], stage1Outputs: [], threadGoals: [],
+              },
+              dedicatedLogRecords: [],
+              dedicatedLogTargetIds,
+              dedicatedLogKeys,
+            },
+          }
+        : {}),
     } satisfies OperationRecoveryPayloadV1);
+    if (scan.root.logsSqlitePath && logsSnapshot && sqliteContext) {
+      await revalidateManagedPath(sqliteContext, logsSnapshot);
+      const currentScan = await scanCodexRoot(rootArg);
+      const becameLive = dedicatedLogTargetIds.filter((sessionId) => {
+        const live = currentScan.sessions.find((session) => session.id === sessionId);
+        return Boolean(live && (
+          live.fileTargets.length > 0 || live.hasThread || live.hasSessionIndex || live.hasHistory
+        ));
+      });
+      if (becameLive.length > 0) {
+        throw new MutationSafetyError("STALE_PLAN", `purge targets became live after preview: ${becameLive.join(", ")}`);
+      }
+      const currentTrashEntries = await readTrashEntries(currentScan.root.rootPath);
+      const appearedInOtherTrash = dedicatedLogTargetIds.filter((sessionId) =>
+        currentTrashEntries.some((candidate) =>
+          candidate.bundle
+          && candidate.bundle.manifest.trashId !== entry.bundle.manifest.trashId
+          && candidate.bundle.manifest.sessionIds.includes(sessionId)));
+      if (appearedInOtherTrash.length > 0) {
+        throw new MutationSafetyError(
+          "STALE_PLAN",
+          `purge targets gained another recoverable trash entry: ${appearedInOtherTrash.join(", ")}`,
+        );
+      }
+    }
     await lock.setStage("committing", { trashId: entry.bundle.manifest.trashId });
     phase = "commit_in_progress";
+    if (scan.root.logsSqlitePath && logsSnapshot && sqliteContext) {
+      await lock.checkpoint("purge-logs", "started", { targetCount: dedicatedLogTargetIds.length });
+      deleteDedicatedLogRows(scan.root.logsSqlitePath, dedicatedLogTargetIds, dedicatedLogKeys);
+      await lock.checkpoint("purge-logs", "committed", { targetCount: dedicatedLogTargetIds.length });
+    }
     await lock.checkpoint("purge-quarantine", "started", { trashId: entry.bundle.manifest.trashId });
     await renameManagedPath(trustedRoot, entry.relativeDir, quarantineRelativePath);
     await lock.checkpoint("purge-quarantine", "committed", { trashId: entry.bundle.manifest.trashId });
@@ -1814,6 +1893,21 @@ export async function purgeTrashEntry(rootArg: string | undefined, idOrSessionId
         "failed",
         ["永久清除已经完成，但提交后验证发现回收站路径仍然存在；请检查 verificationScope。"],
       );
+    }
+    if (scan.root.logsSqlitePath) {
+      const remaining = collectSqliteDeletionCounts(
+        scan.root.sqlitePath,
+        dedicatedLogTargetIds,
+        scan.root.logsSqlitePath,
+        scan.root.goalsSqlitePath,
+      );
+      if ([...remaining.values()].some((counts) => counts.logRows > 0)) {
+        await lock.release("committed", {
+          trashId: entry.bundle.manifest.trashId,
+          verificationStatus: "failed",
+        });
+        return result("failed", ["永久清除已经完成，但关联日志仍然存在。"]);
+      }
     }
     await lock.release("committed", {
       trashId: entry.bundle.manifest.trashId,

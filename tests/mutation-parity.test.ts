@@ -35,7 +35,17 @@ async function createAdminClient() {
 function mutationContract(value: unknown): Record<string, unknown> {
   const result = value as Record<string, any>;
   const previewItems = Array.isArray(result.preview?.items)
-    ? result.preview.items.map((item: Record<string, unknown>) => item.sessionId)
+    ? result.preview.items.map((item: Record<string, unknown>) => ({
+        sessionId: item.sessionId,
+        storageConflict: item.storageConflict,
+      }))
+    : undefined;
+  const validation = Array.isArray(result.validation)
+    ? result.validation.map((item: Record<string, any>) => ({
+        sessionId: item.sessionId,
+        logRows: item.sqlite?.logRows,
+        memoryLink: item.memoryLink,
+      }))
     : undefined;
   return {
     operationStatus: result.operationStatus ?? null,
@@ -62,6 +72,7 @@ function mutationContract(value: unknown): Record<string, unknown> {
     restoredGlobalStateRefs: result.restoredGlobalStateRefs ?? null,
     restoredSqliteRows: result.restoredSqliteRows ?? null,
     skippedSqliteRows: result.skippedSqliteRows ?? null,
+    validation: validation ?? null,
     deletion: result.deletion ? mutationContract(result.deletion) : null,
   };
 }

@@ -14,8 +14,10 @@
   ],
   "observationOnly": [
     "external_agent_config_imports",
-    "logs_N.sqlite",
     "memories_N.sqlite",
     "remote-control"
+  ],
+  "exactThreadLinkedLifecycle": [
+    "logs_N.sqlite"
   ]
 }

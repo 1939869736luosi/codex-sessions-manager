@@ -202,6 +202,7 @@ function buildStatus(options: {
   historyRows: number;
   possibleUnknownGlobalStateRefs: number;
   brokenRelations: number;
+  storageConflict: boolean;
 }): SessionResidueAuditStatus[] {
   const statuses: SessionResidueAuditStatus[] = [];
 
@@ -231,6 +232,10 @@ function buildStatus(options: {
     pushStatus(statuses, "broken-family");
   }
 
+  if (options.storageConflict) {
+    pushStatus(statuses, "storage-conflict");
+  }
+
   return statuses;
 }
 
@@ -239,6 +244,7 @@ function describeCurrentState(
   knownLocally: boolean,
   hasAnyResidue: boolean,
   hasOriginalRollout: boolean,
+  storageConflict: boolean,
 ): SessionResidueAudit["currentState"] {
   if (!knownLocally && !hasAnyResidue) {
     return {
@@ -263,7 +269,9 @@ function describeCurrentState(
       kind: session.kind,
       archived: session.archived,
       hasOriginalRollout,
-      message: session.archived
+      message: storageConflict
+        ? "同一 session ID 同时存在于 sessions 和 archived_sessions；这是异常重复状态，不能视为正常归档。"
+        : session.archived
         ? "原始会话文件仍在 archived_sessions，本地还有完整或近似完整记录。"
         : "原始会话文件仍在 sessions，本地会话仍明确存在。",
     };
@@ -282,7 +290,7 @@ export function buildSessionResidueAudit(scan: ScanResult, sessionId: string): S
   const preview = buildDeletePreview(scan, [session]);
   const item = preview.items[0];
   const family = buildSessionFamily(scan, session);
-  const sqliteRows = sumSqliteDeletionCounts(item.sqlite);
+  const sqliteRows = sumSqliteDeletionCounts(item.sqlite) + item.sqlite.logRows;
   const knownGlobalStateRefs = scan.globalState.refsById.get(session.id) ?? [];
   const exactKeyGlobalStateRefs = scan.globalState.exactKeyRefsById.get(session.id) ?? [];
   const unknownGlobalStateRefs = scan.globalState.possibleUnknownRefsById.get(session.id) ?? [];
@@ -294,6 +302,8 @@ export function buildSessionResidueAudit(scan: ScanResult, sessionId: string): S
   const familyMemberIds = uniqueSorted([session.id, ...family.familyMembers.map((node) => node.sessionId)]);
   const rawSessionFiles = item.filePaths.length;
   const hasArchivedRollout = session.fileTargets.some((target) => target.bucket === "archived_sessions");
+  const hasActiveRollout = session.fileTargets.some((target) => target.bucket === "sessions");
+  const storageConflict = hasActiveRollout && hasArchivedRollout;
   const hasAnyResidue =
     rawSessionFiles +
       item.shellSnapshotFiles.length +
@@ -314,7 +324,19 @@ export function buildSessionResidueAudit(scan: ScanResult, sessionId: string): S
     historyRows: item.historyRows,
     possibleUnknownGlobalStateRefs: item.possibleUnknownGlobalStateRefs,
     brokenRelations: family.brokenRelations.length,
+    storageConflict,
   });
+  const hasOnlyDedicatedLogResidue =
+    item.sqlite.logRows > 0
+    && rawSessionFiles === 0
+    && item.shellSnapshotFiles.length === 0
+    && item.sessionIndexRows === 0
+    && item.historyRows === 0
+    && sumSqliteDeletionCounts(item.sqlite) === 0
+    && item.globalStateRefs === 0
+    && item.exactKeyGlobalStateRefs === 0
+    && item.possibleUnknownGlobalStateRefs === 0
+    && threadSpawnEdges.length === 0;
   const warnings = uniqueSorted([
     ...scan.warnings,
     ...family.warnings,
@@ -325,13 +347,18 @@ export function buildSessionResidueAudit(scan: ScanResult, sessionId: string): S
       ? [`global-state 有 ${exactKeyGlobalStateRefs.length} 个 P11 exact-key 引用；只能在 delete 预览后显式确认删除。`]
       : []),
     ...(item.sqlite.logRows > 0
-      ? [`SQLite logs 有 ${item.sqlite.logRows} 行关联记录；当前默认保留，不纳入删除建议。`]
+      ? [hasOnlyDedicatedLogResidue
+          ? `SQLite logs 有 ${item.sqlite.logRows} 行 logs-only 残留；当前只读报告，不支持单独自动删除。`
+          : `SQLite logs 有 ${item.sqlite.logRows} 行精确关联记录；permanent delete 会删除，trash 会保留到 final purge。`]
       : []),
+    ...item.warnings,
   ]);
-  const recommendedNextCommand = hasAnyResidue && !hasArchivedRollout
+  const recommendedNextCommand = hasAnyResidue && !hasOnlyDedicatedLogResidue && (!hasArchivedRollout || storageConflict)
     ? `codex-sessions delete ${quoteShellArg(session.id)} --root ${quoteShellArg(scan.root.rootPath)}`
     : null;
-  const recommendedNextCommandNote = hasArchivedRollout
+  const recommendedNextCommandNote = hasOnlyDedicatedLogResidue
+    ? "这是 logs-only 残留；当前只读报告，不提供直接删除命令。"
+    : hasArchivedRollout && !storageConflict
     ? "这是归档会话的本地存储清单；归档内容保留是正常行为，不是残留，不建议因此清理。"
     : recommendedNextCommand
     ? "这是预览命令，不会删除；只有用户加 --yes 才会真的删除。"
@@ -346,7 +373,7 @@ export function buildSessionResidueAudit(scan: ScanResult, sessionId: string): S
     knownLocally,
     rootPath: scan.root.rootPath,
     overallStatus: statuses,
-    currentState: describeCurrentState(session, knownLocally, hasAnyResidue, rawSessionFiles > 0),
+    currentState: describeCurrentState(session, knownLocally, hasAnyResidue, rawSessionFiles > 0, storageConflict),
     surfaces: {
       rolloutFiles: {
         present: rawSessionFiles > 0,
@@ -535,7 +562,14 @@ function buildRecommendedPreviewCommand(scan: ScanResult, sessionId: string): st
   return `codex-sessions delete ${quoteShellArg(sessionId)} --root ${quoteShellArg(scan.root.rootPath)}`;
 }
 
-function toRootResidueCandidate(scan: ScanResult, audit: SessionResidueAudit): RootResidueCandidate {
+function toRootResidueCandidate(
+  scan: ScanResult,
+  audit: SessionResidueAudit,
+  includeDetails: boolean,
+): RootResidueCandidate {
+  const rootWarnings = new Set(scan.warnings);
+  const allWarnings = uniqueSorted(audit.warnings.filter((warning) => !rootWarnings.has(warning)));
+  const warnings = includeDetails ? allWarnings : allWarnings.slice(0, 5);
   return {
     sessionId: audit.sessionId,
     statuses: rootStatuses(audit),
@@ -546,6 +580,7 @@ function toRootResidueCandidate(scan: ScanResult, audit: SessionResidueAudit): R
       sessionIndexRows: audit.counts.sessionIndexRows,
       historyRows: audit.counts.historyRows,
       sqliteRows: audit.counts.sqliteRows,
+      dedicatedLogRows: audit.surfaces.sqlite.counts.logRows,
       knownGlobalStateRefs: audit.counts.knownGlobalStateRefs,
       exactKeyGlobalStateRefs: audit.counts.exactKeyGlobalStateRefs,
       possibleUnknownGlobalStateRefs: audit.counts.possibleUnknownGlobalStateRefs,
@@ -560,7 +595,12 @@ function toRootResidueCandidate(scan: ScanResult, audit: SessionResidueAudit): R
       familyMemberCount: audit.familySummary.familyMemberIds.length,
       brokenRelationCount: audit.familySummary.brokenRelationCount,
     },
-    warnings: audit.warnings,
+    warningSummary: {
+      total: allWarnings.length,
+      returned: warnings.length,
+      omitted: allWarnings.length - warnings.length,
+    },
+    warnings,
     recommendedAuditCommand: buildRecommendedAuditCommand(scan, audit.sessionId),
   };
 }
@@ -571,7 +611,8 @@ function toPreviewCounts(item: DeletePreviewItem): RootDeletePreviewCounts {
     shellSnapshots: item.shellSnapshotFiles.length,
     sessionIndexRows: item.sessionIndexRows,
     historyRows: item.historyRows,
-    sqliteRows: sumSqliteDeletionCounts(item.sqlite),
+    sqliteRows: sumSqliteDeletionCounts(item.sqlite) + item.sqlite.logRows,
+    dedicatedLogRows: item.sqlite.logRows,
     knownGlobalStateRefs: item.globalStateRefs,
     exactKeyGlobalStateRefs: item.exactKeyGlobalStateRefs,
     possibleUnknownGlobalStateRefs: item.possibleUnknownGlobalStateRefs,
@@ -596,7 +637,8 @@ function aggregatePreviewCounts(
     shellSnapshots: preview.totals.shellSnapshotFiles,
     sessionIndexRows: preview.totals.sessionIndexRows,
     historyRows: preview.totals.historyRows,
-    sqliteRows: sumSqliteDeletionCounts(sqliteTotals),
+    sqliteRows: sumSqliteDeletionCounts(sqliteTotals) + sqliteTotals.logRows,
+    dedicatedLogRows: sqliteTotals.logRows,
     knownGlobalStateRefs: preview.totals.globalStateRefs,
     exactKeyGlobalStateRefs: preview.totals.exactKeyGlobalStateRefs,
     possibleUnknownGlobalStateRefs: preview.totals.possibleUnknownGlobalStateRefs,
@@ -604,11 +646,23 @@ function aggregatePreviewCounts(
   };
 }
 
-function warningsForSession(preview: DeletePreview, sessionId: string): DeleteFamilyWarning[] {
-  return preview.familyWarnings.filter((warning) => warning.sessionId === sessionId);
+function warningsForSession(
+  preview: DeletePreview,
+  sessionId: string,
+  includeDetails: boolean,
+): DeleteFamilyWarning[] {
+  return preview.familyWarnings
+    .filter((warning) => warning.sessionId === sessionId)
+    .map((warning) => ({
+      ...warning,
+      warnings: includeDetails ? warning.warnings : warning.warnings.slice(0, 5),
+    }));
 }
 
-function summarizeFamilyWarnings(familyWarnings: DeleteFamilyWarning[]): RootDeletePreview["familyWarningSummary"] {
+function summarizeFamilyWarnings(
+  familyWarnings: DeleteFamilyWarning[],
+  includeDetails: boolean,
+): RootDeletePreview["familyWarningSummary"] {
   const brokenRelationKeys = uniqueSorted(
     familyWarnings.flatMap((warning) =>
       warning.brokenRelations.map((relation) => `${relation.parentThreadId}->${relation.childThreadId}`),
@@ -625,7 +679,7 @@ function summarizeFamilyWarnings(familyWarnings: DeleteFamilyWarning[]): RootDel
     missingChildIds: uniqueSorted(familyWarnings.flatMap((warning) => warning.missingChildIds)),
     brokenRelationCount: brokenRelationKeys.length,
     warningCount: warnings.length,
-    warnings,
+    warnings: includeDetails ? warnings : warnings.slice(0, 5),
   };
 }
 
@@ -741,6 +795,7 @@ export function buildRootResidueAudit(
     includeAll?: boolean;
     statuses?: string[];
     sources?: string[];
+    includeDetails?: boolean;
   } = {},
 ): RootResidueAudit {
   const limit = normalizeLimit(options.limit);
@@ -751,7 +806,7 @@ export function buildRootResidueAudit(
   };
   const collected = collectRootCandidateIds(scan);
   const candidatesBeforeFilter = collected.ids
-    .map((id) => toRootResidueCandidate(scan, buildSessionResidueAudit(scan, id)))
+    .map((id) => toRootResidueCandidate(scan, buildSessionResidueAudit(scan, id), options.includeDetails ?? false))
     .filter((candidate) => filters.includeAll || isDefaultRootResidueCandidate(candidate))
     .sort((left, right) => {
       const scoreDiff = riskScore(right) - riskScore(left);
@@ -759,6 +814,8 @@ export function buildRootResidueAudit(
     });
   const candidates = candidatesBeforeFilter.filter((candidate) => matchesRootResidueFilters(candidate, filters));
   const returned = candidates.slice(0, limit);
+  const allWarnings = uniqueSorted([...scan.warnings, ...collected.warnings]);
+  const warnings = options.includeDetails ? allWarnings : allWarnings.slice(0, 5);
 
   return {
     rootPath: scan.root.rootPath,
@@ -772,7 +829,12 @@ export function buildRootResidueAudit(
     byStatus: countBy(candidates.flatMap((candidate) => candidate.statuses)),
     bySource: countBy(candidates.flatMap((candidate) => candidate.sources)),
     candidates: returned,
-    warnings: uniqueSorted([...scan.warnings, ...collected.warnings]),
+    warningSummary: {
+      total: allWarnings.length,
+      returned: warnings.length,
+      omitted: allWarnings.length - warnings.length,
+    },
+    warnings,
   };
 }
 
@@ -783,6 +845,7 @@ export function buildRootDeletePreview(
     includeAll?: boolean;
     statuses?: string[];
     sources?: string[];
+    includeDetails?: boolean;
   } = {},
 ): RootDeletePreview {
   const audit = buildRootResidueAudit(scan, options);
@@ -795,17 +858,33 @@ export function buildRootDeletePreview(
       throw new Error(`无法生成 preview：缺少候选 ${candidate.sessionId}。`);
     }
 
-    const previewOnlyCommand = buildRecommendedPreviewCommand(scan, candidate.sessionId);
+    const deleteSupported = !(
+      candidate.surfaces.dedicatedLogRows > 0
+      && candidate.surfaces.rolloutFiles === 0
+      && candidate.surfaces.shellSnapshots === 0
+      && candidate.surfaces.sessionIndexRows === 0
+      && candidate.surfaces.historyRows === 0
+      && candidate.surfaces.sqliteRows === candidate.surfaces.dedicatedLogRows
+      && candidate.surfaces.knownGlobalStateRefs === 0
+      && candidate.surfaces.exactKeyGlobalStateRefs === 0
+      && candidate.surfaces.possibleUnknownGlobalStateRefs === 0
+      && candidate.surfaces.threadSpawnEdges === 0
+    );
+    const previewOnlyCommand = deleteSupported
+      ? buildRecommendedPreviewCommand(scan, candidate.sessionId)
+      : candidate.recommendedAuditCommand;
 
     return {
       sessionId: candidate.sessionId,
       statuses: candidate.statuses,
       sources: candidate.sources,
       previewCounts: toPreviewCounts(previewItem),
-      familyWarnings: warningsForSession(preview, candidate.sessionId),
+      familyWarnings: warningsForSession(preview, candidate.sessionId, options.includeDetails ?? false),
       recommendedAuditCommand: candidate.recommendedAuditCommand,
       previewOnlyCommand,
       recommendedPreviewCommand: previewOnlyCommand,
+      deleteSupported,
+      deleteUnsupportedReason: deleteSupported ? null : "logs-only 当前只读报告，不支持直接删除。",
     };
   });
 
@@ -819,8 +898,9 @@ export function buildRootDeletePreview(
     omittedCandidates: Math.max(0, audit.totalCandidatesAfterFilter - audit.returnedCandidates),
     limit: audit.limit,
     aggregatePreview: aggregatePreviewCounts(scan, preview, sessions),
-    familyWarningSummary: summarizeFamilyWarnings(preview.familyWarnings),
+    familyWarningSummary: summarizeFamilyWarnings(preview.familyWarnings, options.includeDetails ?? false),
     candidates,
+    warningSummary: audit.warningSummary,
     warnings: audit.warnings,
   };
 }

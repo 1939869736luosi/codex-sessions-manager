@@ -5,6 +5,9 @@ import Database from "better-sqlite3";
 
 import { getSessionOperation, inspectRootOperation, interpretMemoryMode } from "../src/application/session-operations.js";
 import { runCli } from "../src/cli/run.js";
+import { deleteSessions } from "../src/core/delete.js";
+import { resolveSessions } from "../src/core/query.js";
+import { scanCodexRoot } from "../src/core/scan.js";
 import { createFixture, FIXTURE_IDS, type Fixture } from "./helpers/fixture.js";
 
 function createIo() {
@@ -90,6 +93,10 @@ describe("read-only memory association", () => {
       stage1Present: true,
       rolloutSummaryPresent: true,
       phase2Influence: "unknown",
+      sourceUpdatedAt: 100,
+      selectedForPhase2: true,
+      selectedForPhase2SourceUpdatedAt: 100,
+      selectionMatchesCurrentSource: true,
       retainedAfterSessionDelete: true,
       schemaStatus: "recognized",
       warnings: [expect.stringContaining("Phase 2")],
@@ -99,12 +106,31 @@ describe("read-only memory association", () => {
       stage1Present: true,
       rolloutSummaryPresent: false,
       phase2Influence: "unknown",
+      sourceUpdatedAt: 200,
+      selectedForPhase2: false,
+      selectedForPhase2SourceUpdatedAt: null,
+      selectionMatchesCurrentSource: false,
       retainedAfterSessionDelete: true,
       warnings: [expect.stringContaining("provenance")],
     });
     const serialized = JSON.stringify([active.data.memoryLink, archived.data.memoryLink]);
     expect(serialized).not.toContain("RAW_MEMORY_MUST_NOT_LEAK");
     expect(serialized).not.toContain("ROLLOUT_SUMMARY_MUST_NOT_LEAK");
+  });
+
+  it("verifies after deletion that the read-only memory association was retained", async () => {
+    createOfficialMemoriesDatabase(fixture.rootDir);
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const sessions = resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID]);
+
+    const result = await deleteSessions(scan, sessions, { allowActive: true });
+
+    expect(result.validation[0].memoryLink).toMatchObject({
+      stage1Present: true,
+      sourceUpdatedAt: 100,
+      retainedAfterSessionDelete: true,
+    });
+    expect(JSON.stringify(result.validation[0].memoryLink)).not.toContain("RAW_MEMORY_MUST_NOT_LEAK");
   });
 
   it("reports unknown for an unrecognized memory schema", async () => {
@@ -120,6 +146,10 @@ describe("read-only memory association", () => {
       stage1Present: false,
       rolloutSummaryPresent: false,
       phase2Influence: "unknown",
+      sourceUpdatedAt: null,
+      selectedForPhase2: "unknown",
+      selectedForPhase2SourceUpdatedAt: null,
+      selectionMatchesCurrentSource: "unknown",
       retainedAfterSessionDelete: true,
       schemaStatus: "unrecognized",
     });

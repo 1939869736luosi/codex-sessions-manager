@@ -65,12 +65,12 @@
 ## 建议的定期使用方式
 
 1. 正常永久删除先用官方 Codex。
-2. 每月一次，或者发现存储异常时，运行 `audit-root` 查找旧版、损坏和孤儿候选。
+2. 每月一次，或者发现存储异常时，运行 `monthly-review` 获取一份范围受限、完全只读的审计与预览报告。
 3. 对候选运行 `audit <id>`，区分“确认有残留”和“从未发现过这个 ID”。
 4. 只对确认残留的完整 IDs 做批量预览；仍需本地处理时优先使用 `delete --trash --yes`。
 5. 最后运行 `verify`，把结构化结果当作本地删除记录。
 
-当前兼容边界：Codex 可能通过 `sqlite_home` 或 `CODEX_SQLITE_HOME` 把 SQLite 放在 Codex root 外。本工具会按 `config.toml sqlite_home`、`CODEX_SQLITE_HOME`、Codex root 的顺序解析，并在 root 顶层和 SQLite home 同时存在 DB 时报警。旧式 `event_msg` / `response_item` timeline 和 paginated `item_completed` timeline 都会解析，并明确报告完整性。会话排序按 `recency_at_ms`、`recency_at`、`updated_at` 依次回退，结构化结果会显示 `historyMode`。压缩 rollout 文件 `.jsonl.zst` 已进入扫描、删除、回收站和恢复路径，并按二进制保存；如果某个 session 只剩 `.jsonl.zst`，`show` 不会解压正文，而会报告 `compressed_unread`，精确压缩字节通过 `export` 获取。`logs_N.sqlite` 执行日志、`memories_N.sqlite` memory 数据和 remote-control 状态当前都不作为普通 session cleanup surface。
+当前兼容边界：Codex 可能通过 `sqlite_home` 或 `CODEX_SQLITE_HOME` 把 SQLite 放在 Codex root 外。本工具会按 `config.toml sqlite_home`、`CODEX_SQLITE_HOME`、Codex root 的顺序解析，并在 root 顶层和 SQLite home 同时存在 DB 时报警。旧式 `event_msg` / `response_item` timeline 和 paginated `item_completed` timeline 都会解析，并明确报告完整性。会话排序按 `recency_at_ms`、`recency_at`、`updated_at` 依次回退，结构化结果会显示 `historyMode`。压缩 rollout 文件 `.jsonl.zst` 已进入扫描、删除、回收站和恢复路径，并按二进制保存；如果某个 session 只剩 `.jsonl.zst`，`show` 不会解压正文，而会报告 `compressed_unread`，精确压缩字节通过 `export` 获取。确认永久删除时，只删除 `logs.thread_id` 与所选完整 UUID 精确相等的日志行；移入 trash 时保留这些日志，直到最终 purge。`memories_N.sqlite` 及 Phase 2 memory 输出始终只读，remote-control 状态也只做观察。
 
 确认写操作只接受标准完整 session UUID；删除 active session 还要显式提供 `--allow-active` / `allowActive=true`。managed symlink、junction、hard link、root 外路径和过期计划都会拒绝。写操作若被中断，会保留恢复记录并阻止后续写入，直到使用精确 operation ID 完成恢复。退出状态、验证范围和同一用户持续抢占文件系统时的边界见 [安全指南](./docs/SAFETY.md)。
 
@@ -137,13 +137,13 @@ codex-sessions verify <session-id>
 2. 获取独占锁，写入 operation journal，并预先生成受影响文件的替换内容
 3. 原子替换 `session_index.jsonl`、`history.jsonl` 和允许清理的 global-state exact-key
 4. 删除原始 session 文件和 shell snapshot 文件
-5. 在数据库事务内删除已知 SQLite session 记录（threads、spawn edges、agent jobs、dynamic tools、legacy state-owned `stage1_outputs`、thread goals；新版 Codex 可能把 goals 放在 `goals_N.sqlite`）。`logs_N.sqlite` 执行日志默认保留
+5. 在数据库事务内删除已知 SQLite session 记录（threads、spawn edges、agent jobs、dynamic tools、legacy state-owned `stage1_outputs`、thread goals；新版 Codex 可能把 goals 放在 `goals_N.sqlite`），并删除 dedicated logs 数据库中 `thread_id` 精确匹配的日志行
 6. 按实际覆盖范围验证结果，并记录 committed、rolled_back 或 recovery_required
 
 提交前失败不会修改数据。提交途中失败时，只在能够证明恢复安全的情况下回滚；状态无法确认时返回 `recovery_required` 并阻止后续写操作。已经提交但验证不完整或失败时，结果仍明确标为 committed，CLI 返回状态 2，不会误报成“没有执行”。
 ```
 
-删完之后跑 `verify`，确认当前版本覆盖的 surface 没有残留。`verify` 可能显示 `retained_sqlite=logs=N`，这是预期结果。`.jsonl.zst` 已按 session 文件处理；`memories_N.sqlite` 仍是只读 memory surface，必须另做 memory 删除安全设计后，才能声称完整 memory cleanup。
+删完之后跑 `verify`，确认当前版本覆盖的 surface 没有残留。永久删除必须报告精确 thread-linked log 行为零；trash 会故意保留它们，restore 不修改它们，最终 purge 会在同一 session ID 未重新出现于 live storage 时删除它们。`.jsonl.zst` 已按 session 文件处理；`memories_N.sqlite` 始终只读，验证只报告可观察到的关联，不会修改 memory。
 
 ## 功能一览
 
@@ -157,7 +157,8 @@ codex-sessions verify <session-id>
 | **残留审计** | 只读报告原始 rollout 文件、shell snapshot、session_index、history、SQLite、global-state、thread edges、family 状态和断裂 parent/child 关系 |
 | **Root 残留扫描** | 不需要先知道 session ID，直接只读扫描整个 root 的疑似残留 |
 | **Root 删除预览** | 对 root 残留候选做只读批量 delete preview，不需要手工列 session ID |
-| **Codex SQLite 结构** | 按 `config.toml sqlite_home` / `CODEX_SQLITE_HOME` / root fallback 顺序解析；识别 `state_N.sqlite`、`logs_N.sqlite`、`goals_N.sqlite` 和只读 `memories_N.sqlite`；`doctor`、`audit`、`verify` 和预览会统计 `goals_N.sqlite.thread_goals`，但 `logs_N.sqlite` 和 `memories_N.sqlite` 默认不删除。 |
+| **每月残留检查** | 一份范围受限、完全只读的 root 审计与预览合并报告；只有显式传入 `--details` 才展开 warning 详情 |
+| **Codex SQLite 结构** | 按 `config.toml sqlite_home` / `CODEX_SQLITE_HOME` / root fallback 顺序解析；精确 thread-linked logs 跟随永久删除与 purge 生命周期，`memories_N.sqlite` 始终只读。 |
 | **回收站 & 恢复** | 完整快照保存；`.jsonl.zst` 会话文件按二进制安全保存；恢复时检查 SQLite 主键冲突 |
 | **验证** | 报告当前版本支持的文件、索引行和数据库记录是否仍有残留 |
 | **清理索引** | 移除失效索引条目，不动原始数据 |
@@ -267,6 +268,7 @@ codex-sessions family <session-id> [--json] [--children|--parents|--subagents|--
 codex-sessions audit <session-id> [--json]
 codex-sessions audit-root [--json] [--limit 50] [--status STATUS...] [--source SOURCE...] [--all]
 codex-sessions preview-root [--json] [--limit 50] [--status STATUS...] [--source SOURCE...] [--all]
+codex-sessions monthly-review [--json] [--details] [--limit 50] [--status STATUS...] [--source SOURCE...] [--all]
 codex-sessions export <session-id> [--output ./backup.json]
 codex-sessions plan-delete <session-id...> [--json] [--write-plan FILE] [--include-children] [--include-subagents] [--include-descendants] [--include-family]
 codex-sessions plan-delete --source-kind KIND [--source-kind KIND...] --limit N [--status STATUS...] [--json]
@@ -288,7 +290,7 @@ codex-sessions verify <session-id...> [--json]
 
 `export` 和 trash bundle 是恢复数据，不是预览。它们可能包含完整 global-state exact-key value，包括 prompt-history 内容。人工 delete 预览只显示 path、rule、shape 和 byte count。
 
-兼容检查以 [compat baseline](https://github.com/1939869736luosi/codex-sessions-manager/tree/main/compat) 为准：旧式和 paginated timeline 都有合成 fixture；`.jsonl.zst` 只剩压缩文件时明确报告 `compressed_unread`；`logs_N.sqlite`、`memories_N.sqlite`、external agent imports 和 remote-control 继续只做观察，不进入普通 session cleanup。
+兼容检查以 [compat baseline](https://github.com/1939869736luosi/codex-sessions-manager/tree/main/compat) 为准：旧式和 paginated timeline 都有合成 fixture；`.jsonl.zst` 只剩压缩文件时明确报告 `compressed_unread`；确认永久删除只处理精确 thread-linked logs，`memories_N.sqlite`、external agent imports 和 remote-control 继续只做观察。
 
 官方 Codex 删除后，如果想知道本机还剩什么，先用 `audit`。它只读，不会改文件。它会报告原始 rollout 文件、shell snapshot、`session_index`、`history`、SQLite 记录、已知 global-state 引用、白名单 exact-key global-state 引用、未知 global-state 引用、`thread_spawn_edges` 是否还在，也会报告 family 归属和断裂 parent/child 关系。如果仍有残留，建议命令只会给不带 `--yes` 的删除预览；只有你自己加 `--yes` 才会真的删除。
 
@@ -328,7 +330,9 @@ codex-sessions verify <session-id...> [--json]
 - `source=mcp` 表示这个 thread 的来源是 mcp，不是每一次 MCP 工具调用日志。
 - `model_provider` 这里只做显示和筛选，不修复 provider 身份，也不改写历史。
 
-如果想对 `audit-root` 选出的候选做批量删除预览，用 `preview-root`。它复用同一套 `status/source` 筛选和保守默认 `--limit 50`，汇总展示只读预览会碰到哪些位置：rollout 文件、压缩 `.jsonl.zst` rollout 文件、shell snapshots、`session_index`、`history`、SQLite（包含存在时的 `goals_N.sqlite.thread_goals`）、已知 global-state 引用、白名单 exact-key global-state 引用、未知 global-state 引用和 `thread_spawn_edges`。`logs_N.sqlite` 和 `memories_N.sqlite` 不是默认删除面。它只读，不删除，不改写 JSONL、SQLite、shell snapshot 或 global-state，不接受 `--yes`，也不会自动递归加入 parent、child 或 family session。`preview-root` 的结果不等于“这些都该删”，也不会建议删除任何 session；它只说明如果之后你明确运行 delete，会碰到什么。真正删除应先跑单独的明确 ID `delete` 预览供检查，再单独运行显式确认的 `delete ... --yes`。
+如果想对 `audit-root` 选出的候选做批量删除预览，用 `preview-root`。它复用同一套 `status/source` 筛选和保守默认 `--limit 50`，汇总展示 rollout 文件、压缩 `.jsonl.zst` 文件、shell snapshots、索引、精确 thread-linked SQLite 行（包含 dedicated logs）、global-state 引用和 family edges。Memory 永远不是删除面。它只读，不接受 `--yes`，不会建议删除任何 session，也不会自动递归加入亲属 session。真正删除仍必须回到单独的明确 ID 预览与确认。
+
+每月定期检查使用 `monthly-review`。它把 `audit-root` 和 `preview-root` 合并为一份只读报告，默认最多返回 5 条 warning 样本，只有传入 `--details` 才展开更多详情。它给出的下一步只包含逐 session 的只读审计，绝不生成确认删除命令。
 
 如果已经有明确 session ID，并且想在任何删除预览或写操作前先做更安全的关系感知计划，用 `plan-delete`。它只读，JSON 里会标明 `readOnly: true` 和 `executionSupported: false`，也可通过只读 MCP `plan_delete_sessions` 调用。默认只选择 seed IDs。相关 parent、child、subagent、descendant、family member，以及 `/side`/`/fork` 这类 ambiguous session，会出现在 `availableIncludes` 或 warning 里。`--include-children`、`--include-subagents`、`--include-descendants` 和 `--include-family` 只改变 `selectedIds`，不会执行删除；其中 `--include-family` 风险最高，会给出强提醒。exact-key global-state 只显示 path、rule、shape 和 byteEstimate 元数据；unknown global-state 仍然只是 warning-only。
 
@@ -408,7 +412,7 @@ Codex 0.144.1 的官方删除会处理持久化 thread、spawned descendants、r
 ├── history.jsonl        ← 对话历史索引                  ✅ 清理
 ├── state_N.sqlite       ← threads 和相关记录            ✅ 清理
 ├── goals_N.sqlite       ← 拆分出的 thread goals         ✅ 清理
-├── logs_N.sqlite        ← 执行日志                      👁 默认保留
+├── logs_N.sqlite        ← 精确 thread-linked logs 跟随永久删除/purge，trash 期间保留
 ├── memories_N.sqlite    ← 官方 memory state             👁 只做 doctor/schema watch
 └── .codex-global-state.json ← 已知活跃会话引用          ✅ 清理
 ```

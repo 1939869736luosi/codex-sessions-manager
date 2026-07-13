@@ -46,7 +46,7 @@ The core understands the canonical Codex root and the separately trusted SQLite 
 | `sessions/`, `archived_sessions/`, `.jsonl.zst` | Read, export, trash, restore, or delete when explicitly selected |
 | `session_index.jsonl`, `history.jsonl` | Read and controlled atomic rewrite |
 | state/goals SQLite session rows | Read and row-scoped mutation with recovery |
-| `logs_N.sqlite` | Read-only observation in this project; official delete behavior is version-tracked separately |
+| `logs_N.sqlite` | Exact `logs.thread_id` rows are deleted with a confirmed permanent session delete or final trash purge; trash and restore retain them |
 | `memories_N.sqlite`, `MEMORY.md`, summaries, memory skills | Read-only association and compatibility watch; precise final-memory deletion verification is future work; no direct mutation |
 | remote-control and external-agent imports | Observation only; retained |
 
