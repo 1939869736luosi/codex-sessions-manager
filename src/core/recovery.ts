@@ -26,6 +26,7 @@ import {
   type DedicatedLogKey,
   MAX_DEDICATED_LOG_ENCODED_BYTES,
   MAX_DEDICATED_LOG_PURGE_KEYS,
+  assertDedicatedLogKeyPayloadBounds,
   MAX_DEDICATED_LOG_RECOVERY_ROWS,
   deleteDedicatedLogRowsByKeys,
   classifyDedicatedLogKeyPresence,
@@ -239,6 +240,7 @@ export function parseOperationRecoveryPayload(
       seenLogIds.add(key);
     }
     const seenKeyIds = new Set<string>();
+    assertDedicatedLogKeyPayloadBounds(dedicatedLogKeys as DedicatedLogKey[], "RECOVERY_REQUIRED");
     for (const key of dedicatedLogKeys) {
       const rawKeyId = key && typeof key === "object" ? (key as DedicatedLogKey).id : null;
       const keyId = typeof rawKeyId === "string" || typeof rawKeyId === "number" ? String(rawKeyId) : "";
@@ -352,7 +354,8 @@ async function reconcileRecoverySqlite(
   if (!payload.sqlite) {
     return { retainedDedicatedLogTargetIds: [], protectedButAlreadyDeletedLogTargetIds: [] };
   }
-  let presence: "present" | "absent" | "mixed" = "absent";
+  const retainedDedicatedLogTargetIds: string[] = [];
+  const protectedButAlreadyDeletedLogTargetIds: string[] = [];
   const sqliteContext = await createTrustedRootContext(payload.sqlite.sqliteHomeRealPath);
   if (
     sqliteContext.realPath !== payload.sqlite.sqliteHomeRealPath
@@ -380,26 +383,27 @@ async function reconcileRecoverySqlite(
     reconcileDedicatedLogRecordsForRecovery(logsPath, decodeSqliteRecordsFromJson(dedicatedLogRecords));
   } else if (logsPath) {
     const keys = payload.sqlite.dedicatedLogKeys ?? [];
-    presence = classifyDedicatedLogKeyPresence(logsPath, keys);
-    if (presence === "mixed") {
-      throw new MutationSafetyError("RECOVERY_REQUIRED", "purge log rows are in a mixed recovery state");
+    const unprotectedKeys = keys.filter((key) => !protectedPurgeLogTargetIds.has(key.threadId));
+    deleteDedicatedLogRowsByKeys(logsPath, unprotectedKeys);
+    if (classifyDedicatedLogKeyPresence(logsPath, unprotectedKeys) !== "absent") {
+      throw new MutationSafetyError("RECOVERY_REQUIRED", "purge log rows remained after idempotent recovery");
     }
-    if (presence === "present") {
-      deleteDedicatedLogRowsByKeys(
-        logsPath,
-        keys.filter((key) => !protectedPurgeLogTargetIds.has(key.threadId)),
-      );
+    const protectedKeysByTarget = new Map<string, DedicatedLogKey[]>();
+    for (const key of keys) {
+      if (!protectedPurgeLogTargetIds.has(key.threadId)) continue;
+      const targetKeys = protectedKeysByTarget.get(key.threadId) ?? [];
+      targetKeys.push(key);
+      protectedKeysByTarget.set(key.threadId, targetKeys);
+    }
+    for (const [sessionId, protectedKeys] of [...protectedKeysByTarget.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+      const protectedPresence = classifyDedicatedLogKeyPresence(logsPath, protectedKeys);
+      if (protectedPresence !== "absent") retainedDedicatedLogTargetIds.push(sessionId);
+      if (protectedPresence !== "present") protectedButAlreadyDeletedLogTargetIds.push(sessionId);
     }
   }
-  const keyTargetIds = new Set((payload.sqlite.dedicatedLogKeys ?? []).map((key) => key.threadId));
-  const protectedTargetsWithKeys = [...protectedPurgeLogTargetIds]
-    .filter((sessionId) => keyTargetIds.has(sessionId))
-    .sort();
   return {
-    retainedDedicatedLogTargetIds: presence === "present" ? protectedTargetsWithKeys : [],
-    protectedButAlreadyDeletedLogTargetIds: presence === "absent" && (payload.sqlite.dedicatedLogKeys?.length ?? 0) > 0
-      ? protectedTargetsWithKeys
-      : [],
+    retainedDedicatedLogTargetIds,
+    protectedButAlreadyDeletedLogTargetIds,
   };
 }
 

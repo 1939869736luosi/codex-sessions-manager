@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runCli } from "../src/cli/run.js";
-import { buildRootResidueAudit } from "../src/core/audit.js";
+import { deleteSessionsOperation } from "../src/application/mutation-operations.js";
+import { buildRootDeletePreview, buildRootResidueAudit, buildSessionResidueAudit } from "../src/core/audit.js";
+import { formatPreview } from "../src/cli/format.js";
 import { scanCodexRoot } from "../src/core/scan.js";
-import { createFixture, type Fixture } from "./helpers/fixture.js";
+import Database from "better-sqlite3";
+import { createFixture, FIXTURE_IDS, type Fixture } from "./helpers/fixture.js";
 
 function createIo() {
   const stdout: string[] = [];
@@ -67,5 +70,54 @@ describe("monthly residue review", () => {
     const details = buildRootResidueAudit(scan, { includeDetails: true });
     expect(details.warningSummary).toEqual({ total: 12, returned: 12, omitted: 0 });
     expect(details.warnings).toHaveLength(12);
+  });
+
+  it("reports logs-only residue without pretending it is clean or directly deletable", async () => {
+    const logsOnlyId = "019d7777-8888-7999-8aaa-bbbbbbbbbbbb";
+    const db = new Database(fixture.paths.logsSqlite as string);
+    db.prepare(`
+      insert into logs (ts, ts_nanos, level, target, feedback_log_body, thread_id, process_uuid, estimated_bytes)
+      values (99, 0, 'INFO', 'logs-only', 'residue', ?, 'fixture-process', 7)
+    `).run(logsOnlyId);
+    db.close();
+
+    const scan = await scanCodexRoot(fixture.rootDir);
+    const audit = buildSessionResidueAudit(scan, logsOnlyId);
+    expect(audit.overallStatus).toContain("db-only");
+    expect(audit.counts.sqliteRows).toBe(1);
+    expect(audit.warnings.join("\n")).toContain("logs-only");
+    expect(audit.warnings.join("\n")).not.toContain("当前默认保留");
+    expect(audit.recommendedNextCommand).toBeNull();
+    expect(audit.recommendedNextCommandNote).toContain("logs-only");
+
+    const rootAudit = buildRootResidueAudit(scan);
+    const candidate = rootAudit.candidates.find((item) => item.sessionId === logsOnlyId);
+    expect(candidate?.surfaces.sqliteRows).toBe(1);
+    const rootPreview = buildRootDeletePreview(scan);
+    const previewCandidate = rootPreview.candidates.find((item) => item.sessionId === logsOnlyId);
+    expect(previewCandidate).toMatchObject({ deleteSupported: false });
+    expect(previewCandidate?.deleteUnsupportedReason).toContain("logs-only");
+    expect(previewCandidate?.recommendedPreviewCommand).toBe(candidate?.recommendedAuditCommand);
+  });
+
+  it("distinguishes permanent-delete logs from trash-retained logs in previews", async () => {
+    const permanent = await deleteSessionsOperation({
+      root: fixture.rootDir,
+      sessionIds: [FIXTURE_IDS.ACTIVE_ID],
+      confirm: false,
+    });
+    const trash = await deleteSessionsOperation({
+      root: fixture.rootDir,
+      sessionIds: [FIXTURE_IDS.ACTIVE_ID],
+      confirm: false,
+      trash: true,
+    });
+    if (permanent.executed || trash.executed) throw new Error("expected preview results");
+
+    expect(permanent.data.preview.dedicatedLogsRetained).toBe(false);
+    expect(trash.data.preview.dedicatedLogsRetained).toBe(true);
+    expect(permanent.data.preview.totals.sqliteRows).toBe(trash.data.preview.totals.sqliteRows + 1);
+    expect(formatPreview(permanent.data.preview)).toContain("sqlite_delete: logs=1");
+    expect(formatPreview(trash.data.preview)).toContain("sqlite_retained: logs=1");
   });
 });

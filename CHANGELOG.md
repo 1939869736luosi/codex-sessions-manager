@@ -6,9 +6,12 @@
 - Permanent session deletion now removes only dedicated `logs.thread_id` rows matching the exact selected UUID. Trash retains those rows, restore leaves them unchanged, and final purge removes them unless the same ID is live again.
 - Added rollback and crash-recovery coverage for dedicated logs deletion; unknown log schemas fail before any mutation.
 - Dedicated-log deletion now requires a stable primary key, fixes an exact row-key set before mutation, rejects concurrent changes as stale, validates recovery payload ownership, and applies bounded recovery-data limits.
+- Purge now bounds dedicated-log recovery keys by count, per-key size, and total encoded bytes in one stable SQLite snapshot; audit, root preview, and monthly review distinguish permanent deletion, trash retention, final purge, and unsupported logs-only inventory.
+- Purge recovery is idempotent when a second interruption leaves protected session logs present and unprotected session logs already absent; each target is reconciled to its own safe final state.
 - Added explicit `storage-conflict` reporting when the same ID has both active and archived rollout files.
 - Expanded read-only memory association with source-update and Phase 2 selection evidence. Post-delete verification confirms only the observable retained association and never returns raw memory.
 - Replaced cloud npm dist-tag promotion with a checked local interactive promotion command because npm browser or Touch ID confirmation cannot complete on a GitHub runner. Candidate publishing and independent registry verification remain automated; the local command revalidates their artifact, runs, tag, commit, registry tarball SHA-256, provenance, and smoke evidence before invoking npm.
+- Pinned every local promotion read and write to the public npm registry with isolated user/global config, authenticated identity checks, tag-push verification, hostile-config behavior tests, and credential cleanup on normal failure plus `SIGINT`, `SIGTERM`, and `SIGHUP`.
 - Reduced duplicate Dependabot CI runs while preserving pull-request, main, manual, cross-platform, package, coverage, and dependency checks.
 
 ## 0.7.1

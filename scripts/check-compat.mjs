@@ -206,9 +206,13 @@ for (const column of ["recency_at_ms", "recency_at", "updated_at_ms", "history_m
   assert(sqliteSchema.includes(column), `SQLite fixture lacks ${column}`);
 }
 const sourceMetadata = JSON.parse(await readText("compat/fixtures/source-metadata.json"));
-for (const surface of ["external_agent_config_imports", "logs_N.sqlite", "memories_N.sqlite", "remote-control"]) {
+for (const surface of ["external_agent_config_imports", "memories_N.sqlite", "remote-control"]) {
   assert(sourceMetadata.observationOnly?.includes(surface), `source metadata fixture lacks ${surface}`);
 }
+assert(
+  sourceMetadata.exactThreadLinkedLifecycle?.includes("logs_N.sqlite"),
+  "source metadata fixture must classify logs_N.sqlite under the exact thread-linked lifecycle",
+);
 
 for (const compressedFixture of [
   "compat/fixtures/active-session.jsonl.zst",
@@ -230,6 +234,45 @@ for (const runPath of publicRunPaths) {
   assert(Array.isArray(run.postFixVerification), `${runPath} must record post-fix verification`);
   assert(run.privacy?.syntheticOnly === true, `${runPath} must declare synthetic-only evidence`);
 }
+
+const exactLogLifecycleRunPath = "compat/runs/2026-07-13-v080-exact-log-lifecycle.json";
+assert(
+  publicRunPaths.includes(exactLogLifecycleRunPath),
+  "public compatibility evidence is missing the v0.8.0 exact-log lifecycle decision",
+);
+const exactLogLifecycleRun = JSON.parse(await readText(exactLogLifecycleRunPath));
+assert(
+  exactLogLifecycleRun.decision?.supersedes === "T9 logs-retained-by-default",
+  "v0.8.0 log lifecycle evidence must identify the superseded T9 rule",
+);
+for (const expectedPolicy of [
+  "permanent-delete-exact-thread-logs",
+  "trash-and-restore-retain-logs",
+  "final-purge-deletes-unprotected-logs",
+  "logs-only-read-only",
+  "memory-read-only",
+  "logical-row-deletion-only",
+]) {
+  assert(
+    exactLogLifecycleRun.decision?.policies?.includes(expectedPolicy),
+    `v0.8.0 log lifecycle evidence is missing policy ${expectedPolicy}`,
+  );
+}
+
+const compatibilityReadme = await readText("compat/README.md");
+assert(
+  compatibilityReadme.includes("v0.8.0 exact thread-linked log lifecycle"),
+  "compatibility README must describe the current v0.8.0 log lifecycle",
+);
+assert(
+  !compatibilityReadme.includes("no expansion of ordinary cleanup into memory, logs"),
+  "compatibility README still presents the superseded T9 logs-retained rule as current",
+);
+const futureProjects = await readText("docs/plans/2026-07-security-compat-architecture/04-future-projects.md");
+assert(
+  futureProjects.includes("Superseded for exact thread-linked lifecycle cleanup in v0.8.0"),
+  "future-project history must mark the old no-log-delete boundary as superseded",
+);
 
 const forbiddenPublicPatterns = [
   /\/Users\//u,

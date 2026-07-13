@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   collectDedicatedLogRecords,
+  collectDedicatedLogKeys,
   assertDedicatedLogRecoveryPayloadBounds,
+  assertDedicatedLogKeyPayloadBounds,
   collectSqliteDeletionCounts,
   deleteDedicatedLogRows,
   MAX_DEDICATED_LOG_RECOVERY_ROWS,
@@ -229,5 +231,22 @@ describe("sqlite core", () => {
     expect(() => assertDedicatedLogRecoveryPayloadBounds(
       Array.from({ length: MAX_DEDICATED_LOG_RECOVERY_ROWS + 1 }, (_, id) => ({ id })),
     )).toThrow(/encoded dedicated logs recovery payload/iu);
+  });
+
+  it("rejects an oversized purge key before loading it into the operation journal", () => {
+    const db = new Database(fixture.paths.logsSqlite as string);
+    db.exec("drop table logs; create table logs (id text primary key, thread_id text not null);");
+    db.prepare("insert into logs (id, thread_id) values (?, ?)")
+      .run("x".repeat(70 * 1024), FIXTURE_IDS.ACTIVE_ID);
+    db.close();
+
+    expect(() => collectDedicatedLogKeys(fixture.paths.logsSqlite, [FIXTURE_IDS.ACTIVE_ID]))
+      .toThrow(/key payload|key component|safe bound/iu);
+  });
+
+  it("rejects an encoded purge-key payload that exceeds the byte bound", () => {
+    expect(() => assertDedicatedLogKeyPayloadBounds([
+      { id: "x".repeat(17 * 1024 * 1024), threadId: FIXTURE_IDS.ACTIVE_ID },
+    ])).toThrow(/key payload|key component|safe bound/iu);
   });
 });

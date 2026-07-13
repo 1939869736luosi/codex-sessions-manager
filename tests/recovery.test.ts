@@ -243,6 +243,38 @@ describe("durable mutation recovery", () => {
     expect(() => parseOperationRecoveryPayload(payload, interrupted)).toThrow(/locked targets/iu);
   });
 
+  it("rejects an oversized dedicated log purge key in recovery metadata", () => {
+    const interrupted = {
+      operationId: "00000000-0000-4000-8000-000000000002",
+      kind: "purge" as const,
+      targetIds: [FIXTURE_IDS.ACTIVE_ID],
+      journal: {
+        sqliteHomeRealPath: "/safe/sqlite",
+        sqliteHomeIdentity: { dev: 1, ino: 2 },
+      },
+    };
+    const payload: OperationRecoveryPayloadV1 = {
+      schemaVersion: "codex-sessions-recovery.v1",
+      operationId: interrupted.operationId,
+      kind: "purge",
+      strategy: "rollforward",
+      rootRealPath: "/safe/root",
+      targetIds: [FIXTURE_IDS.ACTIVE_ID],
+      files: [],
+      sqlite: {
+        sqliteHomeRealPath: "/safe/sqlite",
+        sqliteHomeIdentity: { dev: 1, ino: 2 },
+        stateRelativePath: null,
+        goalsRelativePath: null,
+        logsRelativePath: "logs_1.sqlite",
+        records: {},
+        dedicatedLogKeys: [{ id: "x".repeat(70 * 1024), threadId: FIXTURE_IDS.ACTIVE_ID }],
+      },
+    };
+
+    expect(() => parseOperationRecoveryPayload(payload, interrupted)).toThrow(/purge key payload exceeds safe bounds/iu);
+  });
+
   it("reports only journal verification when recovering a prepared operation with no mutation payload", async () => {
     const context = await createTrustedRootContext(rootDir);
     await acquireMutationLock(context, "cleanup-index", [FIXTURE_IDS.ACTIVE_ID]);
@@ -942,6 +974,67 @@ describe("durable mutation recovery", () => {
         const db = new Database(fixture.paths.logsSqlite as string, { readonly: true });
         expect((db.prepare("select count(*) as count from logs where thread_id = ?").get(FIXTURE_IDS.ARCHIVED_ID) as { count: number }).count).toBe(1);
         db.close();
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    60_000,
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "resumes purge recovery after a second crash leaves protected logs present and other logs absent",
+    async () => {
+      const fixture = await createFixture();
+      try {
+        const scan = await scanCodexRoot(fixture.rootDir);
+        const trashed = await moveSessionsToTrash(
+          scan,
+          resolveSessions(scan, [FIXTURE_IDS.ACTIVE_ID, FIXTURE_IDS.ARCHIVED_ID]),
+          { allowActive: true },
+        );
+        const childSource = `
+          import { purgeTrashEntry } from './dist/core/trash.js';
+          import { setMutationCheckpointHookForTests } from './dist/core/mutation-safety.js';
+          setMutationCheckpointHookForTests(async (event) => {
+            if (event.name === 'purge-logs' && event.status === 'started') {
+              await new Promise(() => { setInterval(() => {}, 1000); });
+            }
+          });
+          await purgeTrashEntry(process.env.CSM_CRASH_ROOT, process.env.CSM_TRASH_ID);
+        `;
+        const child = spawn(process.execPath, ["--input-type=module", "--eval", childSource], {
+          cwd: repositoryRoot,
+          env: subprocessEnvironment({ CSM_CRASH_ROOT: fixture.rootDir, CSM_TRASH_ID: trashed.trashEntry.trashId }),
+          stdio: "ignore",
+        });
+        const childExit = observeChildExit(child);
+        await waitForCheckpoint(fixture.rootDir, "purge-logs", "started", childExit);
+        child.kill("SIGKILL");
+        await childExit.promise;
+
+        const protectedPath = path.join(
+          fixture.rootDir,
+          "sessions",
+          "2026",
+          "07",
+          "13",
+          `rollout-2026-07-13T00-00-00-${FIXTURE_IDS.ACTIVE_ID}.jsonl`,
+        );
+        await mkdir(path.dirname(protectedPath), { recursive: true });
+        await writeFile(protectedPath, "{}\n");
+        const logs = new Database(fixture.paths.logsSqlite as string);
+        logs.prepare("delete from logs where thread_id = ?").run(FIXTURE_IDS.ARCHIVED_ID);
+        logs.close();
+
+        const result = await recoverInterruptedOperation(fixture.rootDir);
+
+        expect(result).toMatchObject({ operationStatus: "committed", verificationStatus: "passed" });
+        expect(result.verificationScope.retainedSurfaces).toContain("logs_N.sqlite");
+        const check = new Database(fixture.paths.logsSqlite as string, { readonly: true });
+        expect((check.prepare("select count(*) as count from logs where thread_id = ?").get(FIXTURE_IDS.ACTIVE_ID) as { count: number }).count).toBe(1);
+        expect((check.prepare("select count(*) as count from logs where thread_id = ?").get(FIXTURE_IDS.ARCHIVED_ID) as { count: number }).count).toBe(0);
+        check.close();
+        expect(await getRecoveryStatus(fixture.rootDir)).toMatchObject({ pending: false });
       } finally {
         await fixture.cleanup();
       }

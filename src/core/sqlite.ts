@@ -882,6 +882,8 @@ export const MAX_DEDICATED_LOG_RECOVERY_ROWS = 10_000;
 export const MAX_DEDICATED_LOG_RECOVERY_BYTES = 32 * 1024 * 1024;
 export const MAX_DEDICATED_LOG_ENCODED_BYTES = MAX_DEDICATED_LOG_RECOVERY_BYTES * 2;
 export const MAX_DEDICATED_LOG_PURGE_KEYS = 100_000;
+export const MAX_DEDICATED_LOG_PURGE_KEY_BYTES = 16 * 1024 * 1024;
+export const MAX_DEDICATED_LOG_KEY_COMPONENT_BYTES = 64 * 1024;
 
 function assertDedicatedLogsSchema(db: Database.Database): void {
   const columns = db.prepare("pragma table_info(logs)").all() as Array<{ name?: string; pk?: number }>;
@@ -919,6 +921,26 @@ export function dedicatedLogKeysFromRecords(rows: Record<string, unknown>[]): De
   });
 }
 
+export function assertDedicatedLogKeyPayloadBounds(
+  keys: readonly unknown[],
+  errorCode: "UNSAFE_PATH" | "RECOVERY_REQUIRED" = "UNSAFE_PATH",
+): void {
+  const hasInvalidOrOversizedComponent = keys.some((value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return true;
+    const key = value as Partial<DedicatedLogKey>;
+    if ((typeof key.id !== "string" && typeof key.id !== "number") || typeof key.threadId !== "string") return true;
+    return Buffer.byteLength(String(key.id), "utf8") > MAX_DEDICATED_LOG_KEY_COMPONENT_BYTES
+      || Buffer.byteLength(key.threadId, "utf8") > MAX_DEDICATED_LOG_KEY_COMPONENT_BYTES;
+  });
+  if (
+    keys.length > MAX_DEDICATED_LOG_PURGE_KEYS
+    || hasInvalidOrOversizedComponent
+    || Buffer.byteLength(JSON.stringify(keys), "utf8") > MAX_DEDICATED_LOG_PURGE_KEY_BYTES
+  ) {
+    throw new MutationSafetyError(errorCode, "dedicated logs purge key payload exceeds safe bounds");
+  }
+}
+
 function sortDedicatedLogKeys(keys: DedicatedLogKey[]): DedicatedLogKey[] {
   return [...keys].sort((left, right) =>
     String(left.id).localeCompare(String(right.id)) || left.threadId.localeCompare(right.threadId));
@@ -935,6 +957,9 @@ function collectDedicatedLogKeysInDatabase(
   sessionIds: string[],
   maxRows = MAX_DEDICATED_LOG_RECOVERY_ROWS,
 ): DedicatedLogKey[] {
+  if (!db.inTransaction) {
+    return db.transaction(() => collectDedicatedLogKeysInDatabase(db, sessionIds, maxRows))();
+  }
   const { clause, params } = createInClause(sessionIds);
   if (!clause) return [];
   const count = countRows(db, `select count(*) as count from logs where thread_id in (${clause})`, params);
@@ -944,10 +969,32 @@ function collectDedicatedLogKeysInDatabase(
       `dedicated logs target has ${count} rows; safe recovery limit is ${maxRows}`,
     );
   }
-  return (db.prepare(`select id, thread_id from logs where thread_id in (${clause})`).all(...params) as Array<{
+  const keySizes = db.prepare(`
+    select
+      coalesce(sum(length(cast(id as blob)) + length(cast(thread_id as blob))), 0) as total_bytes,
+      coalesce(max(length(cast(id as blob))), 0) as max_id_bytes,
+      coalesce(max(length(cast(thread_id as blob))), 0) as max_thread_id_bytes
+    from logs where thread_id in (${clause})
+  `).get(...params) as { total_bytes?: unknown; max_id_bytes?: unknown; max_thread_id_bytes?: unknown };
+  const totalBytes = Number(keySizes.total_bytes ?? 0);
+  const maxIdBytes = Number(keySizes.max_id_bytes ?? 0);
+  const maxThreadIdBytes = Number(keySizes.max_thread_id_bytes ?? 0);
+  if (
+    !Number.isSafeInteger(totalBytes)
+    || !Number.isSafeInteger(maxIdBytes)
+    || !Number.isSafeInteger(maxThreadIdBytes)
+    || totalBytes > MAX_DEDICATED_LOG_PURGE_KEY_BYTES
+    || maxIdBytes > MAX_DEDICATED_LOG_KEY_COMPONENT_BYTES
+    || maxThreadIdBytes > MAX_DEDICATED_LOG_KEY_COMPONENT_BYTES
+  ) {
+    throw new MutationSafetyError("UNSAFE_PATH", "dedicated logs purge key payload exceeds safe bounds");
+  }
+  const keys = (db.prepare(`select id, thread_id from logs where thread_id in (${clause})`).all(...params) as Array<{
     id: string | number;
     thread_id: string;
   }>).map((row) => ({ id: row.id, threadId: row.thread_id }));
+  assertDedicatedLogKeyPayloadBounds(keys);
+  return keys;
 }
 
 export function collectDedicatedLogKeys(
@@ -967,23 +1014,26 @@ export function collectDedicatedLogRecords(
 ): Record<string, unknown>[] {
   if (!logsSqlitePath || sessionIds.length === 0) return [];
   return withDatabase(logsSqlitePath, true, (db) => {
-    assertDedicatedLogsSchema(db);
-    const keys = collectDedicatedLogKeysInDatabase(db, sessionIds);
-    const tableColumns = getTableColumns(db, "logs");
-    const { clause, params } = createInClause(sessionIds);
-    const sizeTerms = tableColumns.map((column) => `coalesce(length(${quoteIdentifier(column)}), 0)`).join(" + ");
-    const estimatedBytes = Number((db.prepare(
-      `select coalesce(sum(${sizeTerms || "0"}), 0) as bytes from logs where thread_id in (${clause})`,
-    ).get(...params) as { bytes?: unknown }).bytes ?? 0);
-    if (!Number.isSafeInteger(estimatedBytes) || estimatedBytes > MAX_DEDICATED_LOG_RECOVERY_BYTES) {
-      throw new MutationSafetyError(
-        "UNSAFE_PATH",
-        `dedicated logs recovery data is ${estimatedBytes} bytes; safe limit is ${MAX_DEDICATED_LOG_RECOVERY_BYTES}`,
-      );
-    }
-    const rows = selectRows(db, `select * from logs where thread_id in (${clause})`, params);
-    assertDedicatedLogKeysEqual(dedicatedLogKeysFromRecords(rows), keys);
-    return rows;
+    const collect = () => {
+      assertDedicatedLogsSchema(db);
+      const keys = collectDedicatedLogKeysInDatabase(db, sessionIds);
+      const tableColumns = getTableColumns(db, "logs");
+      const { clause, params } = createInClause(sessionIds);
+      const sizeTerms = tableColumns.map((column) => `coalesce(length(${quoteIdentifier(column)}), 0)`).join(" + ");
+      const estimatedBytes = Number((db.prepare(
+        `select coalesce(sum(${sizeTerms || "0"}), 0) as bytes from logs where thread_id in (${clause})`,
+      ).get(...params) as { bytes?: unknown }).bytes ?? 0);
+      if (!Number.isSafeInteger(estimatedBytes) || estimatedBytes > MAX_DEDICATED_LOG_RECOVERY_BYTES) {
+        throw new MutationSafetyError(
+          "UNSAFE_PATH",
+          `dedicated logs recovery data is ${estimatedBytes} bytes; safe limit is ${MAX_DEDICATED_LOG_RECOVERY_BYTES}`,
+        );
+      }
+      const rows = selectRows(db, `select * from logs where thread_id in (${clause})`, params);
+      assertDedicatedLogKeysEqual(dedicatedLogKeysFromRecords(rows), keys);
+      return rows;
+    };
+    return db.inTransaction ? collect() : db.transaction(collect)();
   });
 }
 

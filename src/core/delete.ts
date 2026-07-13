@@ -88,14 +88,15 @@ function structuredErrorCode(error: unknown, fallback: MutationErrorCode): Mutat
   return fallback;
 }
 
-function sumSqliteCounts(counts: SqliteDeletionCounts): number {
+function sumSqliteCounts(counts: SqliteDeletionCounts, includeDedicatedLogs = false): number {
   return (
     counts.threadRows +
     counts.spawnEdgeRows +
     counts.assignedAgentJobs +
     counts.dynamicToolRows +
     counts.stage1Rows +
-    counts.threadGoalRows
+    counts.threadGoalRows +
+    (includeDedicatedLogs ? counts.logRows : 0)
   );
 }
 
@@ -197,7 +198,12 @@ async function assertScannedFileUnchanged(
   await revalidateManagedPath(context, snapshot);
 }
 
-export function buildDeletePreview(scan: ScanResult, sessions: SessionEntry[]): DeletePreview {
+export function buildDeletePreview(
+  scan: ScanResult,
+  sessions: SessionEntry[],
+  options: { dedicatedLogsRetained?: boolean } = {},
+): DeletePreview {
+  const dedicatedLogsRetained = options.dedicatedLogsRetained ?? false;
   const sessionIds = sessions.map((session) => session.id);
   const sqliteCountsById = collectSqliteDeletionCounts(
     scan.root.sqlitePath,
@@ -241,7 +247,14 @@ export function buildDeletePreview(scan: ScanResult, sessions: SessionEntry[]): 
 
   return {
     memoryRetained: true,
-    retainedSurfaces: ["memories SQLite", "MEMORY.md", "memory_summary.md", "memory skills"],
+    dedicatedLogsRetained,
+    retainedSurfaces: [
+      ...(dedicatedLogsRetained ? ["dedicated logs"] : []),
+      "memories SQLite",
+      "MEMORY.md",
+      "memory_summary.md",
+      "memory skills",
+    ],
     items,
     familyWarnings: buildDeleteFamilyWarnings(scan, sessions),
     totals: {
@@ -252,7 +265,7 @@ export function buildDeletePreview(scan: ScanResult, sessions: SessionEntry[]): 
       possibleUnknownGlobalStateRefs: items.reduce((sum, item) => sum + item.possibleUnknownGlobalStateRefs, 0),
       sessionIndexRows: items.reduce((sum, item) => sum + item.sessionIndexRows, 0),
       historyRows: items.reduce((sum, item) => sum + item.historyRows, 0),
-      sqliteRows: sumSqliteCounts(sqliteTotals),
+      sqliteRows: sumSqliteCounts(sqliteTotals, !dedicatedLogsRetained),
     },
   };
 }

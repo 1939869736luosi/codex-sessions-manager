@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "runId": "2026-07-13-v080-exact-log-lifecycle",
+  "immutable": true,
+  "baselineVersion": "0.144.1",
+  "checkedAt": "2026-07-13",
+  "findings": [
+    "The T9/0.5.2 retain-all-logs rule was a temporary safety boundary from before exact dedicated-log recovery was available.",
+    "The v0.8.0 implementation can identify and recover exact full-UUID thread-linked log rows during permanent deletion without granting logs-only batch deletion.",
+    "Memory and non-thread-owned logs remain outside the mutation boundary, and SQLite logical deletion does not prove physical-byte erasure."
+  ],
+  "fixes": [
+    "Permanent deletion removes only exact logs.thread_id rows for explicitly selected full session UUIDs.",
+    "Trash and restore retain linked logs; final purge deletes them only when no live session or other recoverable trash entry protects the same ID.",
+    "Public compatibility guidance now marks the earlier retain-all-logs rule as superseded while preserving it as historical evidence."
+  ],
+  "postFixVerification": [
+    "The compatibility validator requires this public decision record and all six lifecycle policy markers.",
+    "The public compatibility README and historical future-project plan distinguish exact lifecycle cleanup from logs-only inventory.",
+    "Memory remains read-only and the public safety boundary promises logical row deletion only."
+  ],
+  "decision": {
+    "supersedes": "T9 logs-retained-by-default",
+    "policies": [
+      "permanent-delete-exact-thread-logs",
+      "trash-and-restore-retain-logs",
+      "final-purge-deletes-unprotected-logs",
+      "logs-only-read-only",
+      "memory-read-only",
+      "logical-row-deletion-only"
+    ]
+  },
+  "privacy": {
+    "syntheticOnly": true,
+    "containsLocalPaths": false,
+    "containsSessionText": false,
+    "containsMachineCounts": false
+  }
+}

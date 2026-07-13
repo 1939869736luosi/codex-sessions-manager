@@ -253,11 +253,18 @@ describe("release configuration", () => {
     expect(localPromotion).toContain("liveTagCommit");
     expect(localPromotion).toContain('verificationRun.head_branch !== "main"');
     expect(localPromotion).toContain("verificationRun.workflow_id !== verificationWorkflow.id");
+    expect(localPromotion).toContain('candidateRun.event !== "push"');
     expect(localPromotion).toContain('const packageName = "codex-sessions-manager"');
+    expect(localPromotion).toContain('const publicRegistry = "https://registry.npmjs.org/"');
+    expect(localPromotion).toContain('argument("--npm-userconfig")');
+    expect(localPromotion).toContain('["config", "get", "registry"]');
+    expect(localPromotion).toContain('["whoami"]');
     expect(localPromotion).toContain("@security-verify");
     expect(localPromotion).toContain('["dist-tag", "add"');
     expect(localPromotion).toContain("Promotion status was ambiguous");
     expect(localPromotion).toContain("latest and security-verify both identify");
+    expect(releaseGuide).toContain("--registry=https://registry.npmjs.org/");
+    expect(releaseGuide).toContain("--npm-userconfig");
     const downgradeAttempt = spawnSync(
       process.execPath,
       ["scripts/promote-npm.mjs", "--version", "0.7.1", "--expected-latest", "0.7.1"],

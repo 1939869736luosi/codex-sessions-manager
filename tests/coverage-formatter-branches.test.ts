@@ -35,6 +35,7 @@ function zeroCounts(): RootDeletePreviewCounts {
     sessionIndexRows: 0,
     historyRows: 0,
     sqliteRows: 0,
+    dedicatedLogRows: 0,
     knownGlobalStateRefs: 0,
     exactKeyGlobalStateRefs: 0,
     possibleUnknownGlobalStateRefs: 0,

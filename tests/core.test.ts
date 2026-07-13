@@ -1015,7 +1015,7 @@ describe("core integration", () => {
     expect(audit.surfaces.shellSnapshots.count).toBe(1);
     expect(audit.surfaces.sessionIndex.count).toBe(1);
     expect(audit.surfaces.history.count).toBe(1);
-    expect(audit.surfaces.sqlite.rows).toBe(6);
+    expect(audit.surfaces.sqlite.rows).toBe(7);
     expect(audit.surfaces.globalStateKnown.count).toBe(3);
     expect(audit.surfaces.globalStateUnknown.count).toBe(1);
     expect(audit.surfaces.globalStateUnknown.paths).toEqual(["$.some-user-setting"]);
@@ -1434,7 +1434,7 @@ describe("core integration", () => {
     expect(preview.totals.shellSnapshotFiles).toBe(1);
     expect(preview.totals.globalStateRefs).toBe(3);
     expect(preview.totals.possibleUnknownGlobalStateRefs).toBe(1);
-    expect(preview.totals.sqliteRows).toBe(6);
+    expect(preview.totals.sqliteRows).toBe(7);
     expect(result.validation.every((item) => item.filePathsRemaining.length === 0)).toBe(true);
     expect(result.validation.every((item) => item.shellSnapshotFilesRemaining.length === 0)).toBe(true);
     expect(result.validation.every((item) => item.globalStateRefsRemaining === 0)).toBe(true);

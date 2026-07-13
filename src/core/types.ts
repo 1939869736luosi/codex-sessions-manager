@@ -641,6 +641,7 @@ export interface RootResidueSurfaceSummary {
   sessionIndexRows: number;
   historyRows: number;
   sqliteRows: number;
+  dedicatedLogRows: number;
   knownGlobalStateRefs: number;
   exactKeyGlobalStateRefs: number;
   possibleUnknownGlobalStateRefs: number;
@@ -702,6 +703,7 @@ export interface RootDeletePreviewCounts {
   sessionIndexRows: number;
   historyRows: number;
   sqliteRows: number;
+  dedicatedLogRows: number;
   knownGlobalStateRefs: number;
   exactKeyGlobalStateRefs: number;
   possibleUnknownGlobalStateRefs: number;
@@ -729,6 +731,8 @@ export interface RootDeletePreviewCandidate {
   recommendedAuditCommand: string;
   previewOnlyCommand: string;
   recommendedPreviewCommand: string;
+  deleteSupported: boolean;
+  deleteUnsupportedReason: string | null;
 }
 
 export interface RootDeletePreview {
@@ -777,6 +781,7 @@ export interface DeletePreviewItem {
 
 export interface DeletePreview {
   memoryRetained: true;
+  dedicatedLogsRetained: boolean;
   retainedSurfaces: string[];
   items: DeletePreviewItem[];
   familyWarnings: DeleteFamilyWarning[];

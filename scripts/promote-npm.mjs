@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 const packageName = "codex-sessions-manager";
 const repository = "1939869736luosi/codex-sessions-manager";
+const publicRegistry = "https://registry.npmjs.org/";
 
 function argument(name) {
   const index = process.argv.indexOf(name);
@@ -41,18 +42,55 @@ function run(command, args, options = {}) {
   return result.stdout?.trim() ?? "";
 }
 
-function runNpm(args, cacheDirectory, options = {}) {
-  return run("npm", [...args, "--prefer-online", "--cache", cacheDirectory], options);
+function npmEnvironment() {
+  const environment = { ...process.env };
+  for (const key of Object.keys(environment)) {
+    if (
+      key.toLowerCase().startsWith("npm_config_")
+      || ["node_auth_token", "npm_token", "npm_auth_token"].includes(key.toLowerCase())
+    ) {
+      delete environment[key];
+    }
+  }
+  return environment;
 }
 
-function readVersion(specification, cacheDirectory) {
-  return JSON.parse(runNpm(["view", specification, "version", "--json"], cacheDirectory));
+function npmArguments(args, cacheDirectory, userConfig, globalConfig) {
+  return [
+    ...args,
+    `--registry=${publicRegistry}`,
+    "--userconfig", userConfig,
+    "--globalconfig", globalConfig,
+    "--prefer-online",
+    "--cache", cacheDirectory,
+  ];
 }
 
-function readTags(cacheDirectory) {
-  const result = spawnSync("npm", [
-    "view", packageName, "dist-tags", "--json", "--prefer-online", "--cache", cacheDirectory,
-  ], { encoding: "utf8" });
+function runNpm(args, cacheDirectory, userConfig, globalConfig, workingDirectory, options = {}) {
+  return run("npm", npmArguments(args, cacheDirectory, userConfig, globalConfig), {
+    ...options,
+    cwd: workingDirectory,
+    env: npmEnvironment(),
+  });
+}
+
+function readVersion(specification, cacheDirectory, userConfig, globalConfig, workingDirectory) {
+  return JSON.parse(runNpm(
+    ["view", specification, "version", "--json"],
+    cacheDirectory,
+    userConfig,
+    globalConfig,
+    workingDirectory,
+  ));
+}
+
+function readTags(cacheDirectory, userConfig, globalConfig, workingDirectory) {
+  const result = spawnSync("npm", npmArguments(
+    ["view", packageName, "dist-tags", "--json"],
+    cacheDirectory,
+    userConfig,
+    globalConfig,
+  ), { encoding: "utf8", cwd: workingDirectory, env: npmEnvironment() });
   if (result.status !== 0) return null;
   try {
     return JSON.parse(result.stdout);
@@ -84,10 +122,65 @@ const expectedVerificationCommit = required(
 );
 const candidateRunId = required(argument("--candidate-run-id"), "--candidate-run-id", integerPattern);
 const verificationRunId = required(argument("--verification-run-id"), "--verification-run-id", integerPattern);
+const npmUserConfigSource = path.resolve(required(argument("--npm-userconfig"), "--npm-userconfig", /^.+$/u));
+const npmUserConfigStat = lstatSync(npmUserConfigSource, { throwIfNoEntry: false });
+if (!npmUserConfigStat?.isFile() || npmUserConfigStat.isSymbolicLink()) {
+  fail("--npm-userconfig must identify a regular, non-symlinked file created for this promotion.");
+}
 
 const temporaryDirectory = mkdtempSync(path.join(tmpdir(), "csm-npm-promotion-"));
+let temporaryDirectoryRemoved = false;
+let interactiveNpmChild = null;
+const signalExitCodes = new Map([["SIGINT", 2], ["SIGTERM", 15], ["SIGHUP", 1]]);
+const signalHandlers = new Map();
+function removeTemporaryDirectory() {
+  if (temporaryDirectoryRemoved) return;
+  temporaryDirectoryRemoved = true;
+  rmSync(temporaryDirectory, { recursive: true, force: true });
+}
+function removeSignalHandlers() {
+  for (const [signal, handler] of signalHandlers) process.removeListener(signal, handler);
+}
+for (const [signal, number] of signalExitCodes) {
+  const handler = () => {
+    interactiveNpmChild?.kill(signal);
+    removeTemporaryDirectory();
+    removeSignalHandlers();
+    process.exit(128 + number);
+  };
+  signalHandlers.set(signal, handler);
+  process.once(signal, handler);
+}
+process.once("exit", removeTemporaryDirectory);
 
 try {
+  const isolatedUserConfig = path.join(temporaryDirectory, "promotion.npmrc");
+  writeFileSync(isolatedUserConfig, readFileSync(npmUserConfigSource), { mode: 0o600 });
+  const isolatedGlobalConfig = path.join(temporaryDirectory, "global.npmrc");
+  writeFileSync(isolatedGlobalConfig, "", { mode: 0o600 });
+  const npmCheckCache = path.join(temporaryDirectory, "npm-check-cache");
+  const configuredRegistry = runNpm(
+    ["config", "get", "registry"],
+    npmCheckCache,
+    isolatedUserConfig,
+    isolatedGlobalConfig,
+    temporaryDirectory,
+  );
+  if (configuredRegistry !== publicRegistry) {
+    fail(`npm resolved an unexpected registry: ${configuredRegistry}`);
+  }
+  const npmIdentity = runNpm(
+    ["whoami"],
+    npmCheckCache,
+    isolatedUserConfig,
+    isolatedGlobalConfig,
+    temporaryDirectory,
+  );
+  if (!/^[a-z0-9][a-z0-9._-]*$/iu.test(npmIdentity)) {
+    fail("npm did not return a valid authenticated identity for the public registry.");
+  }
+  console.log(`Authenticated to the public npm registry as ${npmIdentity}.`);
+
   const evidenceDirectory = path.join(temporaryDirectory, "evidence");
   run("gh", [
     "run", "download", verificationRunId,
@@ -162,6 +255,7 @@ try {
   const candidateRun = JSON.parse(run("gh", ["api", `repos/${repository}/actions/runs/${candidateRunId}`]));
   if (
     candidateRun.status !== "completed"
+    || candidateRun.event !== "push"
     || candidateRun.path !== ".github/workflows/release.yml"
     || candidateRun.head_sha !== expectedCommit
     || candidateRun.head_branch !== tag
@@ -176,12 +270,24 @@ try {
   mkdirSync(registryPackDirectory, { recursive: true });
   const packResult = JSON.parse(runNpm([
     "pack", `${packageName}@${version}`, "--ignore-scripts", "--json", "--pack-destination", registryPackDirectory,
-  ], path.join(temporaryDirectory, "pack-cache")));
+  ], path.join(temporaryDirectory, "pack-cache"), isolatedUserConfig, isolatedGlobalConfig, temporaryDirectory));
   const registryTarball = path.join(registryPackDirectory, packResult[0]?.filename ?? "");
   if (sha256(registryTarball) !== expectedSha256) fail("fresh registry tarball SHA-256 does not match reviewed evidence.");
 
-  const candidate = readVersion(`${packageName}@security-verify`, path.join(temporaryDirectory, "candidate"));
-  const currentLatest = readVersion(`${packageName}@latest`, path.join(temporaryDirectory, "latest"));
+  const candidate = readVersion(
+    `${packageName}@security-verify`,
+    path.join(temporaryDirectory, "candidate"),
+    isolatedUserConfig,
+    isolatedGlobalConfig,
+    temporaryDirectory,
+  );
+  const currentLatest = readVersion(
+    `${packageName}@latest`,
+    path.join(temporaryDirectory, "latest"),
+    isolatedUserConfig,
+    isolatedGlobalConfig,
+    temporaryDirectory,
+  );
   if (candidate !== version) fail(`security-verify identifies ${candidate}, not ${version}.`);
   if (currentLatest !== expectedLatest) {
     fail(`latest changed from expected ${expectedLatest} to ${currentLatest}; rerun release verification.`);
@@ -190,16 +296,38 @@ try {
   console.log(`Verified commit, tag, independent run, tarball, provenance, smoke, and candidate ${version}.`);
   console.log(`Running: npm dist-tag add ${packageName}@${version} latest`);
   console.log("Complete the npm browser or Touch ID confirmation if prompted.");
-  const promotion = spawnSync("npm", ["dist-tag", "add", `${packageName}@${version}`, "latest"], {
-    encoding: "utf8",
-    stdio: "inherit",
+  const promotion = await new Promise((resolve) => {
+    interactiveNpmChild = spawn("npm", npmArguments(
+      ["dist-tag", "add", `${packageName}@${version}`, "latest"],
+      path.join(temporaryDirectory, "promotion-cache"),
+      isolatedUserConfig,
+      isolatedGlobalConfig,
+    ), {
+      stdio: "inherit",
+      cwd: temporaryDirectory,
+      env: npmEnvironment(),
+    });
+    interactiveNpmChild.once("error", (error) => resolve({ status: null, signal: null, error }));
+    interactiveNpmChild.once("exit", (status, signal) => resolve({ status, signal, error: null }));
   });
+  interactiveNpmChild = null;
 
   let tags = null;
-  for (let attempt = 1; attempt <= 12; attempt += 1) {
-    tags = readTags(path.join(temporaryDirectory, `verify-${attempt}`));
+  const verificationAttempts = process.env.NODE_ENV === "test"
+    ? Math.max(1, Number.parseInt(process.env.CSM_PROMOTION_TEST_VERIFY_ATTEMPTS ?? "12", 10) || 12)
+    : 12;
+  const verificationDelayMs = process.env.NODE_ENV === "test"
+    ? Math.max(0, Number.parseInt(process.env.CSM_PROMOTION_TEST_VERIFY_DELAY_MS ?? "5000", 10) || 0)
+    : 5_000;
+  for (let attempt = 1; attempt <= verificationAttempts; attempt += 1) {
+    tags = readTags(
+      path.join(temporaryDirectory, `verify-${attempt}`),
+      isolatedUserConfig,
+      isolatedGlobalConfig,
+      temporaryDirectory,
+    );
     if (tags?.latest === version && tags?.["security-verify"] === version) break;
-    if (attempt < 12) await new Promise((resolve) => setTimeout(resolve, 5_000));
+    if (attempt < verificationAttempts) await new Promise((resolve) => setTimeout(resolve, verificationDelayMs));
   }
   if (tags?.latest !== version || tags?.["security-verify"] !== version) {
     if (promotion.status !== 0) fail("Promotion status was ambiguous and the registry did not confirm the requested tags.");
@@ -209,5 +337,6 @@ try {
   console.log(`Verified: latest and security-verify both identify ${version}.`);
   console.log("Revoke any temporary npm token and remove temporary credentials now.");
 } finally {
-  rmSync(temporaryDirectory, { recursive: true, force: true });
+  removeSignalHandlers();
+  removeTemporaryDirectory();
 }

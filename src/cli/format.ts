@@ -721,7 +721,9 @@ export function formatPreview(preview: DeletePreview): string {
       `  session_index: ${item.sessionIndexRows}`,
       `  history: ${item.historyRows}`,
       `  sqlite: ${sumSqlite(item.sqlite)}`,
-      `  sqlite_retained: logs=${item.sqlite.logRows}`,
+      preview.dedicatedLogsRetained
+        ? `  sqlite_retained: logs=${item.sqlite.logRows}`
+        : `  sqlite_delete: logs=${item.sqlite.logRows}`,
       ...item.warnings.map((warning) => `  warning: ${warning}`),
     ]),
     ...formatFamilyWarnings(preview.familyWarnings),
@@ -990,6 +992,7 @@ function formatRootResidueCounts(candidate: RootResidueAudit["candidates"][numbe
     `index=${candidate.surfaces.sessionIndexRows}`,
     `history=${candidate.surfaces.historyRows}`,
     `sqlite=${candidate.surfaces.sqliteRows}`,
+    `logs=${candidate.surfaces.dedicatedLogRows}`,
     `global_known=${candidate.surfaces.knownGlobalStateRefs}`,
     `global_exact_key=${candidate.surfaces.exactKeyGlobalStateRefs}`,
     `global_unknown=${candidate.surfaces.possibleUnknownGlobalStateRefs}`,
@@ -1004,6 +1007,7 @@ function formatRootPreviewCounts(counts: RootDeletePreviewCounts): string {
     `index=${counts.sessionIndexRows}`,
     `history=${counts.historyRows}`,
     `sqlite=${counts.sqliteRows}`,
+    `logs=${counts.dedicatedLogRows}`,
     `global_known=${counts.knownGlobalStateRefs}`,
     `global_exact_key=${counts.exactKeyGlobalStateRefs}`,
     `global_unknown=${counts.possibleUnknownGlobalStateRefs}`,

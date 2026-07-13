@@ -950,7 +950,7 @@ async function readScannedManagedFile(
 
 async function buildTrashBundle(scan: ScanResult, sessions: SessionEntry[], trashId: string): Promise<TrashBundle> {
   const trustedRoot = requireMutationTrustedRoots(scan).root;
-  const preview = buildDeletePreview(scan, sessions);
+  const preview = buildDeletePreview(scan, sessions, { dedicatedLogsRetained: true });
   const sessionIds = sessions.map((session) => session.id);
   const sqliteSnapshots = await captureRestoreSqlitePaths(scan);
   for (const entry of sqliteSnapshots) {
