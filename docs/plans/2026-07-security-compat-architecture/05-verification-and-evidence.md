@@ -19,6 +19,24 @@ The v0.7.0 reviewed and registry tarball SHA-256 is:
 
 It contains 125 package files. The local reviewed tarball, candidate artifact, independently downloaded registry tarball, and promotion verification all matched.
 
+## v0.8.0 candidate evidence
+
+v0.8.0 remains **Unreleased**. The reviewed candidate branch is `codex/session-lifecycle-maintenance`. No v0.8.0 tag, GitHub Release, npm version, or dist-tag promotion exists yet.
+
+The fixed candidate passed:
+
+- TypeScript type checking;
+- 487 tests, with 2 platform-conditional tests skipped;
+- the configured coverage gate;
+- the Codex 0.144.1 compatibility release check with 13 public compatibility files;
+- build, CLI/MCP process smoke, and the 125-file npm package-manifest check;
+- production dependency audit with 0 vulnerabilities;
+- installation of the locally generated tarball into an empty temporary prefix, followed by both `--version` checks and an isolated-root `doctor --json` smoke.
+
+The release review found and corrected four blocker classes before fixing the candidate identity: npm registry/config inheritance, inaccurate log-preview policy, unbounded purge recovery-key bytes, and non-idempotent purge recovery after a second interruption with only some targets protected. Each correction has a regression test. The final independent Oracle review found no remaining high-confidence release blocker and returned GitHub/tag GO after a unique commit and tarball are fixed.
+
+The npm `latest` promotion remains deliberately deferred under the maintainer's instruction. A future release window must record the final reviewed commit and regenerated tarball SHA-256 here after any further source change, then verify the registry candidate before promotion. Earlier v0.8.0 candidate hashes are not release evidence.
+
 ## v0.7.0 workflow evidence
 
 | Check | Run | Result |
