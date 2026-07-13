@@ -5,7 +5,7 @@ This checklist is intentionally stricter than a normal package publish. A releas
 ## Before creating a tag
 
 - Confirm the working tree contains no session exports, local security reports, advisory drafts, encrypted archives, real session IDs, real home paths, or raw Codex data.
-- Confirm package version, `src/version.ts`, changelog heading, and intended `v<version>` tag match.
+- Confirm package version, `src/version.ts`, the dated `## <version> (YYYY-MM-DD)` changelog heading, and intended `v<version>` tag match. The tag workflow rejects `Unreleased`, missing, duplicate, and invalid-date headings before publishing.
 - Run `npm ci`, `npm run typecheck`, the supported-platform test suites, `npm run test:coverage`, `npm run build`, `npm run pack:check`, and `npm audit --omit=dev --audit-level=high`. Linux and macOS run the complete `npm test` suite. Windows runs the documented read-only/fail-closed release subset until destructive Windows support is enabled.
 - Review both `compat/upstream-baseline.json` and `compat/upstream-capabilities.json`. The release is blocked if storage compatibility or official capability replacement was not checked within the release window.
 - Create the tarball from the reviewed commit, record its file manifest and SHA-256, install that local tarball in an empty directory, and smoke both `--version` entrypoints.

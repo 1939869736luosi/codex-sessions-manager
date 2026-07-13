@@ -1,5 +1,6 @@
-import { access, mkdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, rmdir, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
+import os from "node:os";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -180,6 +181,50 @@ describe("release configuration", () => {
     expect(workflow).toContain("npm run pack:check");
     expect(dependabot).toContain("github-actions-dependencies:");
     expect(dependabot).toContain("patterns:\n          - \"*\"");
+  });
+
+  it("requires a dated changelog heading for the package version before publishing", async () => {
+    const releaseWorkflow = await readRepositoryFile(".github/workflows/release.yml");
+    expect(releaseWorkflow).toContain("node scripts/check-release-changelog.mjs");
+
+    const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "csm-release-changelog-"));
+    const runCheck = () => spawnSync(
+      process.execPath,
+      [path.join(repositoryRoot, "scripts/check-release-changelog.mjs")],
+      {
+        cwd: temporaryRoot,
+        encoding: "utf8",
+        env: subprocessEnvironment(),
+      },
+    );
+
+    try {
+      await writeFile(
+        path.join(temporaryRoot, "package.json"),
+        `${JSON.stringify({ version: "1.2.3" })}\n`,
+        "utf8",
+      );
+
+      await writeFile(path.join(temporaryRoot, "CHANGELOG.md"), "## 1.2.3 (2026-07-13)\n", "utf8");
+      const valid = runCheck();
+      expect(valid.status, `${valid.stdout}\n${valid.stderr}`).toBe(0);
+
+      for (const invalidHeading of [
+        "## 1.2.3 (Unreleased)\n",
+        "## 1.2.3 (2026-02-30)\n",
+        "## 1.2.4 (2026-07-13)\n",
+        "## 1.2.3 (2026-07-13)\n\n## 1.2.3 (2026-07-13)\n",
+        "## 1.2.3 (2026-07-13)\n\n## 1.2.3 (Unreleased)\n",
+        "## 1.2.3 (2026-07-13)\n\n## 1.2.3 (release pending)\n",
+      ]) {
+        await writeFile(path.join(temporaryRoot, "CHANGELOG.md"), invalidHeading, "utf8");
+        const invalid = runCheck();
+        expect(invalid.status).toBe(1);
+        expect(invalid.stderr).toContain("CHANGELOG.md must contain exactly one dated heading");
+      }
+    } finally {
+      await rm(temporaryRoot, { recursive: true, force: true });
+    }
   });
 
   it("publishes an immutable candidate before a verified local interactive latest promotion", async () => {

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.8.0 (Unreleased)
+## 0.8.0 (2026-07-13)
 
 - Added `monthly-review`, a bounded read-only periodic report combining root residue audit and delete preview; warnings default to five samples and expand only with `--details`.
 - Permanent session deletion now removes only dedicated `logs.thread_id` rows matching the exact selected UUID. Trash retains those rows, restore leaves them unchanged, and final purge removes them unless the same ID is live again.

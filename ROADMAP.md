@@ -31,18 +31,19 @@ The maintained implementation record is split under [`docs/plans/2026-07-securit
 - Align README, architecture, release guidance, package description, and historical implementation records with actual behavior.
 - Public evidence: [v0.7.1 release](https://github.com/1939869736luosi/codex-sessions-manager/releases/tag/v0.7.1), reviewed/tag commit `844f6f9a117aad6a7972dbf6a2adeb25ff09d42c`, and npm `latest`/`security-verify` version `0.7.1`.
 
-## Next high-value work
-
-- **Official-delete verifier:** on a temporary Codex home, create and officially delete synthetic threads, then report exactly which rollout, SQLite, logs, memory, snapshot, index, and global-state surfaces remain or cannot be confirmed.
-- **Small Codex behavior check:** for each pinned stable Codex version, generate its App Server schema and run create/read/archive/unarchive/delete against a temporary home. Expand to other hosts only after a real adapter failure justifies it.
-
-## v0.8.0 development completed, pending release review
+## v0.8.0 completed
 
 - Permanent delete removes only exact `logs.thread_id` rows; trash retains them, restore leaves them unchanged, and final purge removes them unless the ID is live again.
 - `monthly-review` combines bounded root audit and preview into one read-only periodic report.
 - Root and doctor warnings default to at most five samples; full warning details require an explicit request.
 - Session memory association reports source and Phase 2 selection metadata without raw memory, and post-delete validation confirms only the observable retained association.
 - Active and archived rollout files with the same session ID are reported as `storage-conflict`, not normal archive inventory.
+- Public evidence: [v0.8.0 release](https://github.com/1939869736luosi/codex-sessions-manager/releases/tag/v0.8.0), [merged PR #10](https://github.com/1939869736luosi/codex-sessions-manager/pull/10), reviewed/tag commit `f2615e1c95f2a03be98eadafa442610caaa5a359`, and npm `latest`/`security-verify` version `0.8.0`.
+
+## Next high-value work
+
+- **Official-delete verifier:** on a temporary Codex home, create and officially delete synthetic threads, then report exactly which rollout, SQLite, logs, memory, snapshot, index, and global-state surfaces remain or cannot be confirmed. Real session IDs may be used later as explicitly selected read-only calibration samples; supplying an ID never authorizes deletion.
+- **Small Codex behavior check:** for each pinned stable Codex version, generate its App Server schema and run create/read/archive/unarchive/delete against a temporary home. Expand to other hosts only after a real adapter failure justifies it.
 
 ## Conditional future ideas
 

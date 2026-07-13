@@ -10,6 +10,7 @@ Status: **completed**
 | v0.6.3 | `d4f553dc0be35e0faee20d896b1b667b13c87a42` | [GitHub Release](https://github.com/1939869736luosi/codex-sessions-manager/releases/tag/v0.6.3) |
 | v0.7.0 | `e57c1934c20d62da8d6ece0a602d569de4565082` | [GitHub Release](https://github.com/1939869736luosi/codex-sessions-manager/releases/tag/v0.7.0), [merged PR #3](https://github.com/1939869736luosi/codex-sessions-manager/pull/3) |
 | v0.7.1 | `844f6f9a117aad6a7972dbf6a2adeb25ff09d42c` | [GitHub Release](https://github.com/1939869736luosi/codex-sessions-manager/releases/tag/v0.7.1), npm `latest` and `security-verify` both `0.7.1` |
+| v0.8.0 | `f2615e1c95f2a03be98eadafa442610caaa5a359` | [GitHub Release](https://github.com/1939869736luosi/codex-sessions-manager/releases/tag/v0.8.0), [merged PR #10](https://github.com/1939869736luosi/codex-sessions-manager/pull/10), npm `latest` and `security-verify` both `0.8.0` |
 
 The v0.7.0 reviewed and registry tarball SHA-256 is:
 
@@ -19,9 +20,9 @@ The v0.7.0 reviewed and registry tarball SHA-256 is:
 
 It contains 125 package files. The local reviewed tarball, candidate artifact, independently downloaded registry tarball, and promotion verification all matched.
 
-## v0.8.0 candidate evidence
+## v0.8.0 release evidence
 
-v0.8.0 remains **Unreleased**. The reviewed candidate branch is `codex/session-lifecycle-maintenance`. No v0.8.0 tag, GitHub Release, npm version, or dist-tag promotion exists yet.
+v0.8.0 was released on 2026-07-13 from immutable tag commit `f2615e1c95f2a03be98eadafa442610caaa5a359`. The reviewed branch was merged through PR #10 and deleted after merge. The GitHub Release is public, and npm `latest` plus `security-verify` both identify `0.8.0`.
 
 The fixed candidate passed:
 
@@ -33,9 +34,22 @@ The fixed candidate passed:
 - production dependency audit with 0 vulnerabilities;
 - installation of the locally generated tarball into an empty temporary prefix, followed by both `--version` checks and an isolated-root `doctor --json` smoke.
 
-The release review found and corrected four blocker classes before fixing the candidate identity: npm registry/config inheritance, inaccurate log-preview policy, unbounded purge recovery-key bytes, and non-idempotent purge recovery after a second interruption with only some targets protected. Each correction has a regression test. The final independent Oracle review found no remaining high-confidence release blocker and returned GitHub/tag GO after a unique commit and tarball are fixed.
+The release review found and corrected four blocker classes before fixing the candidate identity: npm registry/config inheritance, inaccurate log-preview policy, unbounded purge recovery-key bytes, and non-idempotent purge recovery after a second interruption with only some targets protected. Each correction has a regression test. After the unique commit and tarball were fixed, the final independent Oracle review found no remaining high-confidence release blocker and returned GitHub/tag GO.
 
-The npm `latest` promotion remains deliberately deferred under the maintainer's instruction. A future release window must record the final reviewed commit and regenerated tarball SHA-256 here after any further source change, then verify the registry candidate before promotion. Earlier v0.8.0 candidate hashes are not release evidence.
+The final tag tarball contained 125 package files. The tarball rebuilt from the immutable tag, the security candidate downloaded from the public registry, and the ordinary `latest` installation all matched:
+
+```text
+SHA-256: 499f3f8664d82fc6ae021c673cce2e311130b6b09f53342d3b61df673a332b8f
+npm shasum: 9d04246aaace62cab99f473876923c4418b8e6f0
+```
+
+| Check | Run | Result |
+|---|---|---|
+| Main branch CI after PR #10 merge | [29221755142](https://github.com/1939869736luosi/codex-sessions-manager/actions/runs/29221755142) | Success |
+| Immutable-tag candidate publish | [29222152165](https://github.com/1939869736luosi/codex-sessions-manager/actions/runs/29222152165) | Success |
+| Independent registry verification | [29222319103](https://github.com/1939869736luosi/codex-sessions-manager/actions/runs/29222319103) | Success |
+
+The maintainer then used the checked local promotion command with an isolated npm user configuration and npm 11.16.0, completed npm's browser/Touch ID confirmation, and verified that `latest` and `security-verify` both identified `0.8.0`. A fresh ordinary registry install reported `0.8.0` from both CLI entrypoints. The temporary user configuration, login caches, temporary npm installation, registry downloads, and smoke-install directories were removed. No token was added to Git, GitHub, documentation, or the npm package.
 
 ## v0.7.0 workflow evidence
 
@@ -111,6 +125,7 @@ The fixed commit passed the release gates and was published as v0.7.1. The earli
 - Codex 0.144.1 compatibility release: **GO**.
 - Historical v0.7.0 release identity and artifact evidence: **valid, but superseded for current approval by the post-release recovery finding**.
 - v0.7.1 corrective release: **GO**, published from the reviewed commit and verified in the registry.
+- v0.8.0 log-lifecycle and maintenance release: **GO**, published from the reviewed commit and verified through the public registry.
 - Future projects in document 04: **not reviewed for implementation and not implicitly approved**.
 
 Private session exports, local paths, exploit transcripts, internal reports, encrypted backups, and credential material are deliberately excluded from this evidence document.
