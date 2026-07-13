@@ -116,16 +116,16 @@ describe("release configuration", () => {
     const compatWorkflow = await readRepositoryFile(".github/workflows/compat-watch.yml");
 
     expect(baseline).toMatchObject({
-      stableVersion: "0.144.1",
-      checkedAt: "2026-07-11",
+      stableVersion: "0.144.3",
+      checkedAt: "2026-07-13",
       commit: {
-        sha: "44918ea10c0f99151c6710411b4322c2f5c96bea",
-        url: "https://github.com/openai/codex/commit/44918ea10c0f99151c6710411b4322c2f5c96bea",
+        sha: "78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
+        url: "https://github.com/openai/codex/commit/78ad6e6bfd1d3b6a209acd3ef82172a96b25179c",
       },
     });
     expect(capabilityBaseline).toMatchObject({
       stableVersion: baseline.stableVersion,
-      checkedAt: "2026-07-12",
+      checkedAt: "2026-07-13",
     });
     expect(capabilityBaseline.checkedAt! >= baseline.checkedAt!).toBe(true);
     expect(capabilityBaseline.capabilities).toEqual(expect.arrayContaining([
