@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "runId": "2026-07-13-codex-0.144.3",
+  "immutable": true,
+  "baselineVersion": "0.144.3",
+  "checkedAt": "2026-07-13",
+  "findings": [
+    "Codex 0.144.2 only reverted a Guardian prompting regression and did not change local session storage, deletion, logs, or memory contracts.",
+    "Codex 0.144.3 is a version-only release with no merged pull request changes after 0.144.2.",
+    "The pinned state migration set remains unchanged through 0040_threads_history_mode.sql, and the official thread-delete evidence paths remain present."
+  ],
+  "fixes": [
+    "Updated the storage and official-capability baselines from Codex 0.144.1 to 0.144.3.",
+    "Kept the known storage schema, replacement decisions, and project boundaries unchanged."
+  ],
+  "postFixVerification": [
+    "The offline compatibility validator accepts the 0.144.3 pinned release and source links.",
+    "No new fixture, parser, adapter, Skill packaging, or mutation behavior is required for this patch release."
+  ],
+  "privacy": {
+    "syntheticOnly": true,
+    "containsLocalPaths": false,
+    "containsSessionText": false,
+    "containsMachineCounts": false
+  }
+}

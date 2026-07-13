@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "product": "openai/codex",
-  "stableVersion": "0.144.1",
-  "checkedAt": "2026-07-12",
+  "stableVersion": "0.144.3",
+  "checkedAt": "2026-07-13",
   "purpose": "Track both storage compatibility and official capabilities that replace, narrow, or unblock this project.",
   "capabilities": [
     {
@@ -34,9 +34,9 @@
       "summary": "Official Codex hard-deletes persisted threads, spawned descendants, rollout files, and associated state. This project retains independent verification, recoverable trash, legacy cleanup, and failure recovery.",
       "evidence": [
         "https://learn.chatgpt.com/docs/app-server#api-overview",
-        "https://github.com/openai/codex/blob/rust-v0.144.1/codex-rs/app-server/src/request_processors/thread_delete.rs",
-        "https://github.com/openai/codex/blob/rust-v0.144.1/codex-rs/state/src/runtime/threads.rs",
-        "https://github.com/openai/codex/blob/rust-v0.144.1/codex-rs/thread-store/src/local/delete_thread.rs"
+        "https://github.com/openai/codex/blob/rust-v0.144.3/codex-rs/app-server/src/request_processors/thread_delete.rs",
+        "https://github.com/openai/codex/blob/rust-v0.144.3/codex-rs/state/src/runtime/threads.rs",
+        "https://github.com/openai/codex/blob/rust-v0.144.3/codex-rs/thread-store/src/local/delete_thread.rs"
       ]
     },
     {
@@ -67,7 +67,7 @@
       "summary": "Official controls can enable or disable memory use and generation per task, and can reset all local memories.",
       "evidence": [
         "https://learn.chatgpt.com/docs/customization/memories",
-        "https://github.com/openai/codex/blob/rust-v0.144.1/codex-rs/tui/src/bottom_pane/memories_settings_view.rs"
+        "https://github.com/openai/codex/blob/rust-v0.144.3/codex-rs/tui/src/bottom_pane/memories_settings_view.rs"
       ]
     },
     {
@@ -78,7 +78,7 @@
       "summary": "No supported per-entry or per-session view/edit/delete contract exists for final consolidated memory. Generated memory files are inspectable but are not the primary control surface.",
       "evidence": [
         "https://learn.chatgpt.com/docs/customization/memories",
-        "https://github.com/openai/codex/blob/rust-v0.144.1/codex-rs/memories/README.md"
+        "https://github.com/openai/codex/blob/rust-v0.144.3/codex-rs/memories/README.md"
       ]
     },
     {
@@ -88,7 +88,7 @@
       "projectDisposition": "verify-only",
       "summary": "Official thread delete removes thread-linked Stage 1 memory state and schedules reconsolidation, but final derived text may remain until that background work succeeds or may remain when supported by other threads.",
       "evidence": [
-        "https://github.com/openai/codex/blob/rust-v0.144.1/codex-rs/state/src/runtime/memories.rs"
+        "https://github.com/openai/codex/blob/rust-v0.144.3/codex-rs/state/src/runtime/memories.rs"
       ]
     },
     {

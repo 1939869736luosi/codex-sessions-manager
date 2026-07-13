@@ -1,6 +1,6 @@
 {
   "name": "codex-sessions-manager",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Verify official Codex deletion, audit local residue, and perform recoverable legacy or orphan cleanup via CLI and bounded MCP tools.",
   "type": "module",
   "bin": {

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.1 (2026-07-13)
+
+- Fixed session inventory so a hard-linked rollout is reported as present but unsafe instead of being misclassified as missing.
+- Kept transcript reads and every mutation fail-closed for hard-linked rollout files.
+- Updated the official compatibility and capability baseline to Codex 0.144.3 after confirming that 0.144.2 only reverted Guardian prompting and 0.144.3 contained no additional code changes.
+
 ## 0.8.0 (2026-07-13)
 
 - Added `monthly-review`, a bounded read-only periodic report combining root residue audit and delete preview; warnings default to five samples and expand only with `--details`.
