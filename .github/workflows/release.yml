@@ -31,7 +31,7 @@ jobs:
           git merge-base --is-ancestor "${GITHUB_SHA}" refs/remotes/origin/main
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
           test "${GITHUB_REF_NAME}" = "v${PACKAGE_VERSION}"
-          grep -F "## ${PACKAGE_VERSION}" CHANGELOG.md
+          node scripts/check-release-changelog.mjs
 
       - name: Require a compatibility baseline checked within seven days
         run: node scripts/check-compat.mjs --release
