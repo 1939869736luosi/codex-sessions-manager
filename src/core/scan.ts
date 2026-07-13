@@ -9,6 +9,7 @@ import {
 } from "./global-state.js";
 import { deriveProjectIdentity } from "./project.js";
 import {
+  PathSafetyError,
   captureManagedPath,
   createTrustedRootContext,
   getRegisteredTrustedRoots,
@@ -99,7 +100,12 @@ async function* walkDirectory(
     const relativePath = path.join(relativeDirectoryPath, entry.name);
     let snapshot;
     try {
-      snapshot = await captureManagedPath(context, relativePath, { allowMissing: false });
+      snapshot = await captureManagedPath(context, relativePath, {
+        allowMissing: false,
+        // Inventory must distinguish "present but unsafe to read" from
+        // "absent". Content reads and mutations still reject hard links.
+        rejectHardlinks: false,
+      });
     } catch (error) {
       if (!isPathSafetyError(error)) throw error;
       warnings.push(error.message);
@@ -109,6 +115,15 @@ async function* walkDirectory(
     if (snapshot.identity?.kind === "directory") {
       yield* walkDirectory(context, relativePath, warnings, unsafeSurfaces, surface);
     } else if (snapshot.identity?.kind === "file") {
+      if (snapshot.identity.nlink > 1) {
+        const error = new PathSafetyError(
+          "UNSAFE_PATH",
+          snapshot.absolutePath,
+          "managed regular file has multiple hard links",
+        );
+        warnings.push(error.message);
+        recordScanSafetyIssue(unsafeSurfaces, surface, error);
+      }
       yield { absolutePath: snapshot.absolutePath, relativePath: snapshot.relativePath };
     }
   }
@@ -176,6 +191,7 @@ async function scanSessionDirectory(
     const snapshot = await captureManagedPath(context, relativePath, {
       expectedKind: "file",
       allowMissing: false,
+      rejectHardlinks: false,
     });
     const fileStat = await lstat(snapshot.absolutePath);
     await revalidateManagedPath(context, snapshot);
